@@ -21,6 +21,7 @@ class ImageReadingNavigator final : public QWidget
     ~ImageReadingNavigator() override;
     void Sync();
     void Reveal();
+    void FocusControls();
     // Hides an unpinned navigator unless the pointer, the focus or a popup still uses it.
     void HideIdle();
     // Opens the page list; the reading context menu and the shared page list command use it too.

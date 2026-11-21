@@ -21,6 +21,8 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QTabBar>
+#include <QToolButton>
+#include "UniqueLibs/document/sqlite/sqliteSeeDialog.hpp"
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTreeWidget>
@@ -69,6 +71,21 @@ class SqliteViewTests final : public QObject
 {
     Q_OBJECT
 private slots:
+    void keyVisibilityByKeyboard()
+    {
+        hc::sqlite::SecretField Field("testKey");
+        Field.show(); Field.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&Field));
+        auto* Edit = Field.Edit();
+        Edit->setFocus();
+        QTest::keyClick(Edit, Qt::Key_Tab);
+        auto* Toggle = Field.findChild<QToolButton*>("testKey.reveal");
+        QVERIFY(Toggle && Toggle->hasFocus());
+        QTest::keyClick(Toggle, Qt::Key_Space);
+        QCOMPARE(Edit->echoMode(), QLineEdit::Normal);
+        QTest::keyClick(Toggle, Qt::Key_Space);
+        QCOMPARE(Edit->echoMode(), QLineEdit::Password);
+    }
     void createDatabase_data()
     {
         QTest::addColumn<bool>("Hosted");

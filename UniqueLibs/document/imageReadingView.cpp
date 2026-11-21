@@ -33,6 +33,7 @@
 #include <QScrollBar>
 #include <QWheelEvent>
 #include <QtConcurrent>
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -107,17 +108,15 @@ ImageReadingView::ImageReadingView(QWidget *Parent) : QAbstractScrollArea(Parent
                 const int Previous = index_;
                 if (mode_ == Webtoon)
                 {
-                    qreal Y = 0, Pos = scrollPosition();
-                    for (int I = 0; I < sizes_.size(); ++I)
-                    {
-                        const qreal H = webtoonPageSize(sizes_[I]).height();
-                        if (Y + H > Pos)
-                        {
-                            index_ = I;
-                            relative_ = H > 0 ? (Pos - Y) / H : 0;
-                            break;
-                        }
-                        Y += H + gap_;
+                    const qreal Pos = scrollPosition();
+                    const auto Next = std::upper_bound(webtoonTops_.cbegin(), webtoonTops_.cend(), Pos);
+                    int Page = qMax(0, int(Next - webtoonTops_.cbegin()) - 1);
+                    if (Page < webtoonTops_.size() && Pos >= webtoonTops_[Page] + webtoonPageSize(sizes_[Page]).height())
+                        ++Page;
+                    if (Page < webtoonTops_.size()) {
+                        index_ = Page;
+                        const auto Height = webtoonPageSize(sizes_[Page]).height();
+                        relative_ = Height > 0 ? (Pos - webtoonTops_[Page]) / Height : 0;
                     }
                 }
                 if (Previous != index_)
@@ -472,9 +471,11 @@ QList<ImageReadingView::Placement> ImageReadingView::placements(int Index) const
                 XScroll = horizontalScrollBar()->value();
     if (mode_ == Webtoon)
     {
-        qreal Y = 0;
-        for (int I = 0; I < sizes_.size(); ++I)
+        const auto First = std::lower_bound(webtoonTops_.cbegin(), webtoonTops_.cend(), YScroll - H);
+        for (int I = qMax(0, int(First - webtoonTops_.cbegin()) - 1);
+             I < webtoonTops_.size() && webtoonTops_[I] <= YScroll + 3 * H; ++I)
         {
+            const qreal Y = webtoonTops_[I];
             const auto S = sizes_[I];
             const auto Size = webtoonPageSize(S);
             const qreal Width = Size.width(), Height = Size.height();
@@ -489,7 +490,6 @@ QList<ImageReadingView::Placement> ImageReadingView::placements(int Index) const
                 const auto Left=qRound64((qMax(qreal(0),(W-Width)/2)-qMin(XScroll, Overflow))*Dpr);
                 Out << Placement{I,QRectF(Left/Dpr,(Top-Scroll)/Dpr,qRound64(Width*Dpr)/Dpr,(Bottom-Top)/Dpr),QRect(QPoint(),S)};
             }
-            Y += Height + gap_;
         }
         return Out;
     }
@@ -535,11 +535,14 @@ void ImageReadingView::rebuild(bool KeepAnchor)
     rebuilding_ = true;
     extent_ = 0;
     width_ = 0;
+    webtoonTops_.clear();
     if (book_ && !sizes_.isEmpty())
     {
         if (mode_ == Webtoon)
         {
+            webtoonTops_.reserve(sizes_.size());
             for (const auto &S : sizes_) {
+                webtoonTops_.append(extent_);
                 const auto Size = webtoonPageSize(S);
                 extent_ += Size.height() + gap_;
                 width_ = qMax(width_, Size.width());
@@ -860,10 +863,7 @@ void ImageReadingView::GoTo(int Index, double Relative)
     QSignalBlocker Block(verticalScrollBar());
     if (mode_ == Webtoon)
     {
-        qreal Y = 0;
-        for (int I = 0; I < Index; ++I)
-            Y += webtoonPageSize(sizes_[I]).height() + gap_;
-        Y += relative_ * webtoonPageSize(sizes_[Index]).height();
+        const qreal Y = webtoonTops_[Index] + relative_ * webtoonPageSize(sizes_[Index]).height();
         setScrollPosition(Y);
     }
     else
@@ -1033,7 +1033,13 @@ void ImageReadingView::wheelEvent(QWheelEvent *Event)
 }
 bool ImageReadingView::RunCommand(const QString& Id)
 {
-    if (Id == "image.scrollDown") setScrollPosition(scrollPosition() + 40);
+    if (Id == "image.webtoon") SetMode(Webtoon);
+    else if (Id == "image.comicRTL" || Id == "image.comicLTR") {
+        SetRightToLeft(Id == "image.comicRTL");
+        SetMode(Comic);
+    }
+    else if (Id == "image.fitWidth") SetFit(2);
+    else if (Id == "image.scrollDown") setScrollPosition(scrollPosition() + 40);
     else if (Id == "image.scrollUp") setScrollPosition(scrollPosition() - 40);
     else if (Id == "image.next" || Id == "image.pageNext") Move(1);
     else if (Id == "image.previous" || Id == "image.previousSpace" || Id == "image.pagePrevious") Move(-1);
@@ -1043,8 +1049,8 @@ bool ImageReadingView::RunCommand(const QString& Id)
     else if (Id == "image.last" && book_) GoTo(book_->pages_.size() - 1);
     else if (Id == "image.volumeNext") OpenVolume(1);
     else if (Id == "image.volumePrevious") OpenVolume(-1);
-    else if (Id == "image.right") Move(rtl_ ? -1 : 1);
-    else if (Id == "image.left") Move(rtl_ ? 1 : -1);
+    else if (Id == "image.right") Move(mode_ == Webtoon || !rtl_ ? 1 : -1, mode_ == Webtoon);
+    else if (Id == "image.left") Move(mode_ == Webtoon || !rtl_ ? -1 : 1, mode_ == Webtoon);
     else return false;
     return true;
 }
@@ -1071,9 +1077,9 @@ void ImageReadingView::keyPressEvent(QKeyEvent *E)
     else if (E->key() == Qt::Key_BracketLeft)
         OpenVolume(-1);
     else if (E->key() == Qt::Key_Right)
-        Move(rtl_ ? -1 : 1);
+        Move(mode_ == Webtoon || !rtl_ ? 1 : -1, mode_ == Webtoon);
     else if (E->key() == Qt::Key_Left)
-        Move(rtl_ ? 1 : -1);
+        Move(mode_ == Webtoon || !rtl_ ? -1 : 1, mode_ == Webtoon);
     else
     {
         QAbstractScrollArea::keyPressEvent(E);

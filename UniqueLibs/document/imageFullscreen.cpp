@@ -766,9 +766,7 @@ bool ImageFullscreen::eventFilter(QObject *Object, QEvent *Event)
             if (Key->key() == hc::defaults::edit::AuxiliaryShortcut("image.focusNavigator").key())
                 if (Reader && Reader->isVisible() && Navigator && Reader->State()["mode"].toInt() != ImageReadingView::Single)
                 {
-                    Navigator->Reveal();
-                    if (auto *Progress = Navigator->findChild<QWidget *>("imageNavigatorProgress"))
-                        Progress->setFocus(Qt::ShortcutFocusReason);
+                    Navigator->FocusControls();
                     return true;
                 }
             reveal(true, true);

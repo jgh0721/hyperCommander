@@ -33,6 +33,9 @@
 #include <QImageReader>
 #include <QImageWriter>
 #include <QInputDialog>
+#include <QFormLayout>
+#include <QDialogButtonBox>
+#include <QSpinBox>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
@@ -1678,6 +1681,33 @@ QMenu* QImageView::CreateContextMenu(QWidget* Parent)
         ->setEnabled(HasImage || ClipboardRestricted());
     auto* EditMode = Add(Menu, "imageContext.editMode", tr("편집 모드"), nullptr, nullptr,
                          [this] { emit ContextCommand(QStringLiteral("image.editMode")); });
+    if (editModeChecked_.value_or(false) && Idle) {
+        Add(Menu, "imageContext.cropCoordinates", tr("좌표로 자르기…"), nullptr, nullptr, [this] {
+            QDialog Dialog(this);
+            Dialog.setWindowTitle(tr("좌표로 자르기"));
+            QFormLayout Form(&Dialog);
+            const auto Field = [&](const QString& Label, int Min, int Max, int Initial) {
+                auto* Spin = new QSpinBox(&Dialog);
+                Spin->setRange(Min, Max);
+                Spin->setValue(Initial);
+                Form.addRow(Label, Spin);
+                return Spin;
+            };
+            const QSize Size = m_displayImage.size();
+            auto* X = Field(tr("X 좌표"), 0, Size.width()-1, 0);
+            auto* Y = Field(tr("Y 좌표"), 0, Size.height()-1, 0);
+            auto* Width = Field(tr("너비"), 1, Size.width(), Size.width());
+            auto* Height = Field(tr("높이"), 1, Size.height(), Size.height());
+            connect(X, &QSpinBox::valueChanged, Width, [Width, Size](int Left){ Width->setMaximum(Size.width()-Left); });
+            connect(Y, &QSpinBox::valueChanged, Height, [Height, Size](int Top){ Height->setMaximum(Size.height()-Top); });
+            QDialogButtonBox Buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+            Form.addRow(&Buttons);
+            connect(&Buttons, &QDialogButtonBox::accepted, &Dialog, &QDialog::accept);
+            connect(&Buttons, &QDialogButtonBox::rejected, &Dialog, &QDialog::reject);
+            if (Dialog.exec() == QDialog::Accepted)
+                ApplyCrop(QRect(X->value(), Y->value(), Width->value(), Height->value()));
+        });
+    }
     if (editModeChecked_) {
         EditMode->setCheckable(true);
         EditMode->setChecked(*editModeChecked_);

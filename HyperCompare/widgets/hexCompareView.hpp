@@ -73,7 +73,7 @@ namespace hc::compare
         QSplitter* splitter_{};
         QScrollBar* scroll_{};
         QComboBox *alignment_{}, *width_{}, *filter_{}, *layout_{};
-        QCheckBox *readOnly_{}, *insert_{};
+        QCheckBox *readOnly_{}, *insert_{}, *asciiInput_{};
         QLineEdit *find_{}, *replace_{}, *address_{};
         QComboBox* searchMode_{};
         QLabel* status_{};

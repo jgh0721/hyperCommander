@@ -154,11 +154,12 @@ namespace hc::sqlite
         eye_->setCheckable(true);
         eye_->setToolTip(tr("키 보기"));
         eye_->setAccessibleName(tr("키 보기"));
-        eye_->setFocusPolicy(Qt::NoFocus);
+        eye_->setFocusPolicy(Qt::TabFocus);
         const auto Paint = [this] { eye_->setIcon(Glyph(eye_->isChecked() ? QStringLiteral("eyeoff") : QStringLiteral("view"), fm::style::themeColorsFor(this)[T::Fg2], 14)); };
         connect(eye_, &QToolButton::toggled, this, [this, Paint](bool On) {
             edit_->setEchoMode(On ? QLineEdit::Normal : QLineEdit::Password);
             eye_->setToolTip(On ? tr("키 숨기기") : tr("키 보기"));
+            eye_->setAccessibleName(eye_->toolTip());
             Paint();
         });
         connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, Paint);

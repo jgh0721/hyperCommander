@@ -112,7 +112,7 @@ namespace hc::compare
                 Painter.drawText(Hex.x()+2,Y+fontMetrics().ascent()+3,B<0 ? "--" : QString::number(B,16).toUpper().rightJustified(2,'0'));
                 Painter.drawText(Ascii.x(),Y+fontMetrics().ascent()+3,B<0 ? " " : B>=32 && B<127 ? QString(QChar(B)) : ".");
                 if (Cell.marks_[side_]) { Painter.setPen(QPen(markColor(Cell.marks_[side_]),2)); Painter.drawLine(Hex.bottomLeft(),Hex.bottomRight()); }
-                if (Cell.position_==owner_->cursor_ && owner_->active_==side_) { Painter.setPen(palette().highlight().color()); Painter.drawRect(Hex.adjusted(0,0,-1,-1)); }
+                if (Cell.position_==owner_->cursor_ && owner_->active_==side_) { Painter.setPen(palette().highlight().color()); Painter.drawRect((owner_->asciiInput_->isChecked() ? Ascii : Hex).adjusted(0,0,-1,-1)); }
             }
             if (owner_->cells_.empty()) { Painter.setPen(palette().text().color()); Painter.drawText(8,H*2,owner_->Busy()?tr("읽는 중…"):tr("표시할 바이트 없음 / EOF")); }
         }
@@ -145,13 +145,13 @@ namespace hc::compare
             if (Event->matches(QKeySequence::Paste)) { owner_->pasteClipboard(); return; }
             if (Handled) { nibble_=-1; Next=std::clamp(Next,qint64(0),owner_->comparison_->length_); owner_->select(Next,side_,Event->modifiers().testFlag(Qt::ShiftModifier)); owner_->showPage(std::max(qint64(0),Next-Width*3)); return; }
             if(!owner_->readOnly_->isChecked()&&!owner_->Busy()&&!(Event->modifiers()&(Qt::ControlModifier|Qt::AltModifier|Qt::MetaModifier))&&!Event->text().isEmpty()){
-                if(ascii_){owner_->editBytes(Event->text().toUtf8());return;}
+                if(owner_->asciiInput_->isChecked()){owner_->editBytes(Event->text().toUtf8());return;}
                 const auto Text=Event->text().toLower();if(Text.size()==1&&QString("0123456789abcdef").contains(Text[0])){int Value=QString("0123456789abcdef").indexOf(Text[0]);if(nibble_<0){nibble_=Value;owner_->status_->setText(tr("상위 nibble %1 · 다음 16진수 자릿수를 입력하세요").arg(Text));}else{owner_->editBytes(QByteArray(1,char(nibble_*16+Value)));nibble_=-1;}return;}
             }
             QAbstractScrollArea::keyPressEvent(Event);
         }
     private:
-        HexCompareView* owner_; int side_; bool ascii_ = false; int nibble_ = -1;
+        HexCompareView* owner_; int side_; int nibble_ = -1;
         int charWidth() const { return std::max(1,fontMetrics().horizontalAdvance('0')); }
         int rowHeight() const { return fontMetrics().height()+6; }
         void geometry() { horizontalScrollBar()->setRange(0,std::max(0,(21+owner_->bytesPerRow()*4)*charWidth()-viewport()->width())); }
@@ -159,9 +159,9 @@ namespace hc::compare
         {
             const int W=owner_->bytesPerRow(), C=charWidth(), X=Point.x()+horizontalScrollBar()->value()-(owner_->showAddresses_?18*C:0), Row=Point.y()/rowHeight()-1;
             int Col=X>=(W*3+2)*C ? X/C-(W*3+2) : X/(3*C);
-            ascii_=X>=(W*3+2)*C;nibble_=-1;
+            nibble_=-1;
             if(X<0 || Row<0 || Col<0 || Col>=W) return; const size_t Index=size_t(Row*W+Col);
-            if(Index<owner_->cells_.size()) owner_->select(owner_->cells_[Index].position_,side_,Extend);
+            if(Index<owner_->cells_.size()) { owner_->asciiInput_->setChecked(X >= (W*3+2)*C); owner_->select(owner_->cells_[Index].position_,side_,Extend); }
         }
     };
     class HexOverviewBar final : public QWidget
@@ -244,6 +244,8 @@ namespace hc::compare
         filter_=new QComboBox;filter_->setObjectName("hexFilter");filter_->addItems({tr("전체"),tr("차이"),tr("동일")});toolbar_->addWidget(filter_);
         layout_=new QComboBox;layout_->addItems({tr("좌우"),tr("상하")});toolbar_->addWidget(layout_);
         readOnly_=new QCheckBox(tr("읽기 전용"));readOnly_->setObjectName("hexReadOnly");readOnly_->setChecked(true);readOnly_->setEnabled(!request_.readOnlyInputs_);toolbar_->addWidget(readOnly_);insert_=new QCheckBox(tr("삽입"));toolbar_->addWidget(insert_);
+        asciiInput_=new QCheckBox(tr("ASCII 입력")); asciiInput_->setObjectName("hexAsciiInput"); toolbar_->addWidget(asciiInput_);
+        connect(asciiInput_, &QCheckBox::clicked, this, [this] { panes_[active_]->setFocus(Qt::ShortcutFocusReason); refresh(); });
         auto* Body=new QHBoxLayout;Root->addLayout(Body,1);overview_=new HexOverviewBar(this);Body->addWidget(overview_);splitter_=new QSplitter;Body->addWidget(splitter_,1);
         for(int S=0;S<2;++S){auto* Pane=new QWidget;auto* Box=new QVBoxLayout(Pane);Box->setContentsMargins(0,0,0,0);paths_[S]=new QLabel;paths_[S]->setTextInteractionFlags(Qt::TextSelectableByMouse);Box->addWidget(paths_[S]);panes_[S]=new HexPane(this,S);Box->addWidget(panes_[S]);splitter_->addWidget(Pane);}
         differenceList_=new QListWidget;differenceList_->setObjectName("hexDifferenceList");differenceList_->setAccessibleName(tr("차이 목록 (현재 위치부터 128구간)"));differenceList_->setMaximumWidth(310);Body->addWidget(differenceList_);differenceList_->setVisible(Preferences{}.Value("hex/differenceList").toBool());Differences->setChecked(!differenceList_->isHidden());

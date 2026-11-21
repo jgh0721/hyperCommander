@@ -133,6 +133,7 @@ class ImageReadingView final : public QAbstractScrollArea
     QString historyFile() const;
     std::shared_ptr<ImageBook> book_;
     QVector<QSize> sizes_;
+    QVector<qreal> webtoonTops_;
     mutable QCache<int, QImage> sources_{384 * 1024};
     QCache<QString, QImage> tiles_{128 * 1024};
     QSet<QString> pending_;

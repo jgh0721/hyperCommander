@@ -143,6 +143,12 @@ private slots:
         for(auto* A:View.findChildren<QAction*>())if(A->text()==QStringLiteral("복사 →")){A->trigger();break;}
         QTRY_VERIFY(!View.Busy());QVERIFY(View.Dirty());QVERIFY(View.CanUndo(false));View.Undo(false);QTRY_VERIFY(!View.Busy());QVERIFY(!View.Dirty());View.Undo(true);QTRY_VERIFY(!View.Busy());QVERIFY(View.Dirty());View.Undo(false);QTRY_VERIFY(!View.Busy());
         auto* Pane=View.findChild<QWidget*>("hexPane0");Pane->setFocus();QTest::keyClick(Pane,Qt::Key_Home);QTRY_VERIFY(!View.Busy());QTest::keyClicks(Pane,"ff");QTRY_VERIFY(!View.Busy());QCOMPARE(ReadBinary(View.Comparison()->documents_[0],0,1),QByteArray(1,char(255)));View.Undo(false);QTRY_VERIFY(!View.Busy());QVERIFY(!View.Dirty());
+        auto* Ascii=View.findChild<QCheckBox*>("hexAsciiInput"); QVERIFY(Ascii);
+        Ascii->setFocus(); QTest::keyClick(Ascii, Qt::Key_Space);
+        QVERIFY(Ascii->isChecked()); QTRY_VERIFY(Pane->hasFocus());
+        QTest::keyClick(Pane, Qt::Key_Home); QTRY_VERIFY(!View.Busy());
+        QTest::keyClicks(Pane,"Z"); QTRY_VERIFY(!View.Busy());
+        QCOMPARE(ReadBinary(View.Comparison()->documents_[0],0,1),QByteArray("Z"));
         auto* List=View.findChild<QListWidget*>("hexDifferenceList");QVERIFY(List);QVERIFY(List->count()>0);
         const QString Capture=qEnvironmentVariable("HC_HEX_CAPTURE");if(!Capture.isEmpty()){QDir().mkpath(Capture);View.SetOverviewVisible(true);Theme.setScheme(fm::style::ThemeManager::Scheme::Light);QTest::qWait(100);View.grab().save(Capture+"/hex-product-light.png");Theme.setScheme(fm::style::ThemeManager::Scheme::Dark);QTest::qWait(100);View.grab().save(Capture+"/hex-product-dark.png");}
     }

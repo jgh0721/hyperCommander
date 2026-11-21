@@ -161,7 +161,36 @@ ImageReadingNavigator::ImageReadingNavigator(ImageReadingView *Reader) : QWidget
     hide();
 }
 ImageReadingNavigator::~ImageReadingNavigator() { qApp->removeEventFilter(this); }
-void ImageReadingNavigator::SetOptionsMenu(QMenu *Menu) { more_->setMenu(Menu); }
+void ImageReadingNavigator::FocusControls()
+{
+    Reveal();
+    QWidget *Target = progress_->isEnabled() ? static_cast<QWidget *>(progress_) : more_;
+    Target->setFocus(Qt::ShortcutFocusReason);
+}
+void ImageReadingNavigator::SetOptionsMenu(QMenu *Menu)
+{
+    auto *Modes = Menu->addMenu(tr("읽기 모드"));
+    auto *Fits = Menu->addMenu(tr("이미지 맞춤"));
+    const auto Mirror = [this](QMenu *Submenu, QComboBox *Combo) {
+        connect(Submenu, &QMenu::aboutToShow, this, [Submenu, Combo] {
+            Submenu->clear();
+            for (int Row = 0; Row < Combo->count(); ++Row) {
+                auto *Action = Submenu->addAction(Combo->itemText(Row));
+                Action->setCheckable(true);
+                Action->setChecked(Row == Combo->currentIndex());
+                QObject::connect(Action, &QAction::triggered, Combo, [Combo, Row] {
+                    Combo->setCurrentIndex(Row);
+                    emit Combo->activated(Row);
+                });
+            }
+        });
+    };
+    Mirror(Modes, mode_);
+    Mirror(Fits, fit_);
+    Menu->addAction(tr("페이지 목록…"), this, [this] { QTimer::singleShot(0, this, &ImageReadingNavigator::ShowPages); });
+    Menu->addSeparator();
+    more_->setMenu(Menu);
+}
 bool ImageReadingNavigator::Pinned() const { return pin_->isChecked(); }
 void ImageReadingNavigator::SetPinned(bool On) { pin_->setChecked(On); }
 QString ImageReadingNavigator::OverlayStyleSheet(const QString &Root)
@@ -305,7 +334,7 @@ bool ImageReadingNavigator::eventFilter(QObject *Object, QEvent *Event)
     if (Event->type() == QEvent::FocusIn && (Widget == this || isAncestorOf(Widget))) Reveal();
     if (Event->type() == QEvent::KeyPress) {
         auto *Key = static_cast<QKeyEvent *>(Event);
-        if (Key->key() == hc::defaults::edit::AuxiliaryShortcut("image.focusNavigator").key()) { Reveal(); progress_->setFocus(Qt::ShortcutFocusReason); return true; }
+        if (Key->key() == hc::defaults::edit::AuxiliaryShortcut("image.focusNavigator").key()) { FocusControls(); return true; }
         if (Key->key() == Qt::Key_Escape && isAncestorOf(Widget) && !QApplication::activePopupWidget()) {
             reader_->setFocus(); idle_.start(); return true;
         }

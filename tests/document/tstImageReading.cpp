@@ -3,6 +3,7 @@
 #include <QScrollArea>
 #include <QBuffer>
 #include <QComboBox>
+#include <QSpinBox>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include "commonLibs/document/documentFormatSupport.hpp"
@@ -1166,6 +1167,99 @@ class ImageReadingTests : public QObject
             QCOMPARE(Open.last().at(0).toString(), Root.filePath("original/1.png"));
             Fullscreen.Leave();
         }
+    }
+    void cropByCoordinates()
+    {
+        QImageView View;
+        const QImage Original = Picture(Qt::blue, {80,60});
+        View.LoadContent(Original,"crop.png",false);
+        View.SetEditModeChecked(true);
+        std::unique_ptr<QMenu> Menu(View.CreateContextMenu(&View));
+        auto* Crop = Menu->findChild<QAction*>("imageContext.cropCoordinates");
+        QVERIFY(Crop && Crop->isEnabled());
+        bool Filled = false;
+        QTimer Fill;
+        connect(&Fill, &QTimer::timeout, &View, [&] {
+            auto* Dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!Dialog) return;
+            const auto Fields = Dialog->findChildren<QSpinBox*>();
+            if (Fields.size() == 4) {
+                Fields[0]->setValue(10); Fields[1]->setValue(20);
+                Fields[2]->setValue(30); Fields[3]->setValue(15);
+                Filled = true;
+            }
+            Dialog->accept();
+            Fill.stop();
+        });
+        Fill.start(10);
+        Crop->trigger();
+        QTRY_VERIFY(Filled);
+        QCOMPARE(View.Content().size(), QSize(30,15));
+    }
+    void readerModeNumberKeys()
+    {
+        QTemporaryDir Root;
+        Fixture(Root.filePath("pages"), 6);
+        DocumentWorkspaceWidget Window(Root.filePath("recovery"));
+        Window.show(); Window.activateWindow();
+        Window.Handle({{"action","open"},{"path",Root.filePath("pages")}});
+        QTRY_VERIFY_WITH_TIMEOUT(Document(Window)["lifecycle"] == "ready", 20000);
+        auto* Reader = Window.findChild<ImageReadingView*>();
+        QVERIFY(Reader && Reader->isVisible());
+        Reader->setFocus();
+        QTest::keyClick(Reader, Qt::Key_5);
+        QTRY_COMPARE(Reader->State()["mode"].toInt(), int(ImageReadingView::Webtoon));
+        QTest::keyClick(Reader, Qt::Key_6);
+        QTRY_COMPARE(Reader->State()["mode"].toInt(), int(ImageReadingView::Comic));
+        QVERIFY(Reader->State()["rtl"].toBool());
+        QTest::keyClick(Reader, Qt::Key_7);
+        QTRY_VERIFY(!Reader->State()["rtl"].toBool());
+        QTest::keyClick(Reader, Qt::Key_8);
+        QTRY_COMPARE(Reader->State()["fit"].toInt(), 2);
+        QTest::keyClick(Reader, Qt::Key_F6);
+        auto* Progress = Reader->findChild<QSlider*>("imageNavigatorProgress");
+        QTRY_VERIFY(Progress && Progress->hasFocus());
+        QTest::keyClick(Progress, Qt::Key_Escape);
+        QTRY_VERIFY(Reader->hasFocus());
+        auto* More = Reader->findChild<QToolButton*>("imageNavigatorMore");
+        QVERIFY(More && More->menu());
+        auto* ModeMenu = More->menu()->actions().first()->menu();
+        QVERIFY(ModeMenu);
+        ModeMenu->popup(Reader->mapToGlobal(QPoint(0,0)));
+        QTRY_VERIFY(ModeMenu->isVisible());
+        ModeMenu->setActiveAction(ModeMenu->actions().first());
+        QTest::keyClick(ModeMenu, Qt::Key_Down);
+        QTest::keyClick(ModeMenu, Qt::Key_Return);
+        QTRY_COMPARE(Reader->State()["mode"].toInt(), int(ImageReadingView::Webtoon));
+    }
+    void longWebtoonKeyboardNavigation()
+    {
+        auto Book = std::make_shared<ImageBook>();
+        Book->pages_.resize(10000);
+        ImageReadingView View;
+        View.SetPrivate(true);
+        View.Load(Book);
+        QVERIFY(View.RunCommand("image.comicRTL"));
+        QVERIFY(View.State()["rtl"].toBool());
+        QVERIFY(View.RunCommand("image.webtoon"));
+        View.SetFit(0);
+        View.SetGap(16);
+        const qreal Max = Book->pages_.size() * 1416. - View.viewport()->height();
+        for (int I = 1; I <= 512; ++I) {
+            const int Progress = (I * 7919) % 1000000;
+            View.SeekProgress(Progress);
+            const qreal Y = Max * Progress / 1000000.;
+            const int Page = int((Y + 16) / 1416);
+            QCOMPARE(View.State()["page"].toInt(), Page);
+            QVERIFY(qAbs(View.State()["relative"].toDouble() - (Y - Page * 1416.) / 1400.) < .00001);
+        }
+        View.GoTo(5000, .25);
+        QVERIFY(View.RunCommand("image.right"));
+        QCOMPARE(View.State()["page"].toInt(), 5001);
+        QVERIFY(View.RunCommand("image.fitWidth"));
+        QCOMPARE(View.State()["fit"].toInt(), 2);
+        QVERIFY(View.RunCommand("image.comicLTR"));
+        QVERIFY(!View.State()["rtl"].toBool());
     }
     void webtoonKeepsFrameWhileNextPageLoads()
     {
