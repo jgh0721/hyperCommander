@@ -1,4 +1,5 @@
 ﻿#include "stdafx.h"
+#include <QtCore/private/qzipwriter_p.h>
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/markdownDocumentView.hpp"
 #include "UniqueLibs/document/rstDocumentView.hpp"
@@ -220,6 +221,78 @@ class MarkdownTests final : public QObject
         QVERIFY(config_.isValid());
         qApp->setProperty("documentViewsConfigDir", config_.path());
         QVERIFY2(DocumentShortcutRegistry::Validate({}).isEmpty(), qPrintable(DocumentShortcutRegistry::Validate({})));
+    }
+    void htmlResources_data()
+    {
+        QTest::addColumn<bool>("Archive");
+        QTest::newRow("local") << false;
+        QTest::newRow("archive") << true;
+    }
+    void htmlResources()
+    {
+        QFETCH(bool, Archive);
+        QTemporaryDir Temp;
+        auto I = input();
+        I.path_ = Temp.filePath("guide.html");
+        I.text_ = "<link rel='stylesheet' href='style.css'><h1>Assets</h1><img src='image.svg'>";
+        I.bytes_ = I.text_.toUtf8();
+        const QByteArray Css = "body { color: rgb(12, 34, 56); }";
+        const QByteArray Svg = "<svg xmlns='http://www.w3.org/2000/svg' width='17' height='7'></svg>";
+        DocumentViewPane Pane;
+        if (Archive) {
+            const auto Path = Temp.filePath("book.zip");
+            QZipWriter Zip(Path);
+            Zip.addFile("docs/guide.html", I.bytes_);
+            Zip.addFile("docs/style.css", Css);
+            Zip.addFile("docs/image.svg", Svg);
+            Zip.close();
+            QCOMPARE(Zip.status(), QZipWriter::NoError);
+            Pane.SetReadingSource(Path, "docs/guide.html");
+        } else {
+            QFile Document(I.path_);
+            QVERIFY(Document.open(QIODevice::WriteOnly));
+            QCOMPARE(Document.write(I.bytes_), I.bytes_.size());
+            QFile Style(Temp.filePath("style.css")), Image(Temp.filePath("image.svg"));
+            QVERIFY(Style.open(QIODevice::WriteOnly) && Image.open(QIODevice::WriteOnly));
+            QCOMPARE(Style.write(Css), Css.size());
+            QCOMPARE(Image.write(Svg), Svg.size());
+        }
+        QVERIFY(Pane.Load(I, true, false));
+        Pane.show();
+        SyncProbe Probe(Pane);
+        QTRY_COMPARE_WITH_TIMEOUT(Probe.md_->Headings().size(), 1, 30000);
+        QJsonObject Page;
+        QTRY_VERIFY_WITH_TIMEOUT((Page = Probe.measure({})["page"].toObject())["imageWidth"].toInt() == 17, 15000);
+        QCOMPARE(Page["color"].toString(), QStringLiteral("rgb(12, 34, 56)"));
+    }
+    void htmlPreviewAndEdit()
+    {
+        QTemporaryDir Temp;
+        TextInput I = input();
+        I.path_ = Temp.filePath("원본.HTM");
+        I.text_ = "<meta charset=windows-1252><h1>원본</h1>\n<script>document.querySelector('h1').remove()</script>";
+        I.bytes_ = I.text_.toUtf8();
+        DocumentViewPane Pane;
+        Pane.resize(1200, 800);
+        QVERIFY(Pane.Load(I, true, true));
+        Pane.show();
+        auto *Md = Pane.findChild<MarkdownDocumentView *>();
+        QVERIFY(Md && Md->IsHtml());
+        QVERIFY(Pane.RunViewCommand("markdown.split"));
+        QTRY_COMPARE_WITH_TIMEOUT(Md->Headings().size(), 1, 30000);
+        QCOMPARE(Md->Headings().first().first, QStringLiteral("원본"));
+        SyncProbe Probe(Pane);
+        Probe.backend_->Send(SCI_APPENDTEXT, 14, reinterpret_cast<qintptr>("\n<h2>Edit</h2>"));
+        QTRY_COMPARE_WITH_TIMEOUT(Md->Headings().size(), 2, 30000);
+        QCOMPARE(Md->Headings().last().first, QStringLiteral("Edit"));
+        QCOMPARE(Md->Headings().last().second, 3);
+        DocumentViewPane Reader;
+        QVERIFY(Reader.Load(I, true, false));
+        QVERIFY(!Reader.findChild<MarkdownDocumentView *>()->SourceVisible());
+        SyncProbe ReaderProbe(Reader);
+        ReaderProbe.text_->setReadOnly(false);
+        ReaderProbe.text_->ReloadPreferences();
+        QCOMPARE(ReaderProbe.backend_->Send(SCI_GETREADONLY), 1);
     }
     void syncSettingMigration_data()
     {

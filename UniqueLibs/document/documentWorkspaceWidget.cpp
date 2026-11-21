@@ -171,6 +171,7 @@ namespace hc::document
             // A text document whose start is .txt or .md offers that type first; other text keeps "all files".
             const auto TextSuffix=QFileInfo(Current).suffix().toLower();
             const auto TextFilters=TextSuffix=="txt"?QObject::tr("텍스트 문서 (*.txt);;Markdown (*.md *.markdown);;reStructuredText (*.rst *.rest);;모든 파일 (*.*)")
+                :TextSuffix=="html"||TextSuffix=="htm"?QObject::tr("HTML (*.html *.htm);;텍스트 문서 (*.txt);;모든 파일 (*.*)")
                 :TextSuffix=="md"||TextSuffix=="markdown"?QObject::tr("Markdown (*.md *.markdown);;reStructuredText (*.rst *.rest);;텍스트 문서 (*.txt);;모든 파일 (*.*)")
                 :TextSuffix=="rst"||TextSuffix=="rest"?QObject::tr("reStructuredText (*.rst *.rest);;Markdown (*.md *.markdown);;텍스트 문서 (*.txt);;모든 파일 (*.*)"):QStringLiteral("Text files (*.*)");
             const auto Filters=ViewId=="image"?QStringLiteral("PNG (*.png);;JPEG (*.jpg *.jpeg);;BMP (*.bmp);;TIFF (*.tif *.tiff);;WebP (*.webp)")
@@ -1984,7 +1985,7 @@ namespace hc::document
                 Tab->pane_->ConfigureHwp(hwpRuntime_);
                 if (Tab->input_.viewId_ == "epub") Tab->pane_->ConfigureEpub(epubRuntime_ ? *epubRuntime_ : MakeProductEpubRuntime(QCoreApplication::applicationDirPath()),!hosted_);
                 const auto SqliteKey = std::exchange(Tab->newSqliteKey_, {});
-                const bool Loaded=Tab->pane_->Load(Tab->input_,Tab->originalAuthority_,!hosted_||!Tab->temporarySource_.isEmpty(),&SqliteKey);
+                const bool Loaded=Tab->pane_->Load(Tab->input_,Tab->originalAuthority_,!hosted_||(!Tab->temporarySource_.isEmpty() && !MarkdownDocumentView::IsHtmlPath(Tab->input_.path_)),&SqliteKey);
                 Tab->loading_=false;
                 if(!Loaded){Tab->session_->CompleteOpen(Generation,storage::Error{storage::ErrorCategory::InvalidRequest,"document-view-load"});Tab->error_="document-view-load";finishProgress(Tab,false,Tab->error_);}
                 else {
@@ -2097,7 +2098,7 @@ namespace hc::document
                     auto Copy = Path;
                     if (Record.Value().text_ && QFileInfo(Path).fileName().startsWith("restored-")) {
                         const auto Suffix = QString::fromStdString(Record.Value().text_->suffix_);
-                        if (QStringList{"txt", "md", "markdown", "rst"}.contains(Suffix)) Copy = QFileInfo(Path).dir().filePath(QFileInfo(Path).completeBaseName() + "." + Suffix);
+                        if (QStringList{"txt", "md", "markdown", "htm", "html", "rst"}.contains(Suffix)) Copy = QFileInfo(Path).dir().filePath(QFileInfo(Path).completeBaseName() + "." + Suffix);
                     }
                     if (!StoreCopy(Copy, QByteArray::fromStdString(Record.Value().bytes_))) return storage::Result<TextInput>{storage::Error{storage::ErrorCategory::Unavailable, "document-recovery-copy"}};
                     auto Input = ReadDocumentFile(Copy, Context, Unlimited);
@@ -2935,7 +2936,7 @@ namespace hc::document
         Document.encoding_ = Tab->encodingOverride_;
         switch (Tab->pane_->Kind()) {
             case DocumentViewKind::MarkdownPreview: case DocumentViewKind::MarkdownEdit:
-                Document.kind_ = "markdown"; Document.markdownView_ = View["markdown"].toObject()["mode"].toString(); break;
+                Document.kind_ = MarkdownDocumentView::IsHtmlPath(Tab->path_) ? "html" : "markdown"; Document.markdownView_ = View["markdown"].toObject()["mode"].toString(); break;
             case DocumentViewKind::RstPreview: case DocumentViewKind::RstEdit:
                 // 보기 방식은 Markdown 과 같은 칸( markdownView_ )에 적는다: preview · source · split.
                 Document.kind_ = "rst"; Document.markdownView_ = View["rst"].toObject()["mode"].toString(); break;

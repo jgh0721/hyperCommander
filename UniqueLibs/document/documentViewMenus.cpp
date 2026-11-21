@@ -186,6 +186,7 @@ namespace hc::document
         });
         Menu->addSeparator();
         auto* ReadOnly = Menu->addAction(tr("읽기 전용")); ReadOnly->setCheckable(true); ReadOnly->setProperty("documentIconName", "read-only");
+        if (markdown_ && markdown_->IsHtmlReader()) ReadOnly->setEnabled(false);
         connect(Menu, &QMenu::aboutToShow, ReadOnly, [ReadOnly, Text] { const QSignalBlocker Block(ReadOnly); ReadOnly->setChecked(Text->isReadOnly()); });
         connect(ReadOnly, &QAction::triggered, Text, [Text](bool On) { Text->setReadOnly(On); });
         // The toolbar lock and this row are one state; follow the view, not only when the menu opens.
@@ -794,7 +795,7 @@ namespace hc::document
         const auto Key = [this](const char* Id) { return KeyText(shortcutBindings_, QString::fromLatin1(Id)); };
         const auto Scoped = [](QAction* Action, quint32 Kinds) { viewKinds::Set(Action, Kinds); return Action; };
         const auto Command = [this](const char* Id) { return [this, Id = QString::fromLatin1(Id)] { RunViewCommand(Id); }; };
-        contribution_.menuTitle_ = tr("마크다운(&M)");
+        contribution_.menuTitle_ = markdown_->IsHtml() ? tr("HTML(&H)") : tr("마크다운(&M)");
         modeMenu_ = new QMenu(contribution_.menuTitle_, this); modeMenu_->setObjectName("markdownModeMenu");
         auto* Mode = modeMenu_;
         Mode->addAction(Scoped(chromeAction(tr("미리보기 갱신"), "markdownMenu.refresh", Command("markdown.refresh"), Key("markdown.refresh")), Both));
@@ -810,7 +811,7 @@ namespace hc::document
 
         QList<QAction*> View;
         auto* Group = new QActionGroup(chromeOwner_);
-        for (const auto& [Label, Id, Icon] : {std::tuple{tr("미리보기"), "markdown.preview", "view-preview"}, std::tuple{tr("소스 편집"), "markdown.source", "view-source"},
+        for (const auto& [Label, Id, Icon] : {std::tuple{tr("미리보기"), "markdown.preview", "view-preview"}, std::tuple{markdown_->IsHtmlReader() ? tr("소스 보기") : tr("소스 편집"), "markdown.source", "view-source"},
                  std::tuple{tr("나란히 보기"), "markdown.split", "view-split"}}) {
             auto* Item = Scoped(chromeAction(Label, QStringLiteral("markdownView.") + QString::fromLatin1(Id).mid(9), Command(Id)), Both);
             Item->setCheckable(true); Item->setProperty("markdownMode", QString::fromLatin1(Id).mid(9)); Item->setProperty("documentIconName", QString::fromLatin1(Icon));

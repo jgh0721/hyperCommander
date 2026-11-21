@@ -15,10 +15,11 @@
 
 namespace hc::document
 {
-MarkdownProcessView::MarkdownProcessView(QWidget *Parent)
+MarkdownProcessView::MarkdownProcessView(QWidget *Parent, bool Html)
     // A restarted helper starts at 100 %; the owner's zoom and menu coordinates assume the last value.
     : MarkdownProcessView(QStringLiteral("hc-markdown-render"), {"render", "shortcuts", "zoom"}, Parent)
 {
+    html_ = Html;
 }
 MarkdownProcessView::MarkdownProcessView(const QString &Helper, const QStringList &Replayed, QWidget *Parent)
     : QWidget(Parent), helper_(Helper), replayed_(Replayed)
@@ -119,7 +120,9 @@ void MarkdownProcessView::start()
         Stop();
     });
     Process->setProgram(Program);
-    Process->setArguments({server_.serverName(), token_});
+    QStringList Args{server_.serverName(), token_};
+    if (html_) Args << "--html";
+    Process->setArguments(Args);
     Process->setProcessChannelMode(QProcess::ForwardedErrorChannel);
     startup_.start();
     Process->start();

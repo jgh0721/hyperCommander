@@ -33,11 +33,103 @@
 #include <QSignalBlocker>
 #include <QApplication>
 #include <QAbstractScrollArea>
+#include "HyperCommanderBuiltInPlugin/SevenZip/builtinSevenZip.hpp"
+#include "pluginHost/imageArchiveTransport.hpp"
+#include <QFutureWatcher>
+#include <QTemporaryDir>
+#include <QtConcurrentRun>
+#include <QMimeDatabase>
 #include <cmath>
 #include <qt_windows.h>
 
 namespace hc::document
 {
+struct HtmlResources
+{
+    QTemporaryDir directory_;
+    QJsonObject files_;
+};
+void MarkdownDocumentView::SetResourceSource(const QString &Path, const QString &Entry)
+{
+    if (!IsHtml() || (Path == resourcePath_ && Entry == archiveEntry_)) return;
+    resourceStop_.request_stop();
+    resourceStop_ = std::stop_source{};
+    resourcePath_ = Path;
+    archiveEntry_ = Entry;
+    resources_.reset();
+    sentValid_ = false;
+    Refresh();
+    if (Entry.isEmpty() || Path.isEmpty()) return;
+
+    // Stage only passive resources beside or below the member. Opaque names keep
+    // archive-controlled paths out of filesystem operations.
+    auto *Watcher = new QFutureWatcher<std::shared_ptr<HtmlResources>>(this);
+    connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Path, Entry] {
+        const auto Result = Watcher->result();
+        Watcher->deleteLater();
+        if (Path != resourcePath_ || Entry != archiveEntry_ || !Result || Result->files_.isEmpty()) return;
+        resources_ = Result;
+        sentValid_ = false;
+        Refresh();
+    });
+    Watcher->setFuture(QtConcurrent::run([Path, Entry, Stop = resourceStop_.get_token()] () -> std::shared_ptr<HtmlResources> {
+        storage::OperationContext Context;
+        Context.stopToken_ = Stop;
+        const auto Result = std::make_shared<HtmlResources>();
+        if (!Result->directory_.isValid()) return {};
+        const auto Endpoint = qgetenv("HC_IMAGE_ARCHIVE_BROKER");
+        auto Backend = Endpoint.isEmpty() ? plugins::MakeApprovedWcxBackend(plugins::BuiltinSevenZipOptions())
+            : plugins::MakeImageArchiveClient(QJsonDocument::fromJson(QByteArray::fromBase64(Endpoint)).object());
+        const auto Archive = Path.toUtf8().toStdString();
+        auto Listing = Backend->Enumerate(Archive, false, Context);
+        if (!Listing.HasValue()) return {};
+        const auto Prefix = Entry.left(Entry.lastIndexOf('/') + 1);
+        std::vector<std::uint32_t> Ordinals;
+        QStringList Names;
+        quint64 Total = 0;
+        std::uint32_t Ordinal = 0;
+        for (;;) {
+            auto Batch = Listing.Value()->Next(256, Context);
+            if (!Batch.HasValue()) return {};
+            for (const auto &Header : Batch.Value().entries_) {
+                const auto Index = Ordinal++;
+                const auto Name = QString::fromUtf8(Header.name_).replace('\\', '/');
+                if (!Name.startsWith(Prefix) || Header.directory_ || Header.encrypted_) continue;
+                const auto Relative = Name.mid(Prefix.size());
+                const auto Mime = QMimeDatabase().mimeTypeForFile(Name, QMimeDatabase::MatchExtension).name();
+                if (Relative.contains(':') || Relative.startsWith('/') || Relative != QDir::cleanPath(Relative)
+                    || Relative.split('/').contains("..") || !(Mime.startsWith("image/") || Mime.startsWith("font/") || Mime == "text/css")) continue;
+                if (Header.size_ > 16 * 1024 * 1024 || Total + Header.size_ > 64 * 1024 * 1024 || Names.size() >= 128) continue;
+                Total += Header.size_;
+                Ordinals.push_back(Index);
+                Names.append(Relative);
+            }
+            if (Batch.Value().end_) break;
+        }
+        Listing.Value().reset();
+        if (Ordinals.empty()) return {};
+        auto Stream = Backend->OpenReadSession(Archive, Ordinals, Context);
+        if (!Stream.HasValue()) return {};
+        qint64 Written = 0;
+        for (qsizetype I = 0; I < Names.size(); ++I) {
+            const auto FileName = QString::number(I);
+            QFile File(Result->directory_.filePath(FileName));
+            if (!File.open(QIODevice::WriteOnly)) return {};
+            for (;;) {
+                auto Chunk = Stream.Value()->Read(Ordinals[I], 192 * 1024, Context);
+                if (!Chunk.HasValue()) return {};
+                const auto &Bytes = Chunk.Value().bytes_;
+                Written += Bytes.size();
+                if (Written > 64 * 1024 * 1024 || File.size() + Bytes.size() > 16 * 1024 * 1024
+                    || File.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()) != qint64(Bytes.size())) return {};
+                if (Chunk.Value().eof_) break;
+                if (Bytes.empty()) return {};
+            }
+            Result->files_[Names[I]] = FileName;
+        }
+        return Result;
+    }));
+}
 MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Path, bool Editor, QWidget *Parent)
     : QWidget(Parent), source_(Source), path_(Path), editor_(Editor)
 {
@@ -48,7 +140,7 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     // One row: [미리보기 | 소스 | 나란히] | 개요 · 스크롤 동기화 | 축소 · 확대 · 갱신 | 찾기, plus the text
     // editor's tools while the source is shown (SetSourceTools). Icon-only like the other view rows;
     // the modes, 개요 and 스크롤 동기화 keep their names beside the icon.
-    toolbar_ = new QToolBar(tr("마크다운"), this);
+    toolbar_ = new QToolBar(IsHtml() ? tr("HTML") : tr("마크다운"), this);
     toolbar_->setObjectName("markdownToolbar");
     toolbar_->setMovable(false);
     toolbar_->setIconSize(QSize(20, 20));
@@ -139,7 +231,7 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     PreviewLayout->setContentsMargins(0, 0, 0, 0);
     PreviewLayout->setSpacing(0);
     previewStack_ = new QStackedWidget(previewPanel_);
-    preview_ = new MarkdownProcessView(previewStack_);
+    preview_ = new MarkdownProcessView(previewStack_, IsHtml());
     previewStack_->addWidget(preview_);
     // A delayed renderer error must not take height away from the source editor.
     // Its page belongs to the preview, and its text cannot change the stack's minimum size.
@@ -212,12 +304,17 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     // before Chromium has drawn the new layout. Keep both panes still until the handle is released.
     // restoreState also restores opaqueResize, so override old saved layouts here.
     splitter_->setOpaqueResize(false);
-    mode(S.value(QString("markdown/") + (editor_ ? "editorMode" : "viewerMode"))
+    if (IsHtml()) {
+        const auto Default = Parent && Parent->window()->width() >= 900 ? "split" : "source";
+        mode(editor_ ? (S.contains("html/editorMode") ? S.value("html/editorMode").toString() : QString::fromLatin1(Default)) : QStringLiteral("preview"));
+    }
+    else mode(S.value(QString("markdown/") + (editor_ ? "editorMode" : "viewerMode"))
              .toString());
     QTimer::singleShot(0, this, [this] { Refresh(); });
 }
 MarkdownDocumentView::~MarkdownDocumentView()
 {
+    resourceStop_.request_stop();
     source_->Backend()->widget()->removeEventFilter(this);
     // 도구 창 · 옆 미리보기로 넘긴 칸은 이 화면 것이다.
     for (const auto &Panel : takenPanels_)
@@ -259,6 +356,10 @@ void MarkdownDocumentView::ReturnPreview()
     for (const auto &Id : {"markdown.preview", "markdown.source", "markdown.split", "markdown.toggleSource"})
         actions_[QString::fromLatin1(Id)]->setEnabled(true);
     mode(modeBeforeTaken_.isEmpty() ? QStringLiteral("split") : modeBeforeTaken_);
+}
+bool MarkdownDocumentView::IsHtml() const
+{
+    return IsHtmlPath(path_);
 }
 bool MarkdownDocumentView::SourceVisible() const
 {
@@ -360,7 +461,7 @@ void MarkdownDocumentView::syncControls()
 {
     // 넘긴 개요는 작업 공간의 도구 창이 보이기를 정한다.
     if (!panelsTaken_)
-        outlinePanel_->setVisible(!previewOnly_ && actions_["markdown.toggleToc"]->isChecked());
+        outlinePanel_->setVisible(!previewOnly_ && (!IsHtml() || !headings_.isEmpty()) && actions_["markdown.toggleToc"]->isChecked());
 }
 void MarkdownDocumentView::SetPreviewOnly(bool On)
 {
@@ -419,11 +520,13 @@ bool MarkdownDocumentView::Run(const QString &Id, const QJsonValue &Value)
     if (Id == "markdown.source" || Id == "markdown.preview" || Id == "markdown.split")
     {
         mode(Id.section('.', 1));
+        if (IsHtml() && editor_) AppSettings().setValue("html/editorMode", mode_);
         Focus();
     }
     else if (Id == "markdown.toggleSource")
     {
         mode(SourceVisible() ? "preview" : "source");
+        if (IsHtml() && editor_) AppSettings().setValue("html/editorMode", mode_);
         Focus();
     }
     else if (Id == "markdown.focusOtherPane")
@@ -686,11 +789,14 @@ void MarkdownDocumentView::Refresh(bool Force)
     QJsonObject Message{{"type", "render"},
                         {"revision", revision_},
                         {"path", path_},
+                        {"resourcePath", archiveEntry_.isEmpty() ? (resourcePath_.isEmpty() ? path_ : resourcePath_) : QString{}},
+                        {"assetDirectory", resources_ ? resources_->directory_.path() : QString{}},
+                        {"assets", resources_ ? resources_->files_ : QJsonObject{}},
                         {"baseUrl", QUrl::fromLocalFile(QFileInfo(path_).absolutePath() + "/").toString()},
                         {"options", options_},
                         {"scroll", SourceVisible() && actions_["markdown.syncScroll"]->isChecked()
                             && source_->Backend()->widget()->hasFocus() && !preview_->HasFocus() ? sourceScrollAnchor() : QJsonObject{}}};
-    if (Synced && !Force)
+    if (!IsHtml() && Synced && !Force)
     {
         // UTF-8 offsets into the renderer's text; bytes that are not UTF-8 would change on the way.
         const auto Start = edits_.Start(), End = edits_.InsertedEnd();
@@ -822,6 +928,7 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
         renderBlocks_ = Value["blocks"].toObject();
         headings_ = Value["headings"].toArray();
         rebuildOutline();
+        syncControls();
         // The foreign preview can leave Qt's logical source focus intact while
         // reparenting changes the native keyboard receiver. Repair that mismatch
         // only while the source still owns focus in the foreground editor.
@@ -1109,7 +1216,7 @@ QList<DocumentStatusField> MarkdownDocumentView::StatusFields() const
     // only where the host offers no picker.
     const auto Percent = [](int Value) { return QStringLiteral("%1 %").arg(Value); };
     if (!SourceVisible())
-        F.append({"heading", QStringLiteral("%1 · %2").arg(heading_.isEmpty() ? tr("Markdown") : heading_, Percent(progress_)),
+        F.append({"heading", QStringLiteral("%1 · %2").arg(heading_.isEmpty() ? (IsHtml() ? tr("HTML") : tr("Markdown")) : heading_, Percent(progress_)),
                   Percent(progress_), tr("현재 제목 · 미리보기 위치"), "markdown.currentHeading", true, false, true});
     F.append({"markdown.viewMode", mode_ == "split" ? (previewActive_ ? tr("나란히 · 미리보기") : tr("나란히 · 소스"))
                                    : mode_ == "source" ? tr("소스")

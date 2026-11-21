@@ -420,6 +420,8 @@ void QTextView::SetFilePath(const QString& Path)
 // ═══════════════════════════════════════════════════════════
 void QTextView::setReadOnly(bool on)
 {
+    on = on || property("documentReadOnlySource").toBool();
+    m_editorSettings.readOnly = on;
     if (!m_editor)
         return;
 

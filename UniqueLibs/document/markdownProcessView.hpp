@@ -17,7 +17,7 @@ class MarkdownProcessView final : public QWidget
 {
     Q_OBJECT
   public:
-    explicit MarkdownProcessView(QWidget *Parent = nullptr);
+    explicit MarkdownProcessView(QWidget *Parent = nullptr, bool Html = false);
     // Helper is the executable's base name. The last message of each type in Replayed is sent again, in that
     // order, whenever a helper attaches (the first start, or a restart after it stopped).
     MarkdownProcessView(const QString &Helper, const QStringList &Replayed, QWidget *Parent = nullptr);
@@ -46,6 +46,7 @@ class MarkdownProcessView final : public QWidget
     QByteArray input_;
     QString token_;
     QString helper_;
+    bool html_ = false;
     // Replayed when the helper (re)attaches.
     QStringList replayed_;
     QHash<QString, QJsonObject> replay_;

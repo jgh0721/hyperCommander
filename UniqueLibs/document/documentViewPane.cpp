@@ -137,6 +137,7 @@ namespace hc::document
     }
     void DocumentViewPane::SetReadingSource(const QString& Path,const QString& Entry){
         readingPath_=Path;readingEntry_=Entry;
+        if(markdown_)markdown_->SetResourceSource(Path,Entry);
         if(image_&&Entry.isEmpty())image_->SetNavigationSource(Path);
         if(reading_&&!reading_->isHidden()&&reading_->State()["pageCount"].toInt()>0&&!Path.isEmpty()&&reading_->State()["book"].toString()!=Path)
             reading_->OpenPath(Path,Entry);
@@ -421,7 +422,7 @@ namespace hc::document
         connect(view_,&QBaseView::OpenRequested,this,&DocumentViewPane::OpenRequested);
         connect(view_,&QBaseView::SaveRequested,this,&DocumentViewPane::SaveRequested);
         markdownEditing_=ImageEditing;
-        if(text_ && QStringList{"md","markdown"}.contains(QFileInfo(Input.path_).suffix().toLower()))attachMarkdown(Input.path_);
+        if(text_ && (MarkdownDocumentView::IsHtmlPath(Input.path_) || QStringList{"md","markdown"}.contains(QFileInfo(Input.path_).suffix().toLower())))attachMarkdown(Input.path_);
         else if(text_ && QStringList{"rst","rest"}.contains(QFileInfo(Input.path_).suffix().toLower()))attachRst(Input.path_);
         if (Prefix && text_ && text_->Backend()) {
             auto* Backend = text_->Backend();
@@ -437,6 +438,9 @@ namespace hc::document
         if(!text_ || markdown_)return;
         auto* SourceBar=toolbar_;layout()->removeWidget(SourceBar);SourceBar->hide();
         layout()->removeWidget(text_);markdown_=new MarkdownDocumentView(text_,Path,markdownEditing_,this);
+        text_->setProperty("documentReadOnlySource",markdown_->IsHtmlReader());
+        if(markdown_->IsHtmlReader())SetReadOnly(true);
+        markdown_->SetResourceSource(readingPath_,readingEntry_);
         toolbar_=markdown_->Toolbar();static_cast<QVBoxLayout*>(layout())->insertWidget(0,toolbar_);layout()->addWidget(markdown_);
         markdown_->SetSourceTools(SourceBar);markdown_->SetShortcutBindings(DocumentShortcutRegistry::Bindings(shortcutBindings_));connect(markdown_,&MarkdownDocumentView::Changed,this,&DocumentViewPane::ViewStateChanged);
         connect(markdown_,&MarkdownDocumentView::OpenRequested,this,&DocumentViewPane::OpenRequested);
@@ -503,10 +507,11 @@ namespace hc::document
         // Only views of the text family switch. A binary target (.epub, .pdf, images) keeps the text view.
         if(!text_ || Path.isEmpty())return;
         const auto Suffix=QFileInfo(Path).suffix().toLower();
-        const bool Markdown=Suffix=="md" || Suffix=="markdown";
+        const bool Html=MarkdownDocumentView::IsHtmlPath(Path);
+        const bool Markdown=Html || Suffix=="md" || Suffix=="markdown";
         const bool Rst=Suffix=="rst" || Suffix=="rest";
         text_->SetFilePath(Path);
-        if(!Markdown && markdown_)detachMarkdown();
+        if(markdown_ && (!Markdown || Html != markdown_->IsHtml()))detachMarkdown();
         if(!Rst && rst_)detachRst();
         if(Markdown && !markdown_){attachMarkdown(Path);contribution_.menuActions_=toolbar_->actions();applyTheme();}
         else if(Rst && !rst_){attachRst(Path);contribution_.menuActions_=toolbar_->actions();applyTheme();}
@@ -963,7 +968,7 @@ namespace hc::document
         SetFocus(Native);
         return GetFocus()==Native;
     }
-    void DocumentViewPane::SetReadOnly(bool Enabled){readOnly_=Enabled;if(markdown_)markdown_->SetReadOnly(Enabled);if(rst_)rst_->SetReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
+    void DocumentViewPane::SetReadOnly(bool Enabled){Enabled=Enabled || (markdown_ && markdown_->IsHtmlReader());readOnly_=Enabled;if(markdown_)markdown_->SetReadOnly(Enabled);if(rst_)rst_->SetReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
     void DocumentViewPane::SetClipboardBroker(bool Enabled)
     {
         sqliteBroker_=Enabled;if(sqlite_)sqlite_->SetClipboardBrokered(Enabled);

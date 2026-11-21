@@ -5,6 +5,8 @@
 #include "documentToolPanel.hpp"
 #include "previewScrollSync.hpp"
 #include <QPointer>
+#include <memory>
+#include <stop_token>
 #include <QWidget>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -22,6 +24,7 @@ class QLabel;
 class QAction;
 namespace hc::document
 {
+struct HtmlResources;
 class MarkdownProcessView;
 class MarkdownDocumentView final : public QWidget
 {
@@ -36,6 +39,12 @@ class MarkdownDocumentView final : public QWidget
     {
         return toolbar_;
     }
+    static bool IsHtmlPath(const QString &Path) {
+        return Path.endsWith(".html", Qt::CaseInsensitive) || Path.endsWith(".htm", Qt::CaseInsensitive);
+    }
+    bool IsHtml() const;
+    bool IsHtmlReader() const { return IsHtml() && !editor_; }
+    void SetResourceSource(const QString &Path, const QString &Entry);
     bool SourceVisible() const;
     bool CanRun(const QString &Id) const;
     // Value is used by markdown.zoomSet (percent); without one that command asks for it.
@@ -54,6 +63,10 @@ class MarkdownDocumentView final : public QWidget
         if (!Path.isEmpty() && path_ != Path)
         {
             path_ = Path;
+            resourceStop_.request_stop();
+            resourcePath_.clear();
+            archiveEntry_.clear();
+            resources_.reset();
             Refresh();
         }
     }
@@ -184,6 +197,9 @@ class MarkdownDocumentView final : public QWidget
     QString renderText() const;
     QString renderDetail() const;
     QTextView *source_;
+    QString resourcePath_, archiveEntry_;
+    std::shared_ptr<HtmlResources> resources_;
+    std::stop_source resourceStop_;
     QString path_, mode_, status_, heading_, error_;
     bool editor_ = false, readOnly_ = false, composing_ = false;
     QToolBar *toolbar_;

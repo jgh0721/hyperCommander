@@ -201,6 +201,11 @@ namespace hc::document
         if( Kind == QLatin1String( "text" ) ) return RecentDocumentStore::tr( "텍스트 · %1" ).arg( Folder );
         // 워크스페이스로 연 폴더(탐색기 · 워크스페이스 설계 6.8): 그 폴더 경로 자체를 보인다.
         if( Kind == QLatin1String( "folder" ) ) return RecentDocumentStore::tr( "워크스페이스 · %1" ).arg( QDir::toNativeSeparators( Document.path_ ) );
+        if( Kind == QLatin1String( "html" ) ) {
+            if( Document.markdownView_ == "split" ) return RecentDocumentStore::tr("HTML · 나란히 보기");
+            if( Document.markdownView_ == "preview" ) return RecentDocumentStore::tr("HTML · 미리보기");
+            return RecentDocumentStore::tr("HTML · 소스 보기");
+        }
         if( Kind == QLatin1String( "markdown" ) ) {
             if( Document.markdownView_ == QLatin1String( "split" ) ) return RecentDocumentStore::tr( "Markdown · 나란히 보기" );
             if( Document.markdownView_ == QLatin1String( "preview" ) ) return RecentDocumentStore::tr( "Markdown · 미리보기" );
