@@ -19,6 +19,7 @@
 
 /// 공통 라이브러리
 #include "commonLibs/storage/materializedContent.hpp"
+#include "commonLibs/storage/archiveDiscovery.hpp"
 
 /// 외부 라이브러리
 
@@ -48,7 +49,7 @@ namespace hc::navigation
                 (void)QtConcurrent::run([Value = std::move(Value), Lease = std::move(Lease), Materializer = std::move(Materializer)] {});
             });
         }
-        class PrimedProvider final : public IStorageProvider
+        class PrimedProvider final : public IStorageProvider, public IArchiveDiscovery
         {
         public:
             PrimedProvider(std::shared_ptr<IStorageProvider> Reader, Locator Root, std::shared_ptr<PagedEntryIndex> Entries)
@@ -63,6 +64,10 @@ namespace hc::navigation
             Task<EntrySnapshot> Stat(ResourceId Id, OperationContext Context) override { return reader_->Stat(std::move(Id), Context); }
             Task<EntrySnapshot> Resolve(Locator At, OperationContext Context) override { return reader_->Resolve(std::move(At), Context); }
             Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext Context) override { return reader_->OpenRead(std::move(Id), Context); }
+            Result<std::shared_ptr<IReadStream>> PinForDiscovery(OperationContext Context) override {
+                if (auto* Archive = dynamic_cast<IArchiveDiscovery*>(reader_.get())) return Archive->PinForDiscovery(std::move(Context));
+                return std::shared_ptr<IReadStream>{};
+            }
             bool UsesOrderedReads() const override { return reader_->UsesOrderedReads(); }
             Task<Unit> PrepareReadBatch(std::vector<EntrySnapshot> Entries, OperationContext Context) override { return reader_->PrepareReadBatch(std::move(Entries), Context); }
             Task<Unit> FinishReadBatch(OperationContext Context) override { return reader_->FinishReadBatch(Context); }
@@ -71,7 +76,7 @@ namespace hc::navigation
             {
                 std::shared_ptr<PagedEntryIndex> Entries;
                 { std::lock_guard Lock(mutex_); if (At == root_) Entries = std::exchange(entries_, {}); }
-                if (!Entries) return reader_->Enumerate(std::move(At), Context);
+                if (!Entries || Context.freshEnumerationMetadata_) return reader_->Enumerate(std::move(At), Context);
                 class Cursor final : public IEntryCursor
                 {
                 public:

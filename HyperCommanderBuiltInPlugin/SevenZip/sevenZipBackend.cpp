@@ -20,6 +20,7 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <msi.h>
 #include <msiquery.h>
@@ -97,6 +98,7 @@ public:
     }
     bool Open(const QString& Path, bool Split = false, unsigned RequiredPart = 1) {
         auto Name = Path; unsigned Number = 1;
+        if (QDir::fromNativeSeparators(Path).startsWith("//")) readBuffer_.resize(1024 * 1024);
         const auto Width = QFileInfo(Path).suffix().size();
         do {
             if (state_->Check() != S_OK) return false;
@@ -116,11 +118,32 @@ public:
     HRESULT STDMETHODCALLTYPE Read(void* Data, UInt32 Size, UInt32* Done) noexcept override {
         if (Done) *Done = 0; if (state_->Check(position_) != S_OK) return E_ABORT;
         if (!Size || position_ >= size_) return S_OK;
+        if (position_ >= bufferedAt_ && position_ - bufferedAt_ < bufferedBytes_) {
+            const auto Offset = position_ - bufferedAt_;
+            const auto Count = UInt32(std::min<uint64_t>(Size, bufferedBytes_ - Offset));
+            std::memcpy(Data, readBuffer_.constData() + Offset, Count);
+            position_ += Count;
+            if (Done) *Done = Count;
+            return S_OK;
+        }
         for (const auto& Part : parts_) if (position_ >= Part.offset_ && position_ - Part.offset_ < Part.size_) {
             LARGE_INTEGER At{}; At.QuadPart = position_ - Part.offset_;
+            // Coalesce adjacent small decoder reads over SMB. Random probes and
+            // large requests go straight to the handle without speculative I/O.
+            const bool Buffer = position_ == lastReadEnd_ && Size < readBuffer_.size();
+            const auto Wanted = Buffer ? uint64_t(readBuffer_.size()) : uint64_t(Size);
+            if (Buffer) bufferedBytes_ = 0;
             DWORD Count = 0;
-            if (!SetFilePointerEx(Part.handle_, At, nullptr, FILE_BEGIN) || !ReadFile(Part.handle_, Data, DWORD(std::min<uint64_t>(Size, Part.size_ - At.QuadPart)), &Count, nullptr))
+            if (!SetFilePointerEx(Part.handle_, At, nullptr, FILE_BEGIN) ||
+                !ReadFile(Part.handle_, Buffer ? readBuffer_.data() : Data, DWORD(std::min(Wanted, Part.size_ - At.QuadPart)), &Count, nullptr))
                 return HRESULT_FROM_WIN32(GetLastError());
+            lastReadEnd_ = position_ + Count;
+            if (Buffer) {
+                bufferedAt_ = position_;
+                bufferedBytes_ = Count;
+                Count = std::min<DWORD>(Size, Count);
+                std::memcpy(Data, readBuffer_.constData(), Count);
+            }
             position_ += Count; if (Done) *Done = Count; return S_OK;
         }
         return E_FAIL;
@@ -135,6 +158,9 @@ public:
 private:
     struct Part { HANDLE handle_; uint64_t offset_, size_; };
     std::vector<Part> parts_;
+    QByteArray readBuffer_;
+    uint64_t bufferedAt_ = 0, lastReadEnd_ = UINT64_MAX;
+    DWORD bufferedBytes_ = 0;
     uint64_t size_ = 0, position_ = 0;
     std::shared_ptr<State> state_;
 };

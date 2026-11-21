@@ -3,6 +3,7 @@
 #include <QtTest>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <QDirIterator>
 #include <QProcess>
 #include <QtEndian>
 #include "HyperCommanderBuiltInPlugin/SevenZip/builtinSevenZip.hpp"
@@ -268,6 +269,70 @@ private slots:
         const auto Parent = QDir::toNativeSeparators(Output.path()); const auto Renamed = Parent + "-renamed";
         QVERIFY(MoveFileW(reinterpret_cast<LPCWSTR>(Parent.utf16()), reinterpret_cast<LPCWSTR>(Renamed.utf16())));
         QVERIFY(MoveFileW(reinterpret_cast<LPCWSTR>(Renamed.utf16()), reinterpret_cast<LPCWSTR>(Parent.utf16())));
+    }
+    void smbPanelDirectoryMetadata() {
+        const auto Path = qEnvironmentVariable("HC_SMB_PANEL_DIRECTORY");
+        if (Path.isEmpty()) QSKIP("Set HC_SMB_PANEL_DIRECTORY to check a real SMB listing");
+        auto Reader = MakeNativeReadProvider(LocatorKind::Smb);
+        OperationContext Context; Context.freshEnumerationMetadata_ = true;
+        Context.allowUnavailableChildMetadata_ = true;
+        QElapsedTimer Clock; Clock.start();
+        auto Cursor = Reader->Enumerate({LocatorKind::Smb, Path.toStdString()}, Context).get();
+        QVERIFY2(Cursor.HasValue(), Cursor.HasValue() ? "" : Cursor.Failure().code_.c_str());
+        const auto Elapsed = Clock.elapsed();
+        size_t Count = 0;
+        for (;;) {
+            auto Page = Cursor.Value()->Next(256, Context).get(); QVERIFY(Page.HasValue());
+            for (const auto& Entry : Page.Value().entries_) {
+                ++Count;
+                if (!Entry.id_.revision_) continue;
+                auto Fresh = Reader->Stat(Entry.id_, Context).get();
+                QVERIFY2(Fresh.HasValue(), Entry.name_.c_str());
+                QCOMPARE(Fresh.Value().name_, Entry.name_);
+            }
+            if (Page.Value().end_) break;
+        }
+        qInfo() << "SMB panel enumeration (ms)" << Elapsed << "entries" << Count;
+    }
+    void smbArchiveSelectionToLocal() {
+        using namespace hc::operations;
+        const auto Source = qEnvironmentVariable("HC_SMB_SELECTION_ARCHIVE");
+        if (Source.isEmpty()) QSKIP("Set HC_SMB_SELECTION_ARCHIVE to measure a selected archive folder");
+        const Locator Folder{LocatorKind::Archive, Source.toStdString(),
+            {{"wcx", qEnvironmentVariable("HC_SMB_SELECTION_FOLDER", "/").toStdString()}}};
+        auto Root = Folder; Root.nesting_.back().entry_ = "/";
+        auto Reader = MakeWcxReadProvider({}, Root, {}, MakeApprovedWcxBackend(BuiltinSevenZipOptions()));
+        auto Cursor = Reader->Enumerate(Folder, {}).get();
+        QVERIFY2(Cursor.HasValue(), Cursor.HasValue() ? "" : Cursor.Failure().code_.c_str());
+        QTemporaryDir Output; QVERIFY(Output.isValid());
+        FileOperationRequest Request;
+        Request.destination_ = {LocatorKind::Local, Output.path().toStdString()};
+        Request.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
+        for (;;) {
+            auto Page = Cursor.Value()->Next(256, {}).get(); QVERIFY(Page.HasValue());
+            for (auto& Entry : Page.Value().entries_) Request.sources_.push_back({std::move(Entry), Reader, {}});
+            if (Page.Value().end_) break;
+        }
+        QVERIFY(!Request.sources_.empty());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        QElapsedTimer Clock; Clock.start();
+        OperationContext Context; Context.providerInteractions_ = true;
+        auto Job = SubmitFileOperation(Scheduler, std::move(Request), Context); QVERIFY(Job.HasValue());
+        qint64 FirstBytesMs = -1;
+        while (Job.Value().completion_.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready) {
+            auto Snapshot = Scheduler.Snapshot(Job.Value().id_); QVERIFY(Snapshot.HasValue());
+            if (FirstBytesMs < 0 && Snapshot.Value().progress_.bytesDone_) FirstBytesMs = Clock.elapsed();
+            if (Clock.elapsed() > 600000) Scheduler.Cancel(Job.Value().id_);
+        }
+        const auto Final = Job.Value().completion_.get();
+        QVERIFY2(Final.snapshot_.state_ == JobState::Completed, Final.snapshot_.error_ ? Final.snapshot_.error_->code_.c_str() : "incomplete");
+        const auto Elapsed = Clock.elapsed();
+        uint64_t OutputBytes = 0;
+        QDirIterator It(Output.path(), QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+        while (It.hasNext()) { It.next(); OutputBytes += uint64_t(It.fileInfo().size()); }
+        QCOMPARE(OutputBytes, Final.snapshot_.progress_.bytesDone_);
+        qInfo() << "First copied bytes (ms)" << FirstBytesMs << "total (ms)" << Elapsed
+                << "bytes" << Final.snapshot_.progress_.bytesDone_;
     }
     void smbExtractionBenchmark() {
         using namespace hc::operations;

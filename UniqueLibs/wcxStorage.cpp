@@ -1,4 +1,5 @@
 ﻿#include "wcxStorage.hpp"
+#include "commonLibs/storage/archiveDiscovery.hpp"
 #include "operationMetrics.hpp"
 #include "commonLibs/plugins/archiveSelectionDigest.hpp"
 #include "wcxBackend.hpp"
@@ -113,7 +114,7 @@ namespace hc::storage
             std::shared_ptr<QTemporaryDir> directory_;
             std::shared_ptr<IReadStream> stream_;
         };
-        class WcxProvider final : public IStorageProvider, public std::enable_shared_from_this<WcxProvider>
+        class WcxProvider final : public IStorageProvider, public IArchiveDiscovery, public std::enable_shared_from_this<WcxProvider>
         {
         public:
             WcxProvider(std::string Plugin, Locator Root, std::string Temporary, std::shared_ptr<hc::plugins::IArchiveBackend> Backend, WcxBackends Ancestors, bool BatchRead, ArchiveReadPolicy Policy)
@@ -166,6 +167,22 @@ namespace hc::storage
                     return Self.entries_.at(At.nesting_.back().entry_);
                 });
             }
+            Result<std::shared_ptr<IReadStream>> PinForDiscovery(OperationContext Context) override
+            {
+                return run<std::shared_ptr<IReadStream>>(Context, [](WcxProvider& Self, OperationContext Context) -> Result<std::shared_ptr<IReadStream>> {
+                    if (Self.root_.nesting_.size() != 1 || Self.native_->Id().value_ != "smb")
+                        return std::shared_ptr<IReadStream>{};
+                    if (auto Existing = Self.discoveryPin_.lock()) return Existing;
+                    if (!Self.mounted_) {
+                        auto Mounted = Self.mount(Context); if (!Mounted.HasValue()) return Mounted.Failure();
+                    }
+                    Context.denyConcurrentMutation_ = true;
+                    auto Pin = Self.native_->OpenRead(Self.archive_.id_, Context).get();
+                    if (Pin.HasValue()) Self.discoveryPin_ = Pin.Value();
+                    return Pin;
+                }).get();
+            }
+            bool SupportsFreshEnumerationMetadata() const override { return true; }
             bool UsesOrderedReads() const override { return !streamUnsupported_; }
             Task<Unit> PrepareReadBatch(std::vector<EntrySnapshot> Entries,OperationContext Context) override {
                 return run<Unit>(Context,[Entries=std::move(Entries)](WcxProvider& Self,OperationContext Context)->Result<Unit> {
@@ -173,7 +190,9 @@ namespace hc::storage
                     auto Mounted=Self.mount(Context); if (!Mounted.HasValue()) return Mounted.Failure();
                     std::vector<std::uint32_t> Ordinals;
                     std::map<std::uint32_t, hc::plugins::ArchiveHeader> SelectedHeaders;
-                    for (const auto& Entry:Entries) { auto Fresh=Self.stat(Entry.id_,Context); if (!Fresh.HasValue()) return Fresh.Failure();
+                    for (const auto& Entry:Entries) {
+                        if (const auto Failure = Context.Check(Self.Id())) return *Failure;
+                        auto Fresh = Self.stat(Entry.id_, Context, true); if (!Fresh.HasValue()) return Fresh.Failure();
                         if (Fresh.Value().directory_) continue;
                         const auto Ordinal = std::uint32_t(std::stoul(Fresh.Value().hints_.at("ordinal"))); Ordinals.push_back(Ordinal);
                         if (Context.producingContent_) {
@@ -363,7 +382,7 @@ namespace hc::storage
             }
             Result<Unit> mount(OperationContext Context)
             {
-                if (mounted_) { if (bulkPin_) return Unit{}; const auto Fresh = native_->Stat(archive_.id_, Context).get(); return Fresh.HasValue() ? Result<Unit>(Unit{}) : Result<Unit>(Fresh.Failure()); }
+                if (mounted_) { if (bulkPin_ || discoveryPin_.lock()) return Unit{}; const auto Fresh = native_->Stat(archive_.id_, Context).get(); return Fresh.HasValue() ? Result<Unit>(Unit{}) : Result<Unit>(Fresh.Failure()); }
                 if (!validLocation(root_)) return Error{ErrorCategory::InvalidRequest, "archive-location"};
                 Locator Container{native_->Id().value_ == "smb" ? LocatorKind::Smb : LocatorKind::Local, root_.root_};
                 archivePath_ = root_.root_;
@@ -458,10 +477,10 @@ namespace hc::storage
                 if (SizeKnown) unpackedBytes_ = Unpacked;
                 mounted_ = true; return Unit{};
             }
-            Result<EntrySnapshot> stat(const ResourceId& Resource, OperationContext Context)
+            Result<EntrySnapshot> stat(const ResourceId& Resource, OperationContext Context, bool Mounted = false)
             {
                 if (Resource.providerId_ != Id() || !Resource.key_.starts_with(session_)) return Error{ErrorCategory::NotFound, "foreign-session"};
-                const auto Valid = mount(Context); if (!Valid.HasValue()) return Valid.Failure();
+                if (!Mounted) { const auto Valid = mount(Context); if (!Valid.HasValue()) return Valid.Failure(); }
                 if (Resource.key_.substr(session_.size()) == "/") {
                     auto Entry = rootEntry();
                     if (Entry.id_ != Resource) return Error{ErrorCategory::StaleRevision, "revision-changed"};
@@ -519,6 +538,7 @@ namespace hc::storage
             QByteArray directDigest_;
             std::vector<std::uint32_t> directOrdinals_;
             bool directUnsupported_ = false;
+            std::weak_ptr<IReadStream> discoveryPin_;
             std::shared_ptr<IReadStream> bulkPin_;
             bool batchRead_ = false, batchUnsupported_ = false, streamUnsupported_ = false;
             std::shared_ptr<hc::plugins::IArchiveReadSession> streamingBatch_;

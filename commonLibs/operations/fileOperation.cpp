@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileOperation.hpp"
+#include "../storage/archiveDiscovery.hpp"
 #include <set>
 #include <array>
 #include <atomic>
@@ -1132,10 +1133,20 @@ namespace hc::operations
                             batchReaders_.push_back(Owner->source_.reader_);
                         }
                     }
+                    discoveryPins_.clear();
                     phase_ = request_.operation_ == FileOperation::Delete && request_.confirmDelete_ && !deleteConfirmed_ ? Phase::Confirm : Phase::Begin;
                     return progress();
                 }
                 auto Item = std::move(pending_.front()); pending_.pop_front();
+                auto* Reader = Item.source_.reader_.get();
+                if (request_.operation_ == FileOperation::Copy && Item.source_.entry_.locator_.kind_ == LocatorKind::Archive
+                    && !discoveryPins_.contains(Reader)) {
+                    if (auto* Archive = dynamic_cast<IArchiveDiscovery*>(Reader)) {
+                        auto Pin = Archive->PinForDiscovery(Context);
+                        if (!Pin.HasValue()) return failed(Pin.Failure());
+                        discoveryPins_.emplace(Reader, std::move(Pin.Value()));
+                    }
+                }
                 return prepareItem(std::move(Item), Context);
             }
             bool prefetchAvailable() const
@@ -2007,6 +2018,7 @@ namespace hc::operations
             bool preparationRetry_ = false, skipDeleteErrors_ = false;
             std::deque<PlannedItem> pending_;
             std::vector<PlannedItem> items_, directories_;
+            std::map<IStorageProvider*, std::shared_ptr<IReadStream>> discoveryPins_;
             std::vector<std::shared_ptr<IStorageProvider>> batchReaders_;
             std::set<std::string> seen_;
             PlannedItem enumerating_;

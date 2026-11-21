@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "storageProviders.hpp"
+#include "folderSize.hpp"
 #include "shellDriveSort.hpp"
 #include "UniqueLibs/nativeFilePath.hpp"
 #include "operationMetrics.hpp"
@@ -131,6 +132,50 @@ namespace hc::storage
                 }
             }
             return Value;
+        }
+        // SMB can return the persistent 64-bit file ID and display metadata for
+        // an entire page. Stat upgrades this token when an operation selects a row.
+        bool readNetworkDirectory(const Locator& At, const std::wstring& Path, const ProviderId& Id,
+            const std::string& Prefix, const OperationContext& Context, std::vector<EntrySnapshot>& Entries)
+        {
+            const auto Handle = CreateFileW(Path.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+            if (Handle == INVALID_HANDLE_VALUE) return false;
+            const auto Close = qScopeGuard([&] { CloseHandle(Handle); });
+            BY_HANDLE_FILE_INFORMATION Parent{};
+            if (!GetFileInformationByHandle(Handle, &Parent)) return false;
+            std::vector<ULONGLONG> Buffer(64 * 1024 / sizeof(ULONGLONG));
+            for (;;) {
+                if (Context.Check(Id)) return false;
+                if (!GetFileInformationByHandleEx(Handle, FileIdBothDirectoryInfo, Buffer.data(), DWORD(Buffer.size() * sizeof(ULONGLONG))))
+                    return GetLastError() == ERROR_NO_MORE_FILES;
+                for (auto* Row = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO*>(Buffer.data());;) {
+                    const auto Name = QString::fromWCharArray(Row->FileName, int(Row->FileNameLength / sizeof(wchar_t)));
+                    if (Name != "." && Name != "..") {
+                        if (Entries.size() >= Context.EnumerationLimit() || Context.Check(Id)) return false;
+                        const auto Time = [](LARGE_INTEGER Value) { return FILETIME{Value.LowPart, DWORD(Value.HighPart)}; };
+                        WIN32_FILE_ATTRIBUTE_DATA Data{Row->FileAttributes, Time(Row->CreationTime), Time(Row->LastAccessTime),
+                            Time(Row->LastWriteTime), DWORD(Row->EndOfFile.HighPart), Row->EndOfFile.LowPart};
+                        const auto Child = At.root_ + (At.root_.ends_with('\\') ? "" : "\\") + Name.toStdString();
+                        ResourceRevision Revision; DWORD Tag = 0;
+                        BY_HANDLE_FILE_INFORMATION Info{};
+                        Info.dwVolumeSerialNumber = Parent.dwVolumeSerialNumber;
+                        Info.nFileIndexHigh = DWORD(Row->FileId.HighPart); Info.nFileIndexLow = Row->FileId.LowPart;
+                        Info.dwFileAttributes = Data.dwFileAttributes; Info.ftCreationTime = Data.ftCreationTime;
+                        Info.ftLastWriteTime = Data.ftLastWriteTime; Info.nFileSizeHigh = Data.nFileSizeHigh; Info.nFileSizeLow = Data.nFileSizeLow;
+                        if (Row->FileId.QuadPart && !(Data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                            Revision = native::HandleRevision(Info);
+                        else if (!ReadAttributes(FilePath(Child), Data, &Revision, nullptr, &Tag))
+                            return false;
+                        auto Item = Entry(Id, Prefix, {At.kind_, Child}, Name.toStdString(), Data);
+                        Item.id_.revision_ = std::move(Revision);
+                        Item.hints_["reparseTag"] = std::to_string(Tag);
+                        Entries.push_back(std::move(Item));
+                    }
+                    if (!Row->NextEntryOffset) break;
+                    Row = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO*>(reinterpret_cast<const BYTE*>(Row) + Row->NextEntryOffset);
+                }
+            }
         }
         // Mutation discovery must yield bounded pages even in one large folder.
         // Browsing retains its immutable snapshot; this cursor is used only when
@@ -421,6 +466,13 @@ namespace hc::storage
                         if (!(Attributes & FILE_ATTRIBUTE_DIRECTORY)) return Error{ErrorCategory::InvalidRequest, "not-directory", Id};
                         if (Context.incrementalEnumeration_)
                             return std::unique_ptr<IEntryCursor>(new NativeMutationCursor(std::move(At), Id, Prefix, std::move(Recovery)));
+                        if (Context.freshEnumerationMetadata_ && Context.allowUnavailableChildMetadata_
+                            && hc::folders::IsNetwork(At) && !native::IsRedirectedPath(Path)) {
+                            if (readNetworkDirectory(At, Path, Id, Prefix, Context, Entries))
+                                return std::unique_ptr<IEntryCursor>(new SnapshotCursor(std::move(Entries), Id));
+                            if (const auto Failure = Context.Check(Id)) return *Failure;
+                            Entries.clear();
+                        }
                         WIN32_FIND_DATAW Found{};
                         const auto Handle = Recovery.Invoke([&] {
                             const auto Pattern = Path + (Path.ends_with(L'\\') || Path.ends_with(L'/') ? L"*" : L"\\*");
