@@ -16,6 +16,7 @@
 // 또는 Lister 에 표시되는 WLX 등을 호스트한다.
 
 class CFsModelT;
+class CFSModel;
 struct ColumnView;
 class QtitanColumnAdapter;
 class QtViewerHost;
@@ -179,6 +180,7 @@ public:
 
 signals:
     void                           sigViewSettingsChanged();
+    void                           sigAutomaticColumnsChanged(bool ProfileChanged);
     void                           sigListPresentationChanged();
     void sigThumbnailSelectionChanged();
     void sigSelectionIdentityChanged();
@@ -209,6 +211,7 @@ private:
     bool startupInput_=false; QString startupInputFocus_; QTimer startupTraceTimer_;
     void initializeGrouping();
     void applyGrouping();
+    bool configureGrouping();
     void focusFirstEntry();
     void applySetGrouping(const hc::columns::ColumnProfile& Profile);
     void rememberGrouping();
@@ -264,8 +267,15 @@ private:
     void requestIconViewport();
     void updateIconViewport();
     QTimer iconViewportTimer_;
+    void captureListingReset(bool ChangingColumns = false);
+    void bindGridColumns(const ColumnView& Columns);
+    void setColumnProfilePresentation(const hc::columns::ColumnProfile& Profile);
+    void applyColumnProfileGrouping(const hc::columns::ColumnProfile& Previous, const hc::columns::ColumnProfile& Profile);
+    void connectAutomaticColumns(CFSModel* Model);
+    bool canSelectAutomaticColumns() const;
+    std::optional<hc::columns::ColumnProfile> changedAutomaticProfile(const std::optional<hc::columns::ColumnProfile>& Matched) const;
     void requestAutomaticColumns();
-    bool manualColumns_ = false, applyingAutoColumns_ = false;
+    bool manualColumns_ = false, applyingAutoColumns_ = false, publishingDirectoryColumns_ = false;
     QByteArray automaticColumnsSignature_;
     quint64 automaticColumnsGeneration_ = 0;
     std::stop_source automaticColumnsStop_;

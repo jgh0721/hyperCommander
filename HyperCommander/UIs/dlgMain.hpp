@@ -4,6 +4,7 @@
 #include "UniqueLibs/qtWorkspaceState.hpp"
 #include <QPointer>
 #include <QAbstractNativeEventFilter>
+#include <QTimer>
 
 #include "ui_dlgMain.h"
 
@@ -107,6 +108,7 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
     CmpPanel*             activationFocusPanel_ = nullptr;
     Ui::dlgMain           ui;
     hc::workspace::Loaded workspace_;
+    QTimer                workspaceSaveTimer_;
     bool                  workspaceLoaded_ = false;
     bool                  restoreWorkspaceOnStartup_ = false;
     QString               workspaceWindowWarning_;

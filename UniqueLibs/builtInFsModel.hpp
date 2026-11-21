@@ -55,6 +55,12 @@ public:
 
     CFSModel();
     ~CFSModel() override;
+    struct DirectoryColumns {
+        ColumnView view_;
+        // The GUI validates and batches the change only after the listing succeeds.
+        std::function<bool()> begin_;
+        std::function<void(const ColumnView&)> finish_;
+    };
     void SetColumnView(const ColumnView& View) override;
     void SetColumnLayoutMode(hc::columns::LayoutMode Mode);
     // 목록이 그리는 아이콘의 물리 px. 바뀌면 아이콘을 그 크기로 다시 읽는다.
@@ -225,6 +231,7 @@ public:
     { return !searchResults_ ? acceptedProvider_ : IsFlatListing() && flatKind_ == hc::storage::LocatorKind::Smb ? searchSmb_ : searchLocal_; }
 
 signals:
+    void PrepareDirectoryColumns(const QString& Path, std::optional<DirectoryColumns>& Columns);
     void DirectoryReadStarted(const QString& Path, bool Archive);
     void NavigationCancelled();
     void DirectoryReadFailed(const QString& Path, bool Local);
@@ -250,10 +257,11 @@ private:
     QString                         retrieveRootWithPath() const;
     void                            createBuiltFsValues( QVector< nsHC::TySpFileSource >& Items );
     void                            createBuiltFsValues( const nsHC::TySpFileSource& Item, int Column );
+    void                            setColumnBinding(const ColumnView& View);
     void                            refreshProvider();
     void publishNavigationFallback(const hc::storage::Locator& Location);
     void requestPage(std::uint64_t Offset, bool Rebuild);
-    hc::storage::Result<hc::storage::PagedEntryIndex::Less> pageComparison(const QString& ParentPath = {}, bool NameOnly = false) const;
+    hc::storage::Result<hc::storage::PagedEntryIndex::Less> pageComparison(const QString& ParentPath = {}, bool NameOnly = false, const ColumnView* Columns = nullptr) const;
     struct PreparedFileRow {
         QString name_, extension_;
         QDateTime created_, modified_;
@@ -262,7 +270,8 @@ private:
     };
     static PreparedFileRow prepareFileRow(const hc::storage::EntrySnapshot& Entry);
     static std::vector<PreparedFileRow> prepareFileRows(const std::vector<hc::storage::EntrySnapshot>& Entries, std::stop_token Token);
-    void publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles = {}, std::vector<PreparedFileRow> Prepared = {});
+    void publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles = {},
+        std::vector<PreparedFileRow> Prepared = {}, const DirectoryColumns* Columns = nullptr, bool CancelSort = false);
     void                            refreshDisplayIcons(int First = 0);
     void applyRequestedIcons();
     void invalidateDisplayIcons(bool All, int SettleMs = 0);

@@ -779,11 +779,18 @@ void QMainUI::initialize()
     //connect( ui.cmpRightPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
     connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyPanelActivated, this, &QMainUI::oo_notifyPanelActivated );
     connect( ui.cmpRightPanel, &CmpPanel::sig_NotifyPanelActivated, this, &QMainUI::oo_notifyPanelActivated );
-    for (auto* Panel : {ui.cmpLeftPanel, ui.cmpRightPanel})
-        connect(Panel, &CmpPanel::sigViewSettingsChanged, this, [this] {
-            if (!SaveWorkspace())
-                hc::ui::MessageDialog::warning(this, tr("목록 모양 저장 실패"), tr("현재 화면에는 적용했지만 작업공간 파일을 저장하지 못했습니다.\n%1").arg(hc::settings::WorkspaceSettings().Error()));
-        });
+    const auto SaveViewSettings = [this] {
+        if (!SaveWorkspace())
+            hc::ui::MessageDialog::warning(this, tr("목록 모양 저장 실패"), tr("현재 화면에는 적용했지만 작업공간 파일을 저장하지 못했습니다.\n%1").arg(hc::settings::WorkspaceSettings().Error()));
+    };
+    workspaceSaveTimer_.setObjectName("workspaceSaveTimer");
+    workspaceSaveTimer_.setSingleShot(true);
+    workspaceSaveTimer_.setInterval(400);
+    connect(&workspaceSaveTimer_, &QTimer::timeout, this, SaveViewSettings);
+    for (auto* Panel : {ui.cmpLeftPanel, ui.cmpRightPanel}) {
+        connect(Panel, &CmpPanel::sigViewSettingsChanged, this, SaveViewSettings);
+        connect(Panel, &CmpPanel::sigDeferredWorkspaceSave, this, [this] { workspaceSaveTimer_.start(); });
+    }
 
     // Track input in all panel descendants, including the path/search controls
     // and viewers. Focus outside both panels keeps the current command source.
@@ -874,6 +881,8 @@ void QMainUI::restoreWorkspacePanels(const hc::workspace::State& State)
 
 bool QMainUI::SaveWorkspace()
 {
+    workspaceSaveTimer_.stop();
+    hc::startup::Span Trace("workspace.save");
     return workspaceLoaded_ && hc::workspace::Save(hc::settings::WorkspaceSettings(), workspace_, CaptureWorkspace());
 }
 

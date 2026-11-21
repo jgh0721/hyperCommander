@@ -222,10 +222,24 @@ void CGridView::focusFirstEntry()
 void CGridView::applyGrouping()
 {
     if (!model_ || groupingUpdateDepth_ || groupingProjection_) return;
-    groupingTimer_.stop();
-    groupingReset_ = false; groupInteractionTimer_.stop(); groupInteractionPending_ = false; groupInteractionFocus_.clear();
     const auto Selected = CaptureSelection(); const auto Focus = CaptureFocus();
     QScopedValueRollback Guard(groupingProjection_, true);
+    view_->beginUpdate();
+    const bool Active = configureGrouping();
+    if (Active) groupedSelection_ = QSet<QString>(Selected.begin(), Selected.end());
+    // Pin relocation can invalidate the previous comparison order.
+    view_->modelController()->refresh();
+    view_->endUpdate();
+    if (Active) applyGroupExpansion();
+    RestoreSelection(Selected, Focus);
+    columnAdapter_->Request();
+    if (IsThumbnailMode()) thumbnailModel_->Schedule();
+}
+
+bool CGridView::configureGrouping()
+{
+    groupingTimer_.stop();
+    groupingReset_ = false; groupInteractionTimer_.stop(); groupInteractionPending_ = false; groupInteractionFocus_.clear();
     auto* Model = qobject_cast<CFSModel*>(model_);
     const auto Context = Model ? (Model->IsSearchResults() ? "search:" + Model->EverythingQuery()
         : hc::workspace::LocationKey(Model->WorkspaceLocation())) : QString{};
@@ -239,7 +253,6 @@ void CGridView::applyGrouping()
     const bool Active = Model && !groupingLevels_.isEmpty() && unsupportedGrouping_.isEmpty()
         && Targets.size() == groupingLevels_.size() && !Targets.contains(nullptr) && !IsThumbnailMode();
     const auto Effective = Active ? groupingLevels_ : QVector<hc::columns::GroupingState>{};
-    view_->beginUpdate();
     // Pin relocation searches the currently sorted records. Move the parent
     // before changing group keys or sort ranks inside the deferred update.
     for (int Row = 0; Row < model_->rowCount(); ++Row) if (model_->GetName(model_->index(Row, 0)) == "..") {
@@ -261,18 +274,9 @@ void CGridView::applyGrouping()
     if (Active) {
         view_->options().setGroupKeepLevelExpanded(0);
         for (int Level = 0; Level < Targets.size(); ++Level) hc::columns::ApplyNativeGroup(view_, Targets[Level], Effective[Level], Level);
-        groupedSelection_ = QSet<QString>(Selected.begin(), Selected.end());
     }
     hc::columns::ConfigureGroupCaptions(view_, Active ? GroupColumns : QVector<int>{}, Options);
-    // Configuration changes can invalidate the previous comparison order used
-    // by native pin relocation. Rebuild once from source identities here;
-    // incremental search publication continues through ColumnValuesChanged.
-    view_->modelController()->refresh();
-    view_->endUpdate();
-    if (Active) applyGroupExpansion();
-    RestoreSelection(Selected, Focus);
-    columnAdapter_->Request();
-    if (IsThumbnailMode()) thumbnailModel_->Schedule();
+    return Active;
 }
 void CGridView::applyGroupExpansion()
 {

@@ -189,20 +189,28 @@ TyOsError CFSModel::InsertChildItem( const QString& NewName )
 
 void CFSModel::SetColumnView(const ColumnView& View)
 {
-    columnQueries_->SetLoader(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(), View.profile_), false);
     beginResetModel();
+    setColumnBinding(View);
     {
         CCmnMutexLocker Locker(&lock);
-        columnView_ = View; columnSorts_.clear(); scriptRevisions_.clear();
-        for (const auto& Script : View.profile_.scripts_) {
-            QJsonArray Outputs; for (const auto& Output : Script.outputs_) Outputs.append(QJsonArray{Output.name_, int(Output.type_)});
-            const auto Revision = QJsonDocument(QJsonObject{{"source", Script.source_}, {"dependencies", QJsonArray::fromStringList(Script.dependencies_)}, {"outputs", Outputs}}).toJson(QJsonDocument::Compact);
-            scriptRevisions_[Script.id_] = QString::fromLatin1(QCryptographicHash::hash(Revision, QCryptographicHash::Sha256).toHex());
-        }
+        columnSorts_.clear();
         createBuiltFsValues(vecNode_);
         refreshNameSortRanks();
     }
     endResetModel();
+}
+
+void CFSModel::setColumnBinding(const ColumnView& View)
+{
+    columnQueries_->SetLoader(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(), View.profile_), false);
+    CCmnMutexLocker Locker(&lock);
+    columnView_ = View;
+    scriptRevisions_.clear();
+    for (const auto& Script : View.profile_.scripts_) {
+        QJsonArray Outputs; for (const auto& Output : Script.outputs_) Outputs.append(QJsonArray{Output.name_, int(Output.type_)});
+        const auto Revision = QJsonDocument(QJsonObject{{"source", Script.source_}, {"dependencies", QJsonArray::fromStringList(Script.dependencies_)}, {"outputs", Outputs}}).toJson(QJsonDocument::Compact);
+        scriptRevisions_[Script.id_] = QString::fromLatin1(QCryptographicHash::hash(Revision, QCryptographicHash::Sha256).toHex());
+    }
 }
 
 // Visibility changes must request newly exposed lazy fields without resetting
@@ -904,9 +912,13 @@ void CFSModel::refreshProvider()
     struct Listing { std::shared_ptr<PagedEntryIndex> source_, view_; EntryPage page_; std::shared_ptr<hc::permissions::DirectoryElevationSession> session_; std::vector<hc::settings::FileRuleResult> styles_; std::vector<PreparedFileRow> prepared_; };
     using ReadResult = Result<Listing>;
     const auto Rules = fileColorRules_; const auto RuleGeneration = fileRuleLoadGeneration_; const bool Dark = colorScheme_.IsDarkMode;
-    auto Compare = pageComparison(TargetFullPath); const bool Fallback = !Compare.HasValue();
+    std::optional<DirectoryColumns> Columns;
+    if (!automaticRefresh_ && (Location.kind_ == LocatorKind::Local || Location.kind_ == LocatorKind::Smb))
+        emit PrepareDirectoryColumns(QString::fromStdString(Location.root_), Columns);
+    auto Compare = pageComparison(TargetFullPath, false, Columns ? &Columns->view_ : nullptr);
+    const bool Fallback = !Compare.HasValue();
     if (Fallback) Compare = pageComparison(TargetFullPath, true);
-    const auto Sorts = columnSorts_; const auto Display = displaySettings_;
+    const auto Sorts = Columns ? Columns->view_.profile_.sorts_ : columnSorts_; const auto Display = displaySettings_;
     const auto RefreshSettings = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
     const bool Append = automaticRefresh_ && RefreshSettings.appendNewEntries && pageSource_
         && property("hc.snapshotLocation").toString() == hc::workspace::LocationKey(Location);
@@ -922,7 +934,7 @@ void CFSModel::refreshProvider()
     }
     const auto Query = pageQuery_; const auto Match = pageMatch_; const auto ShowHidden = pageShowHidden_;
     auto* Watcher = new QFutureWatcher<ReadResult>(this);
-    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location, Query, Match, ShowHidden, Sorts, Fallback, Display, Append, RuleGeneration, Dark, ReusedArchive] {
+    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location, Query, Match, ShowHidden, Sorts, Fallback, Display, Append, RuleGeneration, Dark, ReusedArchive, Columns = std::move(Columns)] {
         auto Result = Watcher->future().takeResult();
         Watcher->deleteLater();
         if (Generation != generation_) return;
@@ -950,6 +962,7 @@ void CFSModel::refreshProvider()
                     && !TargetRoots.isEmpty() && !TargetRoots.back()->IsRemote());
             return;
         }
+        const auto* AppliedColumns = Columns && Columns->begin_() ? &*Columns : nullptr;
         recoveryLocation_.reset();
         vecFs_ = TargetRoots;
         path_ = TargetPath;
@@ -962,8 +975,10 @@ void CFSModel::refreshProvider()
         pageSource_ = Result.Value().source_; pageView_ = Result.Value().view_;
         pageSorts_ = Sorts; completedSorts_ = Sorts;
         appendOrder_ = Append;
-        if (UsesIndexedOrder() && Fallback) { columnSorts_.clear(); completedSorts_.clear(); pageSorts_.clear(); emit ColumnSortCancelled(); }
-        publishProvider(std::move(Result.Value().page_.entries_), fileRuleSeedsUsable(RuleGeneration, Dark) ? std::move(Result.Value().styles_) : std::vector<hc::settings::FileRuleResult>{}, std::move(Result.Value().prepared_));
+        const bool CancelSort = UsesIndexedOrder() && Fallback && (!Columns || AppliedColumns);
+        if (CancelSort) { columnSorts_.clear(); completedSorts_.clear(); pageSorts_.clear(); }
+        publishProvider(std::move(Result.Value().page_.entries_), fileRuleSeedsUsable(RuleGeneration, Dark) ? std::move(Result.Value().styles_) : std::vector<hc::settings::FileRuleResult>{}, std::move(Result.Value().prepared_), AppliedColumns, CancelSort);
+        if (CancelSort && !AppliedColumns) emit ColumnSortCancelled();
         setProperty("hc.snapshotLocation", hc::workspace::LocationKey(Location));
         SetWatchEnabled(watchEnabled_);
         emit PageChanged();
@@ -971,8 +986,9 @@ void CFSModel::refreshProvider()
         const auto Notify = IsRoot() && (GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK)
             ? GetRoot()->GetRoot() : GetCurrentPathWithRoot();
         emit sigChangedDirectory(QDir::toNativeSeparators(QDir::cleanPath(Notify)));
-        if (UsesIndexedOrder() && (Query != pageQuery_ || Match != pageMatch_ || ShowHidden != pageShowHidden_ || (!Fallback && Sorts != columnSorts_) || Display != displaySettings_)) requestPage(0, true);
-        else if (UsesIndexedOrder() && Fallback) emit ColumnQueryStatus(tr("이 컬럼의 전체 목록 정렬은 아직 지원하지 않아 이름순으로 표시합니다."));
+        if (UsesIndexedOrder() && (Query != pageQuery_ || Match != pageMatch_ || ShowHidden != pageShowHidden_
+            || (!CancelSort && (Sorts != columnSorts_ || (Fallback && Columns))) || Display != displaySettings_)) requestPage(0, true);
+        else if (CancelSort) emit ColumnQueryStatus(tr("이 컬럼의 전체 목록 정렬은 아직 지원하지 않아 이름순으로 표시합니다."));
     });
     Watcher->setFuture(QtConcurrent::run([Provider, Location, Context, Compare, Query, Match, ShowHidden, Elevated, Session, Append, Previous, SortPrevious, Rules, Dark, PreviousRows = std::move(PreviousRows)]() mutable -> ReadResult {
         // Only provider ownership and immutable values enter this worker.
@@ -1021,14 +1037,16 @@ void CFSModel::refreshProvider()
     }));
 }
 
-hc::storage::Result<hc::storage::PagedEntryIndex::Less> CFSModel::pageComparison(const QString& ParentPath, bool NameOnly) const
+hc::storage::Result<hc::storage::PagedEntryIndex::Less> CFSModel::pageComparison(const QString& ParentPath, bool NameOnly, const ColumnView* Columns) const
 {
     if (appendOrder_ && ParentPath.isEmpty() && !NameOnly) return hc::refresh::ArrivalOrder();
     using namespace hc::columns;
     QVector<Column> Bindings; QVector<Qt::SortOrder> Orders;
-    for (const auto& Sort : columnSorts_) {
+    const auto& View = Columns ? *Columns : columnView_;
+    const auto& Sorts = Columns ? View.profile_.sorts_ : columnSorts_;
+    for (const auto& Sort : Sorts) {
         if (NameOnly) break;
-        for (const auto& Binding : columnView_.VecColumns) if (Binding.definition_.id_ == Sort.columnId_) {
+        for (const auto& Binding : View.VecColumns) if (Binding.definition_.id_ == Sort.columnId_) {
             auto Fields = Binding.compiled_.dependencies_;
             if (Binding.definition_.template_.isEmpty()) Fields = {Binding.definition_.fieldId_};
             if (!Binding.definition_.sortField_.isEmpty()) Fields = {Binding.definition_.sortField_};
@@ -1712,7 +1730,8 @@ std::vector<CFSModel::PreparedFileRow> CFSModel::prepareFileRows(const std::vect
     return Rows;
 }
 
-void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles, std::vector<PreparedFileRow> Prepared)
+void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles,
+    std::vector<PreparedFileRow> Prepared, const DirectoryColumns* Columns, bool CancelSort)
 {
     hc::startup::Span Trace("listing.publish");
     const auto IconIdentity = [](const hc::storage::EntrySnapshot& Entry) {
@@ -1812,7 +1831,7 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
             if (const auto Path = queryPath(Item); !Path.isEmpty())
                 if (const auto Known = KnownRuleFields.constFind(Path); Known != KnownRuleFields.cend() && Known->first == IconIdentity(*Item->storageEntry_))
                     { ruleFields_.insert(Path, Known->second); ruleFieldsStale_.insert(Path); }
-    { hc::startup::Span Values("listing.values"); createBuiltFsValues(Items); }
+    if (!Columns) { hc::startup::Span Values("listing.values"); createBuiltFsValues(Items); }
     int Files = 0, Directories = 0;
     std::uint64_t Size = 0;
     for (const auto& Item : Items) {
@@ -1822,6 +1841,11 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
     }
     { hc::startup::Span Phase("listing.modelReset");
     beginResetModel();
+    if (Columns) {
+        setColumnBinding(Columns->view_);
+        if (!CancelSort) columnSorts_ = Columns->view_.profile_.sorts_;
+        createBuiltFsValues(Items);
+    }
     vecNode_ = std::move(Items);
     // A growing download invalidates its metadata and needs fresh rule evaluation.
     // Retain only its last painted style, never the values used by rules/selection.
@@ -1843,6 +1867,7 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
     }
     endResetModel();
     }
+    if (Columns) Columns->finish_(columnView_);
     // Design 6.4: the first batch of rows waiting for slow rule values stays plain for up to 120 ms.
     if (fileColorRules_.HasRules() && hasQueryRuleFields()) { fileRuleGrace_ = true; fileRuleGraceTimer_.start(FileRuleGraceMs); }
     { hc::startup::Span Phase("listing.icons"); refreshDisplayIcons(); }

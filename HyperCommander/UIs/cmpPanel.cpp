@@ -234,6 +234,10 @@ void CmpPanel::materializeTab(int Index)
     connect(View, &CGridView::sigViewSettingsChanged, this, [this, View] {
         if (retrieveFocusState() && retrieveFocusState()->View == View) processPanelStatusText();
     });
+    connect(View, &CGridView::sigAutomaticColumnsChanged, this, [this, View](bool ProfileChanged) {
+        if (retrieveFocusState() && retrieveFocusState()->View == View) processPanelStatusText();
+        if (ProfileChanged) emit sigDeferredWorkspaceSave();
+    });
     connect(View, &CGridView::sigListPresentationChanged, this, [this, View] {
         if (retrieveFocusState() && retrieveFocusState()->View == View) syncPanelChrome();
     });

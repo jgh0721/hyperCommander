@@ -179,6 +179,7 @@ public slots:
 signals:
     void                            sig_NotifyPanelActivated();
     void                            sigViewSettingsChanged();
+    void                            sigDeferredWorkspaceSave();
     void                            sigNavigationStateChanged();
     void                            sigRegistryCommandRequested(const QString& Command);
     void                            sigEnvironmentCommandRequested(const QString& Command);

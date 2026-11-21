@@ -505,7 +505,9 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     connect(Resume, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->ResumeColumnQueries(); });
     columnSortTimer_.setObjectName("columnSortTimer_");
     columnSortTimer_.setSingleShot(true);
-    connect(view_, &Qtitan::GridViewBase::sortingChanged, this, [this] { columnSortTimer_.start(0); });
+    connect(view_, &Qtitan::GridViewBase::sortingChanged, this, [this] {
+        if (!publishingDirectoryColumns_) columnSortTimer_.start(0);
+    });
     connect(&columnSortTimer_, &QTimer::timeout, this, [this] {
         if (auto* Model = qobject_cast<CFSModel*>(model_)) {
             const auto Selected = CaptureSelection(); const auto Focus = CaptureFocus();
@@ -1043,6 +1045,29 @@ void CGridView::applyPresentation()
     if (Changed) emit sigListPresentationChanged();
 }
 
+void CGridView::captureListingReset(bool ChangingColumns)
+{
+    resetRenameClicks(); groupingReset_ = true;
+    resetSelection_ = CaptureSelection(); resetFocus_ = CaptureFocus();
+    resetFocusFallback_.clear();
+    // Only a refresh of the same listing can restore a neighboring entry.
+    if (!ChangingColumns && !resetFocus_.isEmpty() && !resetFocus_.startsWith("@group:")) {
+        const auto Remember = [this](int At) {
+            const auto Row = view_->getRow(At);
+            if (Row.type() != Qtitan::GridRow::DataRow) return;
+            const auto Key = sourceSelectionKey(Row.modelIndex(0));
+            if (!Key.isEmpty()) resetFocusFallback_.append(Key);
+        };
+        const int FocusRow = view_->focusedRowIndex();
+        for (int At = FocusRow + 1; At < view_->getRowCount(); ++At) Remember(At);
+        for (int At = FocusRow - 1; At >= 0; --At) Remember(At);
+    }
+    resetPath_ = model_->property("hc.snapshotLocation").toString();
+    if (!resetPath_.isEmpty()) navigationScroll_.insert(resetPath_, new QJsonObject(CaptureScrollState()));
+    model_->setProperty("hc.selectAllEntries", false);
+    QScopedValueRollback GroupGuard(groupingProjection_, true); view_->deselectAll();
+}
+
 void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnView* Columns )
 {
     pendingSelectionKeys_.clear(); selectionHeldKey_ = 0;
@@ -1087,28 +1112,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     // an invalid GridRow, and old row positions must not target different files.
     disconnect(selectionReset_);
     selectionReset_ = connect(Source, &QAbstractItemModel::modelAboutToBeReset,
-        this, [this] {
-            resetRenameClicks(); groupingReset_ = true;
-            resetSelection_ = CaptureSelection(); resetFocus_ = CaptureFocus();
-            // Prefer the next surviving entry, then walk backwards when the
-            // focused entry disappears (including discontiguous deletions).
-            resetFocusFallback_.clear();
-            const int FocusRow = view_->focusedRowIndex();
-            if (!resetFocus_.isEmpty() && !resetFocus_.startsWith("@group:")) {
-                const auto Remember = [this](int At) {
-                    const auto Row = view_->getRow(At);
-                    if (Row.type() != Qtitan::GridRow::DataRow) return;
-                    const auto Key = sourceSelectionKey(Row.modelIndex(0));
-                    if (!Key.isEmpty()) resetFocusFallback_.append(Key);
-                };
-                for (int At = FocusRow + 1; At < view_->getRowCount(); ++At) Remember(At);
-                for (int At = FocusRow - 1; At >= 0; --At) Remember(At);
-            }
-            resetPath_ = model_->property("hc.snapshotLocation").toString();
-            if (!resetPath_.isEmpty()) navigationScroll_.insert(resetPath_, new QJsonObject(CaptureScrollState()));
-            model_->setProperty("hc.selectAllEntries", false);
-            QScopedValueRollback GroupGuard(groupingProjection_, true); view_->deselectAll();
-        }, Qt::DirectConnection);
+        this, [this] { if (!publishingDirectoryColumns_) captureListingReset(); }, Qt::DirectConnection);
     disconnect(selectionRestore_);
     selectionRestore_ = connect(Source, &CFsModelT::sigRefreshCompleted, this, [this] {
         const auto Path = model_->property("hc.snapshotLocation").toString();
@@ -1203,11 +1207,15 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     });
     if (auto* Native = qobject_cast<CFSModel*>(model_); Native && !Native->property("hc.columnSignals").toBool()) {
         Native->setProperty("hc.columnSignals", true);
+        connectAutomaticColumns(Native);
         connect(Native, &CFSModel::ColumnDisplayChanging, this, [this] { view_->beginUpdate(); });
         connect(Native, &CFSModel::ColumnDisplayChanged, this, [this] { view_->endUpdate(); });
         connect(Native, &CFSModel::ColumnValuesChanging, this, [this] {
             if (groupingUpdateDepth_++ == 0) {
-                querySelection_ = CaptureSelection(); queryFocus_ = CaptureFocus(); queryScroll_ = CaptureScrollState(); view_->beginUpdate();
+                if (!groupingProjection_) {
+                    querySelection_ = CaptureSelection(); queryFocus_ = CaptureFocus(); queryScroll_ = CaptureScrollState();
+                }
+                view_->beginUpdate();
             }
         });
         connect(Native, &CFSModel::ColumnValuesChanged, this, [this] {
@@ -1227,9 +1235,15 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         });
         connect(Native, &CFSModel::ColumnSortCancelled, this, [this, Native] {
             view_->beginUpdate();
-            for (int Index = 0; Index < model_->columnCount(); ++Index) static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index))->setSortOrder(Qtitan::SortNone);
+            for (int Index = 0; Index < model_->columnCount(); ++Index) {
+                auto* GridColumn = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index));
+                if (GridColumn) GridColumn->setSortOrder(Qtitan::SortNone);
+            }
             for (const auto& Sort : Native->ColumnSorts()) for (int Index = 0; Index < model_->columnCount(); ++Index)
-                if (QUuid(columnAdapter_->ColumnId(Index)) == Sort.columnId_) static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index))->setSortOrder(Sort.order_ == Qt::AscendingOrder ? Qtitan::SortAscending : Qtitan::SortDescending);
+                if (QUuid(columnAdapter_->ColumnId(Index)) == Sort.columnId_) {
+                    auto* GridColumn = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index));
+                    if (GridColumn) GridColumn->setSortOrder(Sort.order_ == Qt::AscendingOrder ? Qtitan::SortAscending : Qtitan::SortDescending);
+                }
             view_->endUpdate();
             columnSortTimer_.stop();
         });
@@ -1265,10 +1279,22 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         view_->setModel( model_ );
     }
 
+    bindGridColumns(*Columns);
+    groupingTimer_.start(0);
+    if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->SetColumnSorts(Columns->profile_.sorts_);
+    ApplyDisplaySettings();
+}
+
+void CGridView::bindGridColumns(const ColumnView& Columns)
+{
+    const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
+    const auto SortCase = General["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool());
+    const auto SortLocale = General["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool());
+    const auto SortNumeric = General["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool());
     view_->beginUpdate();
     Qtitan::GridBandedTableColumn* GridColumn = nullptr;
     
-    for( const auto& Column : Columns->VecColumns )
+    for( const auto& Column : Columns.VecColumns )
     {
         GridColumn = view_->addColumn( Column.Index, Column.definition_.title_ );
         if( GridColumn != nullptr )
@@ -1282,11 +1308,8 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
               GridColumn->setProperty("hc.columnId", Column.definition_.id_);
               GridColumn->setProperty("hc.everything.path", Column.definition_.fieldId_ == "file.parentPath");
             GridColumn->dataBinding()->setSortRole(static_cast<Qt::ItemDataRole>(CFSModel::GridSortRole));
-            if (Column.definition_.id_ == Columns->profile_.primaryNameId_)
-            {
-                GridColumn->setSortLocaleAware( true );
-                
-            }
+            GridColumn->setSortCaseSensitivity(SortCase);
+            GridColumn->setSortLocaleAware(SortLocale);
             GridColumn->setFilterButtonVisible( false );
             GridColumn->setEditorType(Qtitan::GridEditor::DelegateAdapter);
             static_cast<Qtitan::GridDelegateAdapterEditorRepository*>(GridColumn->editorRepository())
@@ -1300,21 +1323,18 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
 
     // Percentage/fixed widths are applied by QtitanColumnAdapter after header measurement.
     view_->bestFit( FitToHeader );
-    view_->endUpdate();
-    for (int Position = 0; Position < Columns->profile_.columns_.size(); ++Position)
-        for (const auto& Column : Columns->VecColumns)
-            if (Column.definition_.id_ == Columns->profile_.columns_[Position].id_)
+    for (int Position = 0; Position < Columns.profile_.columns_.size(); ++Position)
+        for (const auto& Column : Columns.VecColumns)
+            if (Column.definition_.id_ == Columns.profile_.columns_[Position].id_)
                 view_->getColumnByModelColumn(Column.Index)->setVisualIndex(Position);
-    for (const auto& Sort : Columns->profile_.sorts_) {
-        for (const auto& Column : Columns->VecColumns)
+    for (const auto& Sort : Columns.profile_.sorts_) {
+        for (const auto& Column : Columns.VecColumns)
             if (Column.definition_.id_ == Sort.columnId_)
                 static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Column.Index))->setSortOrder(
-                    Sort.order_ == Qt::AscendingOrder ? Qtitan::SortAscending : Qtitan::SortDescending);
+                    Sort.order_ == Qt::AscendingOrder ? Qtitan::SortAscending : Qtitan::SortDescending, SortNumeric);
     }
-    columnAdapter_->Bind(*Columns);
-    groupingTimer_.start(0);
-    if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->SetColumnSorts(Columns->profile_.sorts_);
-    ApplyDisplaySettings();
+    columnAdapter_->Bind(Columns);
+    view_->endUpdate();
     requestPresentation();
 }
 
@@ -1631,10 +1651,7 @@ bool CGridView::ApplyColumnProfile(const hc::columns::ColumnProfile& Profile, Ap
     }
     // 평면 보기 중 사용자가 세트를 직접 고르면 평면 세트 대신 그 세트를 쓴다(평면 상태는 유지).
     if (Reason == ApplyReason::Manual && !restoringPresentation_ && flatProfile_) { flatProfile_.reset(); flatSource_.clear(); }
-    if (!restoringPresentation_ && !everythingPresentation_) {
-        listModeOverride_ = Profile.mode_ == hc::columns::LayoutMode::Details ? "one-line" : "two-line";
-        nameBelowOverride_ = Profile.mode_ == hc::columns::LayoutMode::NameLast;
-    }
+    setColumnProfilePresentation(Profile);
     view_->beginUpdate();
     QScopedValueRollback GroupGuard(groupingProjection_, true);
     view_->deselectAll(); view_->setModel(nullptr); view_->removeColumns();
@@ -1643,14 +1660,25 @@ bool CGridView::ApplyColumnProfile(const hc::columns::ColumnProfile& Profile, Ap
     columnAdapter_->UseProfileWidths();
     columnAdapter_->Apply();
     view_->endUpdate();
-    if (!restoringPresentation_) {
-        if (PreviousProfile.id_ == Profile.id_ && PreviousProfile.grouping_ != Profile.grouping_) {
-            groupingBySet_.remove(Profile.id_); groupingBySetOrder_.removeAll(Profile.id_);
-        }
-        applySetGrouping(Profile);
-    }
+    applyColumnProfileGrouping(PreviousProfile, Profile);
     groupingTimer_.start(0); RestoreSelection(Selected, Focus);
     return true;
+}
+
+void CGridView::setColumnProfilePresentation(const hc::columns::ColumnProfile& Profile)
+{
+    if (restoringPresentation_ || everythingPresentation_) return;
+    listModeOverride_ = Profile.mode_ == hc::columns::LayoutMode::Details ? "one-line" : "two-line";
+    nameBelowOverride_ = Profile.mode_ == hc::columns::LayoutMode::NameLast;
+}
+
+void CGridView::applyColumnProfileGrouping(const hc::columns::ColumnProfile& Previous, const hc::columns::ColumnProfile& Profile)
+{
+    if (restoringPresentation_) return;
+    if (Previous.id_ == Profile.id_ && Previous.grouping_ != Profile.grouping_) {
+        groupingBySet_.remove(Profile.id_); groupingBySetOrder_.removeAll(Profile.id_);
+    }
+    applySetGrouping(Profile);
 }
 
 bool CGridView::ApplyFlatProfile(const hc::columns::FlatProfile& Profile, const hc::columns::ColumnProfile& Origin, const QString& Source)
@@ -3337,30 +3365,130 @@ void CGridView::SetAutomaticColumns(bool Automatic)
     automaticColumnsStop_.request_stop(); ++automaticColumnsGeneration_;
     requestPresentation(); emit sigViewSettingsChanged();
 }
-void CGridView::requestAutomaticColumns()
+namespace {
+struct AutomaticColumnQuery {
+    QJsonObject columns_, policy_, library_, colors_;
+    QHash<QString, QString> resolved_;
+    QByteArray signature_;
+};
+
+std::optional<AutomaticColumnQuery> automaticColumnQuery(const QString& Path, quint64 Generation, bool BeforeListing)
 {
-    auto* Model = qobject_cast<CFSModel*>(model_);
-    if (!Model || Model->IsLoading() || Model->HasPlaceholder() || !columnAdapter_ || !columnAdapter_->Writable()
-        || manualColumns_ || applyingAutoColumns_ || IsEditing() || flatPresentation_ || Model->IsSearchResults()) return;
+    AutomaticColumnQuery Query;
     const auto Committed = hc::settings::AppSettings().CommittedObject();
-    const auto Columns = Committed["columns"].toObject();
-    const auto Policy = Columns[hc::columns::AutoSelectionKey].toObject();
-    const auto Library = hc::columns::WithBuiltInProfiles(Columns["ColumnsV2/Profiles"].toObject());
-    const auto Colors = Committed["options"].toObject()["fileColorRules"].toObject();
-    const auto Path = QString::fromStdString(Model->WorkspaceLocation().root_);
-    QHash<QString, QString> Resolved;
+    Query.columns_ = Committed["columns"].toObject();
+    Query.policy_ = Query.columns_[hc::columns::AutoSelectionKey].toObject();
+    Query.library_ = hc::columns::WithBuiltInProfiles(Query.columns_["ColumnsV2/Profiles"].toObject());
+    Query.colors_ = Committed["options"].toObject()["fileColorRules"].toObject();
     QJsonObject ResolvedSignature;
-    for (const auto& Value : Policy["rules"].toArray()) {
+    for (const auto& Value : Query.policy_["rules"].toArray()) {
         const auto Rule = Value.toObject();
         if (!Rule["enabled"].toBool()) continue;
         const auto Token = hc::shell::ParseFolderToken(Rule["path"].toString());
-        if (Token.kind_ == hc::shell::FolderToken::Kind::None || Token.kind_ == hc::shell::FolderToken::Kind::Invalid || Resolved.contains(Token.token_)) continue;
-        Resolved[Token.token_] = hc::shell::ResolveFolderToken(Token).path_;
-        ResolvedSignature[Token.token_] = Resolved[Token.token_];
+        using Kind = hc::shell::FolderToken::Kind;
+        if (Token.kind_ == Kind::None || Token.kind_ == Kind::Invalid || Query.resolved_.contains(Token.token_)) continue;
+        // Resolve the GUID path without asking the shell for its display label.
+        if (BeforeListing && Token.kind_ != Kind::KnownFolder) return {};
+        const auto Resolved = Token.kind_ == Kind::KnownFolder
+            ? hc::shell::ResolveKnownFolderPath(Token.id_) : hc::shell::ResolveFolderToken(Token).path_;
+        Query.resolved_.insert(Token.token_, Resolved);
+        ResolvedSignature[Token.token_] = Resolved;
     }
-    const auto Signature = QByteArray::number(Model->DirectoryGeneration()) + Path.toUtf8() + QJsonDocument(Policy).toJson(QJsonDocument::Compact) + QJsonDocument(Library).toJson(QJsonDocument::Compact) + QJsonDocument(Colors).toJson(QJsonDocument::Compact) + QJsonDocument(ResolvedSignature).toJson(QJsonDocument::Compact);
-    if (Signature == automaticColumnsSignature_) return;
-    automaticColumnsSignature_ = Signature; automaticColumnsStop_.request_stop(); automaticColumnsStop_ = std::stop_source{};
+    Query.signature_ = QByteArray::number(Generation) + Path.toUtf8() + QJsonDocument(Query.policy_).toJson(QJsonDocument::Compact)
+        + QJsonDocument(Query.library_).toJson(QJsonDocument::Compact) + QJsonDocument(Query.colors_).toJson(QJsonDocument::Compact)
+        + QJsonDocument(ResolvedSignature).toJson(QJsonDocument::Compact);
+    return Query;
+}
+}
+
+bool CGridView::canSelectAutomaticColumns() const
+{
+    return columnAdapter_ && columnAdapter_->Writable() && !manualColumns_ && !applyingAutoColumns_
+        && !publishingDirectoryColumns_ && !IsEditing() && !flatPresentation_;
+}
+
+std::optional<hc::columns::ColumnProfile> CGridView::changedAutomaticProfile(const std::optional<hc::columns::ColumnProfile>& Matched) const
+{
+    auto Next = Matched ? Matched : automaticColumnsBase_;
+    if (!Next) return {};
+    auto Comparable = ColumnProfile();
+    // Re-evaluating the same automatic set must retain per-tab widths.
+    if (Next->id_ == Comparable.id_) for (auto& Definition : Comparable.columns_)
+        for (const auto& Expected : Next->columns_) if (Definition.id_ == Expected.id_) for (int Mode = 0; Mode < 3; ++Mode) {
+            const bool Hidden = Definition.widths_[Mode].hidden_; Definition.widths_[Mode] = Expected.widths_[Mode]; Definition.widths_[Mode].hidden_ = Hidden;
+        }
+    if (hc::columns::EncodeProfile(*Next) == hc::columns::EncodeProfile(Comparable)) return {};
+    return Next;
+}
+
+void CGridView::connectAutomaticColumns(CFSModel* Model)
+{
+    connect(Model, &CFSModel::PrepareDirectoryColumns, this,
+        [this, Model](const QString& Path, std::optional<CFSModel::DirectoryColumns>& Columns) {
+            if (model_ != Model || !canSelectAutomaticColumns() || Model->IsSearchResults() || Model->HasPlaceholder()) return;
+            hc::startup::Span Trace("listing.columns.plan");
+            const auto Query = automaticColumnQuery(Path, Model->DirectoryGeneration(), true);
+            if (!Query) return;
+            const auto Choice = hc::columns::SelectAutomaticColumnsByPath(Query->policy_, Query->library_, Query->colors_, Path, Query->resolved_);
+            if (!Choice) return;
+            const auto Next = changedAutomaticProfile(Choice->profile_);
+            if (!Next) return;
+            const auto Generation = automaticColumnsGeneration_;
+            const auto Previous = ColumnProfile();
+            const QPointer<CGridView> Self(this);
+            Columns = CFSModel::DirectoryColumns{
+                BindColumnProfile(*Next),
+                [Self, Model, Generation, Columns = Query->columns_, Colors = Query->colors_, Choice]() {
+                    if (!Self || Self->model_ != Model || Generation != Self->automaticColumnsGeneration_
+                        || !Self->canSelectAutomaticColumns()) return false;
+                    const auto Settings = hc::settings::AppSettings().CommittedObject();
+                    if (Settings["columns"].toObject() != Columns
+                        || Settings["options"].toObject()["fileColorRules"].toObject() != Colors) return false;
+                    if (Choice->profile_ && !Self->automaticColumnsBase_) Self->automaticColumnsBase_ = Self->ColumnProfile();
+                    if (!Choice->profile_) Self->automaticColumnsBase_.reset();
+                    Self->automaticColumnRule_ = Choice->rule_;
+                    Self->setProperty("hc.columns.autoError", QVariant{});
+                    Self->captureListingReset(true);
+                    Self->publishingDirectoryColumns_ = true;
+                    Self->columnSortTimer_.stop();
+                    QScopedValueRollback Guard(Self->groupingProjection_, true);
+                    Self->view_->beginUpdate();
+                    Self->view_->removeColumns();
+                    return true;
+                },
+                [this, Model, Previous, Signature = Query->signature_](const ColumnView& View) {
+                    hc::startup::Span Trace("listing.columns.apply");
+                    QScopedValueRollback Guard(groupingProjection_, true);
+                    auto Binding = View;
+                    Binding.profile_.sorts_ = Model->ColumnSorts();
+                    setColumnProfilePresentation(View.profile_);
+                    bindGridColumns(Binding);
+                    columnAdapter_->UseProfileWidths();
+                    columnAdapter_->Apply();
+                    applyColumnProfileGrouping(Previous, View.profile_);
+                    groupedSelection_.clear();
+                    const bool Grouped = configureGrouping();
+                    view_->endUpdate();
+                    if (Grouped) applyGroupExpansion();
+                    automaticColumnsSignature_ = Signature;
+                    automaticColumnsStop_.request_stop();
+                    ++automaticColumnsGeneration_;
+                    publishingDirectoryColumns_ = false;
+                    emit sigAutomaticColumnsChanged(true);
+                }
+            };
+        }, Qt::DirectConnection);
+}
+
+void CGridView::requestAutomaticColumns()
+{
+    auto* Model = qobject_cast<CFSModel*>(model_);
+    if (!Model || Model->IsLoading() || Model->HasPlaceholder() || Model->IsSearchResults() || !canSelectAutomaticColumns()) return;
+    const auto Path = QString::fromStdString(Model->WorkspaceLocation().root_);
+    auto Query = automaticColumnQuery(Path, Model->DirectoryGeneration(), false);
+    if (Query->signature_ == automaticColumnsSignature_) return;
+    automaticColumnsSignature_ = std::move(Query->signature_);
+    automaticColumnsStop_.request_stop(); automaticColumnsStop_ = std::stop_source{};
     const auto Generation = ++automaticColumnsGeneration_;
     using AutoResult = std::pair<hc::storage::Result<std::optional<hc::columns::ColumnProfile>>, int>;
     auto* Watcher = new QFutureWatcher<AutoResult>(this);
@@ -3374,28 +3502,22 @@ void CGridView::requestAutomaticColumns()
         setProperty("hc.columns.autoError", QVariant{});
         const bool SourceChanged = automaticColumnRule_ != MatchedRule;
         automaticColumnRule_ = MatchedRule;
-        auto Next = Result.Value();
-        if (Next && !automaticColumnsBase_) automaticColumnsBase_ = ColumnProfile();
-        if (!Next && automaticColumnsBase_) Next = automaticColumnsBase_;
-        auto Comparable = ColumnProfile();
-        // Re-evaluating the same automatic set must not undo tab width overlays
-        // retained by a settings synchronization. Widths are not set identity.
-        if (Next && Next->id_ == Comparable.id_) for (auto& Definition : Comparable.columns_)
-            for (const auto& Expected : Next->columns_) if (Definition.id_ == Expected.id_) for (int Mode = 0; Mode < 3; ++Mode) {
-                const bool Hidden = Definition.widths_[Mode].hidden_; Definition.widths_[Mode] = Expected.widths_[Mode]; Definition.widths_[Mode].hidden_ = Hidden;
-            }
-        if (Next && hc::columns::EncodeProfile(*Next) != hc::columns::EncodeProfile(Comparable)) {
+        const auto& Matched = Result.Value();
+        const auto Next = changedAutomaticProfile(Matched);
+        if (Matched && !automaticColumnsBase_) automaticColumnsBase_ = ColumnProfile();
+        bool Changed = false;
+        if (Next) {
             const QScopedValueRollback Guard(applyingAutoColumns_, true);
-            ApplyColumnProfile(*Next); emit sigViewSettingsChanged();
+            Changed = ApplyColumnProfile(*Next);
         }
-        if (!Result.Value()) automaticColumnsBase_.reset();
-        if (SourceChanged) emit sigViewSettingsChanged();
+        if (!Matched) automaticColumnsBase_.reset();
+        if (Changed || SourceChanged) emit sigAutomaticColumnsChanged(Changed);
     });
     const auto Index = Model->DirectoryEntries();
     hc::storage::OperationContext Context; Context.stopToken_ = automaticColumnsStop_.get_token();
-    Watcher->setFuture(QtConcurrent::run([Policy, Library, Colors, Path, Index, Context, Resolved] {
+    Watcher->setFuture(QtConcurrent::run([Query = std::move(*Query), Path, Index, Context] {
         int MatchedRule = -1;
-        auto Result = hc::columns::SelectAutomaticColumns(Policy, Library, Colors, Path, Index, Context, Resolved, &MatchedRule);
+        auto Result = hc::columns::SelectAutomaticColumns(Query.policy_, Query.library_, Query.colors_, Path, Index, Context, Query.resolved_, &MatchedRule);
         return AutoResult{std::move(Result), MatchedRule};
     }));
 }

@@ -6053,12 +6053,27 @@ private slots:
         auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QTRY_VERIFY(!View->BaseModel()->IsLoading());
         const auto Base = DefaultProfile(); QVERIFY(View->ApplyColumnProfile(Base));
         const GroupingState Override{true, Base.columns_[5].id_, "value", Qt::AscendingOrder}; QVERIFY(View->SetGrouping(Override));
+        auto* Model = qobject_cast<CFSModel*>(View->BaseModel()); QVERIFY(Model);
+        QUuid PublishedProfile;
+        int ListingResets = 0, ProfileChanges = 0;
+        const auto Publication = connect(Model, &CFsModelT::sigRefreshCompleted, this, [&] { PublishedProfile = View->ColumnProfile().id_; });
+        const auto Resets = connect(Model, &QAbstractItemModel::modelReset, this, [&] {
+            if (!Model->HasPlaceholder() && Model->rowCount()) ++ListingResets;
+        });
+        const auto Changes = connect(View, &CGridView::sigAutomaticColumnsChanged, this, [&](bool Changed) { if (Changed) ++ProfileChanges; });
+        const auto Disconnect = qScopeGuard([&] { disconnect(Publication); disconnect(Resets); disconnect(Changes); });
         View->SetAutomaticColumns(true); Panel->ChangeCurrentPath(Directory.filePath("downloads"), {});
-        QTRY_COMPARE_WITH_TIMEOUT(View->ColumnProfile().id_, DownloadsProfileId, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+        QCOMPARE(PublishedProfile, DownloadsProfileId);
+        QCOMPARE(ListingResets, 1);
+        QCOMPARE(ProfileChanges, 1);
         QTRY_VERIFY(View->ColumnSourceText().contains("자동 · 1번 조건"));
         QTRY_COMPARE(View->Grouping(), DefaultGrouping(DownloadsProfile()));
         Panel->ChangeCurrentPath(Directory.filePath("downloads/child"), {}); QTRY_VERIFY(!View->BaseModel()->IsLoading()); QCOMPARE(View->ColumnProfile().id_, DownloadsProfileId);
         Panel->ChangeCurrentPath(Directory.filePath("other"), {}); QTRY_COMPARE(View->ColumnProfile().id_, Base.id_); QTRY_COMPARE(View->Grouping(), Override);
+        QCOMPARE(PublishedProfile, Base.id_);
+        QCOMPARE(ListingResets, 3);
+        QCOMPARE(ProfileChanges, 2);
         QVERIFY(View->ApplyColumnProfile(Base)); Panel->ChangeCurrentPath(Directory.filePath("downloads"), {}); QTRY_VERIFY(!View->BaseModel()->IsLoading()); QTest::qWait(250); QCOMPARE(View->ColumnProfile().id_, Base.id_);
         QVERIFY(View->ColumnSourceText().contains("고정"));
         Policy["rules"] = QJsonArray{}; Columns[AutoSelectionKey] = Policy; QVERIFY(Settings.Put(Section::Columns, Columns)); QVERIFY(Settings.Commit());
@@ -6722,7 +6737,7 @@ private slots:
         auto* Model = qobject_cast<CFSModel*>(View->BaseModel()); QVERIFY(Model);
         ApplyRules(); QCOMPARE(Model->HasSlowFileRuleFields(), InternetRule);
         int SettingsChanges = 0;
-        const auto SettingsCounter = connect(View, &CGridView::sigViewSettingsChanged, this, [&] { ++SettingsChanges; });
+        const auto SettingsCounter = connect(View, &CGridView::sigAutomaticColumnsChanged, this, [&](bool Changed) { if (Changed) ++SettingsChanges; });
         const auto DisconnectSettings = qScopeGuard([&] { disconnect(SettingsCounter); });
         Panel->ChangeCurrentPath(Directory.path(), {}); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
         QElapsedTimer Clock; Clock.start(); qint64 LastBeat = 0, MaxGap = 0; int Refreshes = 0;

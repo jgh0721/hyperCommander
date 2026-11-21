@@ -204,6 +204,18 @@ private slots:
         const auto Match = SelectAutomaticColumns(Policy, Library, {}, "D:/Downloads", {}, {}, {}, &MatchedRule);
         QVERIFY(Match.HasValue()); QVERIFY(Match.Value()); QCOMPARE(MatchedRule, 1);
         QVERIFY(SelectAutomaticColumns(Policy, Library, {}, "E:/Elsewhere", {}, {}, {}, &MatchedRule).HasValue()); QCOMPARE(MatchedRule, -1);
+        const QJsonObject Colors{{"groups", QJsonArray{QJsonObject{{"id", "documents"}, {"enabled", true}}}}};
+        Miss["group"] = "documents";
+        Policy["rules"] = QJsonArray{Miss, Rule};
+        const auto ByPath = SelectAutomaticColumnsByPath(Policy, Library, Colors, "D:/Downloads", {});
+        QVERIFY(ByPath && ByPath->profile_); QCOMPARE(ByPath->rule_, 1);
+        QVERIFY(!SelectAutomaticColumnsByPath(Policy, Library, Colors, "D:/Other", {}));
+        Rule["group"] = "documents"; Miss["path"] = "D:/Downloads"; Miss["group"] = "";
+        Policy["rules"] = QJsonArray{Miss, Rule};
+        const auto FirstWins = SelectAutomaticColumnsByPath(Policy, Library, Colors, "D:/Downloads/child", {});
+        QVERIFY(!FirstWins);
+        const auto ExactPath = SelectAutomaticColumnsByPath(Policy, Library, Colors, "D:/Downloads", {});
+        QVERIFY(ExactPath && ExactPath->profile_); QCOMPARE(ExactPath->rule_, 0);
     }
     void detailsDefaultUsesAutomaticSizeUnits()
     {

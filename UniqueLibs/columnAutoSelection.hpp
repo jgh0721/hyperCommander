@@ -125,6 +125,31 @@ inline QString ValidateAutoSelection(const QJsonObject& Policy, const QJsonObjec
     }
     return {};
 }
+struct PathColumnSelection {
+    std::optional<ColumnProfile> profile_;
+    int rule_ = -1;
+};
+
+inline bool AutomaticRuleMatchesPath(const QJsonObject& Rule, const QString& Path, const QHash<QString, QString>& Resolved) {
+    const auto Pattern = Rule["path"].toString().trimmed();
+    return Pattern.isEmpty() || MatchFolderCondition(Pattern, Path, Resolved);
+}
+
+// A higher-priority matching rule can still require the file snapshot.
+inline std::optional<PathColumnSelection> SelectAutomaticColumnsByPath(const QJsonObject& Policy,
+    const QJsonObject& Library, const QJsonObject& Colors, const QString& Path, const QHash<QString, QString>& Resolved) {
+    if (!Policy["enabled"].toBool(hc::defaults::DefaultValue("columnAutoSelection/enabled").toBool())) return PathColumnSelection{};
+    if (!ValidateAutoSelection(Policy, Library, Colors).isEmpty()) return {};
+    const auto Rules = Policy["rules"].toArray();
+    for (int Index = 0; Index < Rules.size(); ++Index) {
+        const auto Rule = Rules[Index].toObject();
+        if (!Rule["enabled"].toBool() || !AutomaticRuleMatchesPath(Rule, Path, Resolved)) continue;
+        if (!Rule["group"].toString().isEmpty()) return {};
+        return PathColumnSelection{DecodeProfile(Library[Rule["profile"].toString()].toObject()), Index};
+    }
+    return PathColumnSelection{};
+}
+
 inline hc::storage::Result<std::optional<ColumnProfile>> SelectAutomaticColumns(const QJsonObject& Policy,
     const QJsonObject& Library, const QJsonObject& Colors, QString Path,
     const std::shared_ptr<hc::storage::IEntryIndex>& Index, const hc::storage::OperationContext& Context = {},
@@ -137,7 +162,7 @@ inline hc::storage::Result<std::optional<ColumnProfile>> SelectAutomaticColumns(
     const auto Rules = Policy["rules"].toArray();
     for (const auto& Value : Rules) {
         const auto Rule = Value.toObject(); const auto Group = Rule["group"].toString();
-        if (!Rule["enabled"].toBool(hc::defaults::DefaultValue("columnAutoRule/enabled").toBool()) || Group.isEmpty()) continue;
+        if (!Rule["enabled"].toBool() || Group.isEmpty() || !AutomaticRuleMatchesPath(Rule, Path, Resolved)) continue;
         for (const auto& G : Colors["groups"].toArray()) if (G.toObject()["id"] == QJsonValue(Group)) {
             auto Document = hc::settings::FileColorRules::Empty(); Document["groups"] = QJsonArray{G};
             Document["version"] = Colors["version"];
@@ -179,8 +204,7 @@ inline hc::storage::Result<std::optional<ColumnProfile>> SelectAutomaticColumns(
     }
     for (int RuleIndex = 0; RuleIndex < Rules.size(); ++RuleIndex) {
         const auto Rule = Rules[RuleIndex].toObject(); if (!Rule["enabled"].toBool(hc::defaults::DefaultValue("columnAutoRule/enabled").toBool())) continue;
-        const auto Pattern = QDir::fromNativeSeparators(Rule["path"].toString().trimmed());
-        if (!Pattern.isEmpty() && !MatchFolderCondition(Pattern, Path, Resolved)) continue;
+        if (!AutomaticRuleMatchesPath(Rule, Path, Resolved)) continue;
         const auto Group = Rule["group"].toString();
         if (!Group.isEmpty() && (!Files || 100.0L * Hits[Group] / Files < Rule["percent"].toDouble())) continue;
         if (MatchedRule) *MatchedRule = RuleIndex;
