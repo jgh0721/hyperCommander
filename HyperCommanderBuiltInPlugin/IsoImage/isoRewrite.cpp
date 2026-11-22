@@ -9,8 +9,9 @@ Task<std::shared_ptr<PreparedImage>> PrepareRewrite(RewriteRequest Request, Oper
     return std::async(std::launch::async, [Request = std::move(Request), Context = std::move(Context)]() mutable -> Result<std::shared_ptr<PreparedImage>> {
         if (auto Error = Context.Check({"iso"})) return *Error;
         auto Module = LoadRuntime(Context); if (!Module.HasValue()) return Module.Failure();
-        auto Directory = std::make_unique<QTemporaryDir>(QDir(Request.temporaryBase_.isEmpty() ? QDir::tempPath() : Request.temporaryBase_).filePath("hc-iso-XXXXXX"));
-        if (!Directory->isValid()) return Error{ErrorCategory::Unavailable, "iso-staging-directory", {"iso"}};
+        auto Directory = std::make_unique<native::TemporaryDirectory>(
+            Request.temporaryBase_.isEmpty() ? QDir::tempPath() : Request.temporaryBase_, "hc-iso-");
+        if (!Directory->IsValid()) return Directory->Failure("iso-staging-directory", {"iso"});
         auto Prepared = std::make_shared<PreparedImage>(std::move(Directory));
         std::vector<HcIsoSource> Sources; Sources.reserve(Request.sources_.size());
         for (const auto& Source : Request.sources_) {
@@ -34,7 +35,8 @@ Task<std::shared_ptr<PreparedImage>> PrepareRewrite(RewriteRequest Request, Oper
             }, &Context};
         const auto Path = Prepared->Path().toUtf8();
         const uint32_t Flags = (Request.shareDuplicateContents_ ? HC_ISO_SHARE_DUPLICATE_CONTENTS : 0)
-            | (Request.explicitTimestamp_ ? HC_ISO_EXPLICIT_TIMESTAMP : 0);
+            | (Request.explicitTimestamp_ ? HC_ISO_EXPLICIT_TIMESTAMP : 0)
+            | (Request.verifyContents_ ? 0 : HC_ISO_VERIFY_STRUCTURE_ONLY);
         if (Flags && !Module.Value()->buildEx_) return Error{ErrorCategory::Unsupported, "iso-extended-build-unsupported", {"iso"}};
         const HcIsoOptionsEx Extended{sizeof(HcIsoOptionsEx), 1, Options, Flags};
         const auto Status = Flags ? Module.Value()->buildEx_(Path.constData(), Sources.data(), Sources.size(), &Extended)

@@ -201,6 +201,8 @@ namespace hc::storage
         std::size_t nativeCopyBufferBytes_ = 1024 * 1024;
         // The producer allocates its own output; do not reserve a second payload.
         bool producingContent_ = false;
+        // Keep an already published file protected from writes and deletion during source removal.
+        bool pinPublishedFile_ = false;
         bool freshEnumerationMetadata_ = false;
         // Mutation coordinators may yield native directory enumeration a page
         // at a time. Browsing keeps its immutable snapshot by default.
@@ -268,6 +270,9 @@ namespace hc::storage
         std::vector<EntrySnapshot> entries_;
         std::optional<ResourceRevision> revision_;
         bool end_ = false;
+        // A fresh enumeration obtained metadata and revisions from each opened
+        // child. Cached, shell and listing-only pages leave this unset.
+        bool verifiedChildMetadata_ = false;
     };
     struct ReadChunk
     {

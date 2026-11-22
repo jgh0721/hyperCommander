@@ -152,19 +152,35 @@ namespace hc::storage::native
             Info.ftLastAccessTime, Info.ftLastWriteTime, Info.nFileSizeHigh, Info.nFileSizeLow};
         return {ListingRevision(Data).token_ + ":identity:" + Identity};
     }
-    inline DWORD RefreshRenamedHandle(HANDLE& File, const std::wstring& Path, DWORD Access,
-        const BY_HANDLE_FILE_INFORMATION& Before)
+    // RDP file IDs are per handle. These are the fields used to validate a
+    // pinned reader or reopened rename, without requesting volume information.
+    inline bool ReadRedirectedBasicAndSize(HANDLE File, BY_HANDLE_FILE_INFORMATION& Info)
     {
-        if (!IsRedirectedPath(Path)) return ERROR_SUCCESS;
-        // RDP set-information requests retain the name used by CreateFile.
-        // Reopen the published name and verify it before further mutation.
-        CloseHandle(std::exchange(File, INVALID_HANDLE_VALUE));
-        const auto Fresh = CreateFileW(Path.c_str(), Access, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_BASIC_INFO Basic{};
+        FILE_STANDARD_INFO Standard{};
+        if (!GetFileInformationByHandleEx(File, FileBasicInfo, &Basic, sizeof(Basic))
+            || !GetFileInformationByHandleEx(File, FileStandardInfo, &Standard, sizeof(Standard))) return false;
+        const auto Time = [](LARGE_INTEGER Value) { return FILETIME{Value.LowPart, DWORD(Value.HighPart)}; };
+        Info.dwFileAttributes = Basic.FileAttributes;
+        Info.ftCreationTime = Time(Basic.CreationTime);
+        Info.ftLastAccessTime = Time(Basic.LastAccessTime);
+        Info.ftLastWriteTime = Time(Basic.LastWriteTime);
+        Info.nFileSizeHigh = DWORD(Standard.EndOfFile.HighPart);
+        Info.nFileSizeLow = Standard.EndOfFile.LowPart;
+        return true;
+    }
+    inline DWORD OpenRenamedHandle(HANDLE& File, const std::wstring& Path, DWORD Access)
+    {
+        if (File != INVALID_HANDLE_VALUE) CloseHandle(std::exchange(File, INVALID_HANDLE_VALUE));
+        File = CreateFileW(Path.c_str(), Access, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-        if (Fresh == INVALID_HANDLE_VALUE) return GetLastError();
+        return File == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+    }
+    inline DWORD VerifyRenamedHandle(HANDLE Fresh, const BY_HANDLE_FILE_INFORMATION& Before, DWORD* ReopenedAttributes)
+    {
         BY_HANDLE_FILE_INFORMATION After{};
         DWORD Error = ERROR_SUCCESS;
-        if(!GetFileInformationByHandle(Fresh,&After))Error=GetLastError();
+        if (!ReadRedirectedBasicAndSize(Fresh, After) && !GetFileInformationByHandle(Fresh, &After)) Error = GetLastError();
         else {
             // NTFS tunneling can restore the deleted target's creation time
             // when our file is renamed over its name. RDP IDs are per-handle;
@@ -177,9 +193,20 @@ namespace hc::storage::native
                     &&FileTimeTicks(After.ftLastWriteTime)==FileTimeTicks(Before.ftLastWriteTime);
             if((After.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)||!SameType||!Same)Error=ERROR_FILE_INVALID;
         }
-        if (Error) { CloseHandle(Fresh); return Error; }
-        File = Fresh;
-        return ERROR_SUCCESS;
+        if (!Error && ReopenedAttributes) *ReopenedAttributes = After.dwFileAttributes;
+        return Error;
+    }
+    inline DWORD RefreshRenamedHandle(HANDLE& File, const std::wstring& Path, DWORD Access,
+        const BY_HANDLE_FILE_INFORMATION& Before, DWORD* ReopenedAttributes = nullptr)
+    {
+        if (ReopenedAttributes) *ReopenedAttributes = 0;
+        if (!IsRedirectedPath(Path)) return ERROR_SUCCESS;
+        // RDP set-information requests retain the name used by CreateFile.
+        // Reopen the published name and verify it before further mutation.
+        if (const auto Error = OpenRenamedHandle(File, Path, Access)) return Error;
+        const auto Error = VerifyRenamedHandle(File, Before, ReopenedAttributes);
+        if (Error) CloseHandle(std::exchange(File, INVALID_HANDLE_VALUE));
+        return Error;
     }
     inline bool MatchesRevision(const ResourceRevision& Expected, const BY_HANDLE_FILE_INFORMATION& Info,
         HANDLE File = INVALID_HANDLE_VALUE, std::wstring_view Path = {})

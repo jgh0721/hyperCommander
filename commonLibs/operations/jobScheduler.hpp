@@ -148,6 +148,8 @@ namespace hc::operations
         // Immediately reserve an additional write path before an operation changes
         // its planned target. A rejected claim never waits while holding other paths.
         std::function<bool(std::string)> tryReserveWrite_;
+        // Each resume starts a new pause notification period.
+        std::stop_token pauseSignal_;
     };
     struct JobStep
     {

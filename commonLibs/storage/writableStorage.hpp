@@ -41,6 +41,7 @@ namespace hc::storage
         std::vector<Locator> preservedArtifacts_;
         std::string transaction_, destinationIdentity_;
         bool destinationCommitted_ = true;
+        std::shared_ptr<void> destinationLease_;
     };
     class IWriteSession
     {
@@ -68,6 +69,11 @@ namespace hc::storage
         // Idempotent, uncancelled cleanup. Never delete committed destination or
         // a backup that cannot safely be restored; report its recovery locator.
         virtual Result<Unit> Abort() = 0;
+        // Optional parallel copy preparation after the last write and verification.
+        // Only Commit or Abort follows. The destination name must remain untouched.
+        // Callers that only consume completion/cleanup may omit the receipt identity.
+        // Recovery journals must always keep their identities.
+        virtual Result<Unit> PreparePublication(OperationContext, bool /*requireReceiptIdentity*/ = true) { return Unit{}; }
     };
     // Bulk local deletion of one already verified directory tree. The selected
     // root keeps its revision check; descendants are removed as they are listed
@@ -103,8 +109,10 @@ namespace hc::storage
         // completed before the stop remain collectable.
         virtual void Release() = 0;
     };
-    // Bulk local copy or move of one already verified directory tree, the way
-    // Explorer-style tools transfer folders. Copy and cross-volume move create a
+    // Bulk copy or move of one already verified directory tree. Local trees
+    // support all modes. A fresh redirected destination supports ordinary copies
+    // from a local source when its directory sharing checks succeed.
+    // Copy and cross-volume move create a
     // destination root that must not exist yet and write each file directly to
     // its final name: a file interrupted by cancellation or failure is removed,
     // completed files stay. Merge renames the children of the source into an
@@ -178,6 +186,8 @@ namespace hc::storage
         virtual Result<std::unique_ptr<ITreeRemoval>> BeginTreeRemoval(EntrySnapshot, TreeRemovalOptions, OperationContext)
         { return Error{ErrorCategory::Unsupported, "tree-removal-unavailable", Id()}; }
         virtual std::size_t PreferredCopyWorkers(Locator, Locator) const { return 1; }
+        // Called after the destination writer exclusively created a selected root.
+        virtual bool SupportsSourceReadAhead(const IStorageProvider&, const Locator&, const Locator&) const { return false; }
         // Only for a source listed by this writer's own reader and a destination
         // this engine writes like Destination itself would (same native kind).
         virtual bool SupportsTreeTransfer(const IStorageProvider&, const Locator&, const IWritableStorage&, const Locator&) const { return false; }

@@ -18,7 +18,8 @@ storage::Result<storage::Unit> RevalidateCreator(const CreatorRuntime& Creator, 
 storage::Result<std::shared_ptr<void>> AcquireCreatorSettings(const CreatorRuntime& Creator, storage::OperationContext Context);
 struct PreparedArchiveOutput { QString path_; std::shared_ptr<void> lifetime_; };
 storage::Result<PreparedArchiveOutput> CreatePreparedArchive(const CreatorRuntime& Creator, const plugins::ArchiveCreateSettings& Settings,
-    std::string Format, const OutputPlan& Plan, const QString& Input, const QString& Temporary, storage::OperationContext Context);
+    std::string Format, const OutputPlan& Plan, const QString& Input, const QString& Temporary, storage::OperationContext Context,
+    std::shared_ptr<plugins::IArchiveBackend> Backend = {});
 // Explicit worker-side probe, never invoked while filling the format combo.
 storage::Result<QJsonObject> VerifyCreationFormats(CreatorRuntime Creator, const QStringList& Formats, storage::OperationContext Context);
 QByteArray CreatorManifestIdentity(const plugins::PluginManifest& Manifest);

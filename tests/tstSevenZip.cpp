@@ -22,6 +22,7 @@
 #include "UniqueLibs/archiveExtractJob.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "commonLibs/plugins/archiveSelectionDigest.hpp"
+#include "commonLibs/storage/nativeTemporaryDirectory.hpp"
 #include "UniqueLibs/operationMetrics.hpp"
 
 using namespace hc::storage;
@@ -348,6 +349,8 @@ private slots:
         const auto SourceSize = SourceInfo.size(); const auto SourceTime = SourceInfo.lastModified();
         const auto SourceHash = QCryptographicHash::hash(Read(Source), QCryptographicHash::Sha256);
         QTemporaryDir Output(QDir(Target).filePath("extract-XXXXXX")); QVERIFY(Output.isValid());
+        QElapsedTimer EndToEnd;
+        EndToEnd.start();
         auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
         const Locator Root{LocatorKind::Archive, Source.toStdString(), {{"wcx", "/"}}};
         auto Reader = MakeWcxReadProvider({}, Root, {}, Backend);
@@ -371,6 +374,7 @@ private slots:
         if (Job.Value().completion_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) Scheduler.Cancel(Job.Value().id_);
         QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
         const auto Result = Job.Value().completion_.get(); const auto Wall = Clock.elapsed();
+        const auto TotalMs = EndToEnd.elapsed();
         QVERIFY(OperationMetrics::Instance().Save(Metrics, Wall));
         QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "incomplete extraction");
         QVERIFY2(Result.cleanupErrors_.empty(), Result.cleanupErrors_.empty() ? "" : Result.cleanupErrors_.front().code_.c_str());
@@ -390,7 +394,7 @@ private slots:
         }
         QCOMPARE(QFileInfo(Source).size(), SourceSize); QCOMPARE(QFileInfo(Source).lastModified(), SourceTime);
         QCOMPARE(QCryptographicHash::hash(Read(Source), QCryptographicHash::Sha256), SourceHash);
-        auto Summary = QJsonDocument(QJsonObject{{"wallMs", Wall}, {"drainMs", DrainMs}, {"bytes", qint64(Bytes)}, {"files", Files},
+        auto Summary = QJsonDocument(QJsonObject{{"wallMs", Wall}, {"enumerationThroughCompletionMs", TotalMs}, {"drainMs", DrainMs}, {"bytes", qint64(Bytes)}, {"files", Files},
             {"source", Source}, {"sourceSha256", QString::fromLatin1(SourceHash.toHex())}, {"target", Target}}).toJson();
         Summary.replace("\n", "\r\n");
         QVERIFY(Put(Metrics + ".summary.json", Summary));
@@ -1039,6 +1043,95 @@ private slots:
         auto Page = Listed.Value()->Next(16, {}); QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().entries_.size(), size_t(1));
         QCOMPARE(Page.Value().entries_.front().name_, Name.toStdString());
     }
+    void compareCreationBackends() {
+        if (!qEnvironmentVariableIsSet("HC_ARCHIVE_BENCH")) QSKIP("Opt-in archive backend comparison");
+        QTemporaryDir Dir;
+        QVERIFY(Dir.isValid());
+        const QByteArray Payload(8 * 1024 * 1024, 'z');
+        QVERIFY(Put(Dir.filePath("input.bin"), Payload));
+        const auto Options = BuiltinSevenZipOptions();
+        auto Hosted = MakeApprovedWcxBackend(Options);
+        HMODULE Module = nullptr;
+        auto Unload = qScopeGuard([&] { if (Module) FreeLibrary(Module); });
+        std::shared_ptr<IArchiveBackend> Direct;
+        for (const auto& Mode : {QString("host-cold"), QString("host-warm"), QString("direct"), QString("cli")}) {
+            const auto Target = Dir.filePath(Mode + ".7z");
+            ArchiveUpdate Request{Target.toStdString(), Dir.path().toStdString(), {"input.bin"}};
+            Request.creation_ = ArchiveCreationOptions{1, false};
+            QElapsedTimer Timer;
+            Timer.start();
+            if (Mode == "cli") {
+                QProcess Cli;
+                Cli.setWorkingDirectory(Dir.path());
+                Cli.start(QDir(root_).filePath("../sevenzip-tools/official/7z.exe"),
+                    {"a", "-t7z", "-mx=1", "-m0=LZMA2", "-ms=off", "-mf=off", Target, "input.bin"});
+                QVERIFY(Cli.waitForFinished(60000));
+                QCOMPARE(Cli.exitCode(), 0);
+            } else {
+                if (Mode == "direct") {
+                    Module = LoadLibraryExW(reinterpret_cast<const wchar_t*>(Options.binaryPath_.utf16()), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+                    QVERIFY(Module);
+                    Direct = MakeSevenZipBackend(Module);
+                }
+                const auto Result = (Mode == "direct" ? Direct : Hosted)->Update(std::move(Request), {});
+                QVERIFY2(Result.HasValue(), Result.HasValue() ? "" : Result.Failure().code_.c_str());
+            }
+            const auto Milliseconds = Timer.elapsed();
+            QProcess Verify;
+            Verify.start(QDir(root_).filePath("../sevenzip-tools/official/7z.exe"), {"x", "-so", Target, "input.bin"});
+            QVERIFY(Verify.waitForFinished(60000));
+            QCOMPARE(Verify.exitCode(), 0);
+            QCOMPARE(Verify.readAllStandardOutput(), Payload);
+            qInfo() << Mode << "create-ms" << Milliseconds << "archive-bytes" << QFileInfo(Target).size();
+        }
+    }
+    void compareExtractionBackends_data() {
+        QTest::addColumn<QString>("Format");
+        QTest::newRow("7z") << QStringLiteral("7z");
+        QTest::newRow("zip") << QStringLiteral("zip");
+    }
+    void compareExtractionBackends() {
+        if (!qEnvironmentVariableIsSet("HC_ARCHIVE_BENCH")) QSKIP("Opt-in archive extraction comparison");
+        QFETCH(QString, Format);
+        QTemporaryDir Dir;
+        QVERIFY(Dir.isValid());
+        const QByteArray Payload(8 * 1024 * 1024, 'z');
+        QVERIFY(Put(Dir.filePath("input.bin"), Payload));
+        const auto Archive = Dir.filePath("fixture." + Format);
+        const auto Tool = QDir(root_).filePath("../sevenzip-tools/official/7z.exe");
+        QProcess Cli;
+        Cli.setWorkingDirectory(Dir.path());
+        Cli.start(Tool, {"a", "-mx=1", Archive, "input.bin"});
+        QVERIFY(Cli.waitForFinished(60000));
+        QCOMPARE(Cli.exitCode(), 0);
+        std::shared_ptr<IArchiveBackend> Backend;
+        for (const auto Mode : {QStringLiteral("cold"), QStringLiteral("warm"), QStringLiteral("cli")}) {
+            const bool External = Mode == "cli";
+            const auto Folder = Dir.filePath(Mode);
+            QVERIFY(QDir().mkpath(Folder));
+            const auto Restored = QDir(Folder).filePath("input.bin");
+            QElapsedTimer Timer;
+            Timer.start();
+            if (External) {
+                Cli.start(Tool, {"x", "-y", "-o" + Folder, Archive});
+                QVERIFY(Cli.waitForFinished(60000));
+                QCOMPARE(Cli.exitCode(), 0);
+            } else {
+                if (!Backend) Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+                auto Listed = Backend->Enumerate(Archive.toStdString(), true, {});
+                QVERIFY(Listed.HasValue());
+                auto Page = Listed.Value()->Next(2, {});
+                QVERIFY(Page.HasValue());
+                QCOMPARE(Page.Value().entries_.size(), size_t(1));
+                Listed.Value().reset();
+                const auto Result = Backend->Extract(Archive.toStdString(), Page.Value().entries_.front(), Restored.toStdString(), {});
+                QVERIFY(Result.HasValue());
+            }
+            const auto Elapsed = Timer.elapsed();
+            QCOMPARE(Read(Restored), Payload);
+            qInfo() << Format << Mode << "extract-ms" << Elapsed;
+        }
+    }
     void largeFile64Bit() {
         if (!qEnvironmentVariableIsSet("HC_ARCHIVE_STRESS")) QSKIP("Enable HC_ARCHIVE_STRESS for the 4 GiB acceptance test");
         QTemporaryDir Dir; const auto Source = Dir.filePath("large.bin");
@@ -1412,6 +1505,49 @@ private slots:
         auto Interrupted = Native->Extract(Plain, *Chosen, Directory.filePath("cancelled").toStdString(), Active); QVERIFY(!Interrupted.HasValue());
         QCOMPARE(Interrupted.Failure().category_, ErrorCategory::Cancelled);
         QVERIFY(!QFileInfo::exists(Directory.filePath("cancelled")));
+    }
+    void redirectedZipOutputFailureCleanup() {
+        const auto Root = qEnvironmentVariable("HC_TEST_REDIRECTED_OUTPUT");
+        const auto Reference = qEnvironmentVariable("HC_TEST_SINGLE_ZIP");
+        if (Root.isEmpty() || Reference.isEmpty()) QSKIP("Set a redirected output folder and a single-entry ZIP fixture");
+        native::TemporaryDirectory Output(Root, "hc-zip-cleanup-");
+        QVERIFY(Output.IsValid());
+        QTemporaryDir Scratch;
+        QVERIFY(Scratch.isValid());
+        const auto Module = LoadLibraryExW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(BuiltinSevenZipOptions().binaryPath_).utf16()),
+                                           nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        QVERIFY(Module);
+        auto Unload = qScopeGuard([&] { FreeLibrary(Module); });
+        auto Native = MakeSevenZipBackend(Module);
+        auto Bytes = Read(Reference);
+        const auto Central = Bytes.lastIndexOf(QByteArrayLiteral("PK\x01\x02"));
+        QVERIFY(Bytes.startsWith(QByteArrayLiteral("PK\x03\x04")) && Central >= 30 && Central + 46 <= Bytes.size());
+        for (bool Corrupt : {false, true}) {
+            if (Corrupt) {
+                Bytes[14] ^= 1;
+                Bytes[Central + 16] ^= 1;
+            }
+            const auto Input = Scratch.filePath(Corrupt ? "corrupt.zip" : "valid.zip");
+            QVERIFY(Put(Input, Bytes));
+            auto Listing = Native->Enumerate(Input.toStdString(), false, {});
+            QVERIFY(Listing.HasValue());
+            auto Page = Listing.Value()->Next(2, {});
+            QVERIFY(Page.HasValue());
+            QCOMPARE(Page.Value().entries_.size(), size_t(1));
+            const auto Header = Page.Value().entries_.front();
+            QVERIFY(Header.size_ > 2 * 1024 * 1024);
+            Listing.Value().reset();
+            std::stop_source Stop;
+            OperationContext Context;
+            Context.stopToken_ = Stop.get_token();
+            if (!Corrupt) Context.progress_ = [&](uint64_t Done) { if (Done > 1024 * 1024) Stop.request_stop(); };
+            const auto Target = Output.FilePath("result.bin");
+            const auto Result = Native->Extract(Input.toStdString(), Header, Target.toStdString(), Context);
+            QVERIFY(!Result.HasValue());
+            if (!Corrupt) QCOMPARE(Result.Failure().category_, ErrorCategory::Cancelled);
+            else QVERIFY(Result.Failure().code_.starts_with("7zip-extract-result:"));
+            QVERIFY(!QFileInfo::exists(Target));
+        }
     }
     void corruptedPayload() {
         QTemporaryDir Directory; auto Bytes = Read(QDir(root_).filePath("plain.7z")); QVERIFY(Bytes.size() > 128);

@@ -55,6 +55,22 @@ struct Entry {
     Bytes embedded_;
     std::vector<size_t> children_;
 };
+// Preserve the caller's transfer size on redirected filesystems.
+class DiskReader {
+public:
+    explicit DiskReader(const fs::path& Path);
+    ~DiskReader();
+    DiskReader(const DiskReader&) = delete;
+    DiskReader& operator=(const DiskReader&) = delete;
+    void Read(uint64_t Offset, std::span<uint8_t> Bytes);
+private:
+#ifdef _WIN32
+    void* handle_ = nullptr;
+#else
+    std::ifstream file_;
+#endif
+    uint64_t position_ = 0;
+};
 class Reader {
 public:
     Reader(const fs::path& Path, uint32_t Namespace);
@@ -66,11 +82,12 @@ public:
     uint64_t Find(const std::string& Path) const;
     uint64_t Child(uint64_t Directory, uint64_t Index) const;
 private:
+    void readInto(uint64_t Offset, std::span<uint8_t> Data);
     void initialize(uint32_t Namespace);
     void readIso(const Bytes& Descriptor, bool Joliet);
     void readUdf();
     void add(Entry Value);
-    std::ifstream stream_;
+    std::unique_ptr<DiskReader> stream_;
     HcIsoInfo info_{};
     std::vector<Entry> entries_;
     std::map<std::string, size_t> paths_;
@@ -108,12 +125,13 @@ private:
     Bytes volume(bool Joliet);
     void udfLayout();
     void udfWrite(std::ofstream& Stream);
+    void udfAnchor(std::ofstream& Stream, uint32_t Sector);
     void writeAt(std::ofstream& Stream, uint32_t Sector, const Bytes& Data);
     HcIsoOptions options_;
     std::string label_;
     std::vector<Node> nodes_;
     std::vector<Payload> payloads_;
-    bool shareContents_ = false, explicitTimestamp_ = false;
+    bool shareContents_ = false, explicitTimestamp_ = false, verifyContents_ = true;
     std::vector<size_t> directories_;
     uint32_t nextBlock_ = 0, totalBlocks_ = 0, partitionEnd_ = 0;
     std::array<uint32_t, 4> tableBlocks_{};

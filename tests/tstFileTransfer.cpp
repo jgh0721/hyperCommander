@@ -308,6 +308,330 @@ private slots:
         QCOMPARE(Result.snapshot_.skippedItems_, std::uint64_t(1));
         QFile Existing(path("existing/target/source/same.txt")); QVERIFY(Existing.open(QIODevice::ReadOnly)); QCOMPARE(Existing.readAll(), QByteArray("existing"));
     }
+    void redirectedNewFolder()
+    {
+        const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
+        if (Share.isEmpty()) QSKIP("Set HC_TEST_RDP_SHARE for a redirected copy fixture.");
+        QVERIFY(!Share.contains('/') && !Share.contains('\\'));
+        QTemporaryDir Remote(QString("//tsclient/%1/hc-rdp-tree-XXXXXX").arg(Share));
+        QVERIFY(Remote.isValid());
+        const auto At = [&](const QString& Name) {
+            return Locator{LocatorKind::Smb, QDir::toNativeSeparators(Remote.filePath(Name)).toStdString()};
+        };
+        const auto RemoteWriter = MakeNativeWritableStorage(LocatorKind::Smb, MakeNativeReadProvider(LocatorKind::Smb));
+        QVERIFY(write("rdp/source/ordinary", "ordinary", FILE_ATTRIBUTE_ARCHIVE, 1450000000000LL));
+        QVERIFY(write("rdp/source/first", "complete", FILE_ATTRIBUTE_HIDDEN, 1500000000000LL));
+        QVERIFY(write("rdp/source/sub/last", "readonly", FILE_ATTRIBUTE_READONLY, 1400000000000LL));
+        QVERIFY(QDir().mkpath(path("rdp/source/empty")));
+        auto Request = request(FileOperation::Copy, "rdp/source", "");
+        Request.destination_ = At(""); Request.destinationWriter_ = RemoteWriter;
+        // The UI enables elevation support even when no operation needs to elevate.
+        // A normal copy must still select the non-elevated folder engine.
+        class AvailableElevation final : public IFileElevationService {
+        public:
+            bool CanExecute(const FileElevationRequest&) const override { return true; }
+            Result<std::unique_ptr<IFileElevationSession>> Begin(FileElevationRequest, OperationContext) override
+            { return Error{ErrorCategory::Internal, "unexpected-elevation"}; }
+        };
+        Request.elevation_ = std::make_shared<AvailableElevation>();
+        OperationMetrics::Instance().Reset(true);
+        const auto Done = run(Request, engine());
+        QCOMPARE(Done.snapshot_.state_, JobState::Completed);
+        QCOMPARE(Counts(path("rdp"))["transfer.file"], 1.0);
+        const auto Output = Remote.filePath("source");
+        QCOMPARE(Snapshot(Output), Snapshot(path("rdp/source")));
+        QCOMPARE(Folders(Output), Folders(path("rdp/source")));
+        for (const auto Name : {"ordinary", "first", "sub/last"}) {
+            const auto Original = path("rdp/source/" + QString::fromLatin1(Name));
+            const auto Target = QDir(Output).filePath(Name);
+            QCOMPARE(ModifiedMs(Target), ModifiedMs(Original));
+            QCOMPARE(Attributes(Target) & 0x27, Attributes(Original) & 0x27);
+        }
+        // An existing root never enables bulk publication for its new descendants.
+        QVERIFY(write("rdp/source/new/child", "new"));
+        Request.conflict_ = ConflictPolicy::Skip;
+        OperationMetrics::Instance().Reset(true);
+        const auto Merge = run(Request, engine(), [](const InteractionRequest&) { return InteractionChoice::Skip; });
+        QCOMPARE(Merge.snapshot_.state_, JobState::Completed);
+        QCOMPARE(Counts(path("rdp"))["transfer.file"], 0.0);
+        ClearReadOnly(Remote.path());
+        QVERIFY(Remote.remove());
+    }
+    void redirectedSourceMetadata()
+    {
+        const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
+        if (Share.isEmpty()) QSKIP("Set HC_TEST_RDP_SHARE for a redirected read fixture.");
+        QVERIFY(!Share.contains('/') && !Share.contains('\\'));
+        QTemporaryDir Remote(QString("//tsclient/%1/hc-rdp-read-XXXXXX").arg(Share));
+        QVERIFY(Remote.isValid());
+        QFile File(Remote.filePath("child.bin"));
+        QVERIFY(File.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        QCOMPARE(File.write("first"), 5);
+        File.close();
+        const Locator Folder{LocatorKind::Smb, QDir::toNativeSeparators(Remote.path()).toStdString()};
+        const auto Reader = MakeNativeReadProvider(LocatorKind::Smb);
+        auto Context = engine();
+        for (const bool Fresh : {false, true}) {
+            Context.freshEnumerationMetadata_ = Fresh;
+            auto Cursor = Reader->Enumerate(Folder, Context).get();
+            QVERIFY(Cursor.HasValue());
+            const auto Page = Cursor.Value()->Next(16, Context).get();
+            QVERIFY(Page.HasValue());
+            QCOMPARE(Page.Value().verifiedChildMetadata_, Fresh);
+            QCOMPARE(Page.Value().entries_.size(), std::size_t(1));
+            if (!Fresh) continue;
+            const auto& Entry = Page.Value().entries_.front();
+            QVERIFY(Entry.id_.revision_ && Entry.id_.revision_->token_.starts_with("rdp:"));
+            QVERIFY(File.open(QIODevice::Append));
+            QCOMPARE(File.write(" again"), 6);
+            File.close();
+            Context.denyConcurrentMutation_ = true;
+            const auto Stale = Reader->OpenRead(Entry.id_, Context).get();
+            QVERIFY(!Stale.HasValue());
+            QCOMPARE(Stale.Failure().category_, ErrorCategory::StaleRevision);
+        }
+        const auto Root = Reader->Resolve(Folder, {}).get();
+        QVERIFY(Root.HasValue());
+        QVERIFY(QDir().mkpath(path("rdp-input")));
+        FileOperationRequest Request;
+        Request.operation_ = FileOperation::Copy;
+        Request.sources_.push_back({Root.Value(), Reader, MakeNativeWritableStorage(LocatorKind::Smb, Reader)});
+        Request.destination_ = at("rdp-input");
+        Request.destinationWriter_ = target_;
+        QCOMPARE(run(std::move(Request), engine()).snapshot_.state_, JobState::Completed);
+        QCOMPARE(Snapshot(path("rdp-input/" + QFileInfo(Remote.path()).fileName())).at("child.bin"), QByteArray("first again"));
+    }
+    void redirectedSourceReadAhead()
+    {
+        const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
+        if (Share.isEmpty()) QSKIP("Set HC_TEST_RDP_SHARE for a redirected read-ahead fixture.");
+        QVERIFY(!Share.contains('/') && !Share.contains('\\'));
+        QTemporaryDir Remote(QString("//tsclient/%1/hc-rdp-ahead-XXXXXX").arg(Share));
+        QVERIFY(Remote.isValid());
+        QStringList Names;
+        for (int I = 0; I < 12; ++I) {
+            const auto Name = QString("entry-%1.bin").arg(I);
+            QFile File(Remote.filePath(Name));
+            QVERIFY(File.open(QIODevice::NewOnly | QIODevice::WriteOnly));
+            QCOMPARE(File.write(Name.toUtf8()), Name.size()); File.close();
+            QVERIFY(SetFileAttributesW(Wide(File.fileName()).c_str(), FILE_ATTRIBUTE_ARCHIVE));
+            Names.push_back(Name);
+        }
+        const auto Locked = [&] {
+            int Count = 0;
+            for (const auto& Name : Names) {
+                const auto Handle = CreateFileW(Wide(Remote.filePath(Name)).c_str(), GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+                if (Handle != INVALID_HANDLE_VALUE) CloseHandle(Handle);
+                else if (GetLastError() == ERROR_SHARING_VIOLATION) ++Count;
+                else return -1;
+            }
+            return Count;
+        };
+        class ReaderProbe final : public IStorageProvider {
+        public:
+            std::shared_ptr<IStorageProvider> inner_ = MakeNativeReadProvider(LocatorKind::Smb);
+            std::atomic<int> early_{0}, normal_{0};
+            std::function<void(int)> opened_;
+            std::function<void()> openingLarge_;
+            std::atomic<bool> failNext_{false};
+            ProviderId Id() const override { return inner_->Id(); }
+            bool SupportsParallelReads() const override { return true; }
+            Task<SupportDecision> Supports(Operation Op, OperationContext C) override { return inner_->Supports(Op, C); }
+            Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator L, OperationContext C) override { return inner_->Enumerate(L, C); }
+            Task<EntrySnapshot> Stat(ResourceId R, OperationContext C) override { return inner_->Stat(R, C); }
+            Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId R, OperationContext C) override {
+                if (C.workerRead_) {
+                    ++normal_;
+                    if (openingLarge_ && C.expectedWriteBytes_.value_or(0) > 16 * 1024 * 1024) openingLarge_();
+                    return inner_->OpenRead(R, C);
+                }
+                if (failNext_.exchange(false)) return Ready<std::shared_ptr<IReadStream>>(Error{ErrorCategory::Unavailable, "injected-open"});
+                auto Opened = inner_->OpenRead(R, C).get();
+                if (Opened.HasValue()) { const auto N = ++early_; if (opened_) opened_(N); }
+                return Ready<std::shared_ptr<IReadStream>>(std::move(Opened));
+            }
+        };
+        const auto Reader = std::make_shared<ReaderProbe>();
+        const auto Root = Reader->inner_->Resolve({LocatorKind::Smb, QDir::toNativeSeparators(Remote.path()).toStdString()}, {}).get();
+        QVERIFY(Root.HasValue());
+        auto MakeRequest = [&](QString Destination) {
+            FileOperationRequest Request;
+            Request.operation_ = FileOperation::Copy; Request.fileLockInteractions_ = true;
+            Request.sources_.push_back({Root.Value(), Reader, MakeNativeWritableStorage(LocatorKind::Smb, Reader->inner_)});
+            Request.destination_ = at(Destination); Request.destinationWriter_ = target_; Request.destinationName_ = "new";
+            return Request;
+        };
+        auto Context = engine(); Context.fileCopyWorkers_ = 0;
+        for (const auto& Dest : {"ahead", "ahead-conflict", "ahead-stop"}) QVERIFY(QDir().mkpath(path(Dest)));
+        int Peak = 0;
+        Reader->opened_ = [&](int N) { if (N == 8) Peak = Locked(); };
+        QCOMPARE(run(MakeRequest("ahead"), Context).snapshot_.state_, JobState::Completed);
+        QCOMPARE(Peak, 8); QCOMPARE(Reader->early_.load(), 12); QCOMPARE(Reader->normal_.load(), 0);
+        QCOMPARE(Snapshot(path("ahead/new")), Snapshot(Remote.path())); QCOMPARE(Locked(), 0);
+        Reader->opened_ = {}; Reader->early_ = 0; Reader->normal_ = 0;
+        auto Merge = MakeRequest("ahead"); Merge.conflict_ = ConflictPolicy::Replace;
+        QCOMPARE(run(std::move(Merge), Context).snapshot_.state_, JobState::Completed);
+        QCOMPARE(Reader->early_.load(), 0); QCOMPARE(Reader->normal_.load(), 12);
+        std::atomic<bool> CompetitorsReady{true};
+        Reader->opened_ = [&](int N) {
+            if (N == 1) for (const auto& Name : Names) if (!write("ahead-conflict/new/" + Name, "competitor")) CompetitorsReady = false;
+        };
+        int AtQuestion = -1;
+        const auto Conflict = run(MakeRequest("ahead-conflict"), Context, [&](const InteractionRequest&) {
+            AtQuestion = Locked(); return InteractionChoice::SkipAll;
+        });
+        QVERIFY(CompetitorsReady.load()); QCOMPARE(Conflict.snapshot_.state_, JobState::Completed); QCOMPARE(AtQuestion, 0);
+        for (const auto& [Name, Bytes] : Snapshot(path("ahead-conflict/new"))) QCOMPARE(Bytes, QByteArray("competitor"));
+        Reader->early_ = 0;
+        std::atomic<bool> Held{false}, Continue{false};
+        Reader->opened_ = [&](int N) {
+            if (N != 8) return;
+            Held = true;
+            QElapsedTimer Wait; Wait.start();
+            while (!Continue && Wait.elapsed() < 15000) QThread::msleep(2);
+        };
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2, 64);
+        const auto Job = SubmitFileOperation(Scheduler, MakeRequest("ahead-stop"), Context); QVERIFY(Job.HasValue());
+        QElapsedTimer Wait; Wait.start();
+        while (!Held && Wait.elapsed() < 15000) QTest::qSleep(2);
+        const bool WasHeld = Held;
+        const auto Cancelled = Scheduler.Cancel(Job.Value().id_); Continue = true;
+        QVERIFY(WasHeld); QVERIFY(Cancelled.HasValue());
+        QCOMPARE(Job.Value().completion_.get().snapshot_.state_, JobState::Cancelled);
+        QCOMPARE(Locked(), 0); QVERIFY(!StageArtifacts(path("ahead-stop")));
+
+        QVERIFY(QDir().mkpath(path("ahead-pause")));
+        Held = false; Continue = false; Reader->early_ = 0;
+        const auto Paused = SubmitFileOperation(Scheduler, MakeRequest("ahead-pause"), Context); QVERIFY(Paused.HasValue());
+        Wait.restart(); while (!Held && Wait.elapsed() < 15000) QTest::qSleep(2);
+        const bool ReachedWindow = Held;
+        const auto Pause = Scheduler.Pause(Paused.Value().id_, true); Continue = true;
+        QVERIFY(ReachedWindow); QVERIFY(Pause.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Scheduler.Snapshot(Paused.Value().id_).Value().state_ == JobState::Paused, 15000);
+        QCOMPARE(Locked(), 0);
+        QVERIFY(Scheduler.Pause(Paused.Value().id_, false).HasValue());
+        QCOMPARE(Paused.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        QCOMPARE(Snapshot(path("ahead-pause/new")), Snapshot(Remote.path()));
+        Reader->opened_ = {}; Reader->early_ = 0; Reader->normal_ = 0; Reader->failNext_ = true;
+        QVERIFY(QDir().mkpath(path("ahead-reopen")));
+        QCOMPARE(run(MakeRequest("ahead-reopen"), Context).snapshot_.state_, JobState::Completed);
+        QCOMPARE(Reader->normal_.load(), 1); QCOMPARE(Snapshot(path("ahead-reopen/new")), Snapshot(Remote.path()));
+
+        QFile Large(Remote.filePath("000-large.bin")); QVERIFY(Large.open(QIODevice::NewOnly | QIODevice::WriteOnly));
+        QVERIFY(Large.resize(16 * 1024 * 1024 + 1)); Large.close();
+        int LockedBehindLarge = -1;
+        Reader->openingLarge_ = [&] { LockedBehindLarge = Locked(); };
+        QVERIFY(QDir().mkpath(path("ahead-large")));
+        QCOMPARE(run(MakeRequest("ahead-large"), Context).snapshot_.state_, JobState::Completed);
+        QCOMPARE(LockedBehindLarge, 0); QCOMPARE(Snapshot(path("ahead-large/new")), Snapshot(Remote.path()));
+        Reader->openingLarge_ = {}; QVERIFY(Large.remove());
+
+        // Two selections with the same basename share a destination. Only the
+        // selection that created it may acquire its source handles early.
+        Reader->opened_ = {}; Reader->early_ = 0; Reader->normal_ = 0;
+        QVERIFY(QDir().mkpath(path("ahead-twins")));
+        auto Twins = MakeRequest("ahead-twins"); Twins.sources_.clear(); Twins.destinationName_.clear();
+        Twins.conflict_ = ConflictPolicy::Replace;
+        for (const QString Name : {QStringLiteral("first"), QStringLiteral("second")}) {
+            const auto Dir = Remote.filePath(Name + "/same");
+            QVERIFY(QDir().mkpath(Dir));
+            QFile File(Dir + "/" + Name); QVERIFY(File.open(QIODevice::NewOnly | QIODevice::WriteOnly));
+            QCOMPARE(File.write(Name.toUtf8()), Name.size()); File.close();
+            QVERIFY(SetFileAttributesW(Wide(File.fileName()).c_str(), FILE_ATTRIBUTE_ARCHIVE));
+            const auto Entry = Reader->inner_->Resolve({LocatorKind::Smb, QDir::toNativeSeparators(Dir).toStdString()}, {}).get();
+            QVERIFY(Entry.HasValue());
+            Twins.sources_.push_back({Entry.Value(), Reader, MakeNativeWritableStorage(LocatorKind::Smb, Reader->inner_)});
+        }
+        QCOMPARE(run(std::move(Twins), Context).snapshot_.state_, JobState::Completed);
+        QCOMPARE(Reader->early_.load(), 1); QCOMPARE(Reader->normal_.load(), 1);
+        const auto Copied = Snapshot(path("ahead-twins/same"));
+        QCOMPARE(Copied.size(), 2); QCOMPARE(Copied.at("first"), QByteArray("first")); QCOMPARE(Copied.at("second"), QByteArray("second"));
+        QVERIFY(Remote.remove());
+    }
+    void redirectedConcurrentName()
+    {
+        const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
+        if (Share.isEmpty()) QSKIP("Set HC_TEST_RDP_SHARE for a redirected collision fixture.");
+        QVERIFY(!Share.contains('/') && !Share.contains('\\'));
+        QTemporaryDir Remote(QString("//tsclient/%1/hc-rdp-race-XXXXXX").arg(Share));
+        QVERIFY(Remote.isValid());
+        QVERIFY(write("rdp-race/source/ordinary", "copy"));
+        QVERIFY(write("rdp-race/source/collision", "from source"));
+        const auto Root = reader_->Resolve(at("rdp-race/source"), {}).get(); QVERIFY(Root.HasValue());
+        const Locator Target{LocatorKind::Smb, QDir::toNativeSeparators(Remote.filePath("source")).toStdString()};
+        TreeTransferOptions Options; Options.workers_ = 1;
+        auto Context = engine();
+        const auto RemoteReader = MakeNativeReadProvider(LocatorKind::Smb);
+        const auto RemoteWriter = MakeNativeWritableStorage(LocatorKind::Smb, RemoteReader);
+        const auto RemoteRoot = RemoteReader->Resolve({LocatorKind::Smb, QDir::toNativeSeparators(Remote.path()).toStdString()}, {}).get();
+        QVERIFY(RemoteRoot.HasValue());
+        const auto Unsupported = RemoteWriter->BeginTreeTransfer(RemoteRoot.Value(), Target, Options, Context);
+        QVERIFY(!Unsupported.HasValue());
+        QCOMPARE(Unsupported.Failure().code_, std::string("tree-transfer-source"));
+        Context.flushFileContents_ = true;
+        QVERIFY(!writer_->BeginTreeTransfer(Root.Value(), Target, Options, Context).HasValue());
+        QVERIFY(!QFileInfo::exists(Remote.filePath("source")));
+        Context.flushFileContents_ = false;
+        std::atomic<bool> Paused{true};
+        Context.pauseRequested_ = [&] { return Paused.load(); };
+        auto Transfer = writer_->BeginTreeTransfer(Root.Value(), Target, Options, Context); QVERIFY(Transfer.HasValue());
+        QFile Competing(Remote.filePath("source/collision"));
+        QVERIFY(Competing.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        QCOMPARE(Competing.write("keep me"), 7); Competing.close();
+        Paused = false;
+        std::vector<TreeTransferEntry> Done;
+        const auto Last = drain(*Transfer.Value(), Done); QVERIFY(Last.HasValue());
+        QCOMPARE(Last.Value().deferred_.size(), std::size_t(1));
+        QCOMPARE(Last.Value().deferred_.front().entry_.name_, std::string("collision"));
+        Transfer.Value()->Release();
+        const auto Files = Snapshot(Remote.filePath("source"));
+        QCOMPARE(Files.at("collision"), QByteArray("keep me"));
+        QCOMPARE(Files.at("ordinary"), QByteArray("copy"));
+        QVERIFY(Remote.remove());
+    }
+    void redirectedCancelCopy()
+    {
+        const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
+        if (Share.isEmpty()) QSKIP("Set HC_TEST_RDP_SHARE for a redirected cancellation fixture.");
+        QVERIFY(!Share.contains('/') && !Share.contains('\\'));
+        QTemporaryDir Remote(QString("//tsclient/%1/hc-rdp-cancel-XXXXXX").arg(Share));
+        QVERIFY(Remote.isValid());
+        QVERIFY(write("rdp-stop/source/first", "completed"));
+        QVERIFY(write("rdp-stop/source/later/active.bin", Payload(32 * MiB, 42)));
+        const auto Root = reader_->Resolve(at("rdp-stop/source"), {}).get(); QVERIFY(Root.HasValue());
+        const Locator Target{LocatorKind::Smb, QDir::toNativeSeparators(Remote.filePath("source")).toStdString()};
+        TreeTransferOptions Options; Options.workers_ = 1;
+        const auto Active = Wide(Remote.filePath("source/later/active.bin"));
+        std::atomic<bool> WriterPaused{false};
+        auto Context = engine(); std::stop_source Stop; Context.stopToken_ = Stop.get_token();
+        // Pause inside the copy while its destination writer is still open.
+        // A remote name lookup from the test thread can arrive after completion.
+        Context.pauseRequested_ = [&] {
+            if (WriterPaused.load()) return true;
+            const auto Probe = CreateFileW(Active.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+            if (Probe != INVALID_HANDLE_VALUE) CloseHandle(Probe);
+            else if (GetLastError() == ERROR_SHARING_VIOLATION) WriterPaused = true;
+            return WriterPaused.load();
+        };
+        auto Transfer = writer_->BeginTreeTransfer(Root.Value(), Target, Options, Context);
+        QVERIFY(Transfer.HasValue());
+        QElapsedTimer Timer; Timer.start();
+        while (!WriterPaused.load() && Timer.elapsed() < 30000) QTest::qSleep(2);
+        QVERIFY(WriterPaused.load());
+        Stop.request_stop(); Transfer.Value()->Release();
+        const auto Remaining = CreateFileW(Active.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        const auto OpenError = GetLastError();
+        if (Remaining != INVALID_HANDLE_VALUE) CloseHandle(Remaining);
+        QVERIFY2(Remaining == INVALID_HANDLE_VALUE, "Destination file survived cancellation of its open writer");
+        QCOMPARE(OpenError, DWORD(ERROR_FILE_NOT_FOUND));
+        QFile First(Remote.filePath("source/first")); QVERIFY(First.open(QIODevice::ReadOnly));
+        QCOMPARE(First.readAll(), QByteArray("completed")); First.close();
+        QVERIFY(!StageArtifacts(Remote.path()));
+        QVERIFY(Remote.remove());
+    }
     void stopLeavesNoIncompleteFile()
     {
         // Cancelling removes only the files being copied; completed ones stay.

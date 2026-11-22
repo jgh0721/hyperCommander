@@ -40,19 +40,22 @@ namespace hc::plugins
     QJsonObject EncodeSevenZipSettings(const SevenZipCreateSettings& Settings)
     {
         const auto Optional = [](auto Value) { return Value ? QJsonValue(QString::number(*Value)) : QJsonValue(QJsonValue::Null); };
-        return {{"version", 1}, {"level", int(Settings.level_)}, {"method", int(Settings.method_)},
+        QJsonObject Value{{"version", 1}, {"level", int(Settings.level_)}, {"method", int(Settings.method_)},
             {"dictionary", Optional(Settings.dictionaryBytes_)}, {"word", Optional(Settings.wordSize_)}, {"threads", Optional(Settings.threads_)},
             {"solidMode", int(Settings.solid_)}, {"solidBytes", Optional(Settings.solidBlockBytes_)},
             {"encrypt", Settings.encrypt_}, {"header", Settings.encryptHeaders_}};
+        if (!Settings.verifyContents_) Value["verifyContents"] = false;
+        return Value;
     }
     Result<SevenZipCreateSettings> DecodeSevenZipSettings(const QJsonObject& Object)
     {
-        if (Object.size() != 10 || Object["version"] != 1 || !Object["encrypt"].isBool() || !Object["header"].isBool()) return Invalid();
+        if ((Object.contains("verifyContents") && !Object["verifyContents"].isBool()) || Object.size() != 10 + int(Object.contains("verifyContents")) || Object["version"] != 1 || !Object["encrypt"].isBool() || !Object["header"].isBool()) return Invalid();
         SevenZipCreateSettings Out;
         const auto Level = Object["level"].toInt(-1), Method = Object["method"].toInt(-1), Solid = Object["solidMode"].toInt(-1);
         if (Level < 0 || Level > 9 || Object["level"].toDouble(-1) != Level || Method < 0 || Method > 7
             || Object["method"].toDouble(-1) != Method || Solid < 0 || Solid > 2 || Object["solidMode"].toDouble(-1) != Solid) return Invalid();
         Out.level_ = unsigned(Level); Out.method_ = SevenZipMethod(Method); Out.solid_ = ArchiveSolidMode(Solid);
+        Out.verifyContents_ = Object["verifyContents"].toBool(true);
         Out.encrypt_ = Object["encrypt"].toBool(); Out.encryptHeaders_ = Object["header"].toBool();
         for (const auto& [Key, Target] : {std::pair{"dictionary", &Out.dictionaryBytes_}, {"solidBytes", &Out.solidBlockBytes_}}) {
             if (Object[Key].isNull()) continue; auto Value = WireUnsigned(Object[Key]);

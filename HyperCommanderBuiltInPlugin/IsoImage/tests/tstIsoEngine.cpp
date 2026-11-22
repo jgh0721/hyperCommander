@@ -4,6 +4,8 @@
 #include "hcIso/isoImage.h"
 #include <memory>
 #include <QtEndian>
+#include <QCryptographicHash>
+#include <QProcess>
 
 namespace {
 struct Close { void operator()(HcIsoImage* Image) const { hcIsoClose(Image); } };
@@ -15,6 +17,62 @@ HcIsoOptions Options(uint32_t Profile = HC_ISO_UDF_BRIDGE) { return {sizeof(HcIs
 class IsoEngineTests : public QObject {
     Q_OBJECT
 private slots:
+    void compareBridgeCreation() {
+        if (!qEnvironmentVariableIsSet("HC_ARCHIVE_BENCH")) QSKIP("Opt-in ISO creation comparison");
+        QTemporaryDir Dir;
+        QVERIFY(Dir.isValid());
+        const QByteArray Data(64 * 1024 * 1024, 'z');
+        const auto Source = Dir.filePath("input.bin").toUtf8();
+        const auto Output = Dir.filePath("result.iso").toUtf8();
+        QVERIFY(Put(QString::fromUtf8(Source), Data));
+        const HcIsoSource Item{Source.constData(), "INPUT.BIN", 0};
+        auto Config = Options();
+        Config.maxImageBytes_ = 128 * 1024 * 1024;
+        QElapsedTimer Timer;
+        Timer.start();
+        QCOMPARE(hcIsoBuild(Output.constData(), &Item, 1, &Config), HC_ISO_OK);
+        const auto Elapsed = Timer.elapsed();
+        qInfo() << "UDF Bridge create-ms" << Elapsed << "image-bytes" << QFileInfo(QString::fromUtf8(Output)).size()
+            << "sha256" << QCryptographicHash::hash(Read(QString::fromUtf8(Output)), QCryptographicHash::Sha256).toHex();
+    }
+    void compareIso9660Tool() {
+        const auto Tool = qEnvironmentVariable("HC_OSCDIMG");
+        if (Tool.isEmpty()) QSKIP("Set HC_OSCDIMG to compare ISO 9660 creation");
+        QTemporaryDir Dir;
+        QVERIFY(Dir.isValid());
+        QVERIFY(QDir(Dir.path()).mkdir("source"));
+        const QByteArray Data(64 * 1024 * 1024, 'z');
+        const auto Source = Dir.filePath("source/INPUT.BIN").toUtf8();
+        QVERIFY(Put(QString::fromUtf8(Source), Data));
+        const HcIsoSource Item{Source.constData(), "INPUT.BIN", 0};
+        auto Config = Options(HC_ISO_9660);
+        Config.maxImageBytes_ = 128 * 1024 * 1024;
+        for (const bool External : {false, true}) {
+            const auto Output = Dir.filePath(External ? "external.iso" : "hc.iso");
+            QElapsedTimer Timer;
+            Timer.start();
+            if (External) {
+                QProcess Process;
+                Process.start(Tool, {"-lHC_ISO", "-g", "-t01/01/2000,00:00:00", QDir::toNativeSeparators(Dir.filePath("source")), QDir::toNativeSeparators(Output)});
+                QVERIFY(Process.waitForFinished(60000));
+                QVERIFY2(Process.exitCode() == 0, Process.readAllStandardError().constData());
+            } else {
+                QCOMPARE(hcIsoBuild(Output.toUtf8().constData(), &Item, 1, &Config), HC_ISO_OK);
+            }
+            const auto Elapsed = Timer.elapsed();
+            HcIsoImage* Raw = nullptr;
+            QCOMPARE(hcIsoOpen(Output.toUtf8().constData(), HC_ISO_PRIMARY, &Raw), HC_ISO_OK);
+            ImagePtr Image(Raw);
+            uint64_t Index = 0;
+            QCOMPARE(hcIsoFindEntry(Image.get(), "INPUT.BIN", &Index), HC_ISO_OK);
+            QByteArray Actual(Data.size(), Qt::Uninitialized);
+            uint32_t Count = 0;
+            QCOMPARE(hcIsoRead(Image.get(), Index, 0, Actual.data(), uint32_t(Actual.size()), &Count), HC_ISO_OK);
+            QCOMPARE(Count, uint32_t(Data.size()));
+            QCOMPARE(Actual, Data);
+            qInfo() << (External ? "oscdimg" : "HC-9660") << "create-ms" << Elapsed << "image-bytes" << QFileInfo(Output).size();
+        }
+    }
     void sharedContents_data()
     {
         QTest::addColumn<int>("Profile"); for (int Profile = 0; Profile < 4; ++Profile) QTest::newRow(qPrintable(QString::number(Profile))) << Profile;

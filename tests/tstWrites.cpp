@@ -895,18 +895,18 @@ private slots:
     }
     void parallelSchedulerControls_data()
     {
-        QTest::addColumn<bool>("SharedLane");
+        QTest::addColumn<bool>("DistinctOutputs");
         QTest::addColumn<bool>("Ui");
-        QTest::newRow("retain-source-paths") << false << false;
+        QTest::newRow("retain-output-paths") << false << false;
         QTest::newRow("two-admitted-jobs") << true << false;
-        QTest::newRow("ui-retain-source-paths") << false << true;
+        QTest::newRow("ui-retain-output-paths") << false << true;
         QTest::newRow("ui-two-admitted-jobs") << true << true;
     }
     void parallelSchedulerControls()
     {
-        QFETCH(bool, SharedLane); QFETCH(bool, Ui);
+        QFETCH(bool, DistinctOutputs); QFETCH(bool, Ui);
         if (kind_ != LocatorKind::Local) QSKIP("Local scheduler controls");
-        const auto Prefix = QString(SharedLane ? "parallel-shared-%1" : "parallel-lane-%1").arg(Ui);
+        const auto Prefix = QString(DistinctOutputs ? "parallel-shared-%1" : "parallel-lane-%1").arg(Ui);
         QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/from")));
         QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/first"))); QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/second")));
         FileOperationRequest Request;
@@ -917,13 +917,11 @@ private slots:
         auto FirstProbe = std::make_shared<ParallelProbe>(); FirstProbe->hold_ = true;
         auto SecondProbe = std::make_shared<ParallelProbe>();
         JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2);
-        // This fixture deliberately permits both jobs to read the same sources.
-        // Production keeps those exact path claims exclusive by default.
-        if (SharedLane) for (const auto& Source : Request.sources_)
-            QVERIFY(Scheduler.SetLaneLimit(FileOperationLane(Source.entry_.locator_), 2).HasValue());
+        // Source claims are shared for copies. Hold the same output names to
+        // exercise exclusion, and different output names to exercise concurrency.
         OperationContext Context; Context.fileCopyWorkers_ = 4; Context.flushFileContents_ = false;
         Context.providerInteractions_ = Ui;
-        Request.destination_ = at(Prefix + "/first"); Request.destinationWriter_ = std::make_shared<ParallelWriter>(writer_, FirstProbe);
+        Request.destination_ = at(Prefix + (DistinctOutputs ? "/first" : "/second")); Request.destinationWriter_ = std::make_shared<ParallelWriter>(writer_, FirstProbe);
         auto First = SubmitFileOperation(Scheduler, Request, Context); QVERIFY(First.HasValue());
         QTRY_VERIFY_WITH_TIMEOUT(FirstProbe->active_ == 4, 5000);
         Request.destination_ = at(Prefix + "/second"); Request.destinationWriter_ = std::make_shared<ParallelWriter>(writer_, SecondProbe);
@@ -932,7 +930,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(Scheduler.Snapshot(First.Value().id_).Value().state_ == JobState::Paused, 5000);
         FirstProbe->hold_ = false;
         QTest::qWait(20); QCOMPARE(FirstProbe->commits_.load(), 0);
-        if (SharedLane) QCOMPARE(Second.Value().completion_.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+        if (DistinctOutputs) QCOMPARE(Second.Value().completion_.wait_for(std::chrono::seconds(5)), std::future_status::ready);
         else { QCOMPARE(Second.Value().completion_.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout); QCOMPARE(SecondProbe->calls_.load(), 0); }
         QVERIFY(Scheduler.Cancel(First.Value().id_).HasValue());
         QCOMPARE(First.Value().completion_.wait_for(std::chrono::seconds(5)), std::future_status::ready);
@@ -1278,6 +1276,44 @@ private slots:
         QVERIFY(!SourceExtras.Value().acl_ && !SourceExtras.Value().streams_);
         auto DestinationSupport = Writer->CopySupportAt(At("source.bin"), {}); QVERIFY(DestinationSupport.HasValue());
         QVERIFY(DestinationSupport.Value().verify_ && !DestinationSupport.Value().acl_ && !DestinationSupport.Value().streams_);
+        // A prepared stage must stay private until the coordinator commits.
+        // Reach the same parent depth as a folder job to exercise final-handle
+        // verification while the session releases its parent handles.
+        const auto PreparedParent = Remote.filePath("copied/subfolder");
+        QVERIFY(QDir().mkpath(PreparedParent));
+        constexpr auto PreparedName = "copied/subfolder/prepared.bin";
+        constexpr qint64 Modified = 1700000000000LL;
+        const QByteArray Small("redirected copy");
+        const auto SmallBytes = std::span<const std::byte>(reinterpret_cast<const std::byte*>(Small.constData()), size_t(Small.size()));
+        for (const auto [Publish, ReceiptIdentity] : {std::pair{false, false}, {true, false}, {true, true}}) {
+            const DWORD ExpectedAttributes = ReceiptIdentity ? FILE_ATTRIBUTE_READONLY : FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE;
+            const auto Target = At(PreparedName);
+            OperationContext Context; Context.flushFileContents_ = false; Context.expectedWriteBytes_ = Small.size();
+            auto Staged = Writer->BeginWrite(Target, {}, Context); QVERIFY(Staged.HasValue());
+            QVERIFY(Staged.Value()->Append(SmallBytes, Context).HasValue());
+            QVERIFY(Staged.Value()->SetMetadata({Modified, ExpectedAttributes}, Context).HasValue());
+            QVERIFY(Staged.Value()->PreparePublication(Context, ReceiptIdentity).HasValue());
+            const auto Path = Remote.filePath(PreparedName);
+            QVERIFY(!QFileInfo::exists(Path));
+            if (!Publish) {
+                QVERIFY(Staged.Value()->Abort().HasValue());
+                QVERIFY(QDir(PreparedParent).entryList(QDir::Files | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot).isEmpty());
+            } else {
+                auto Receipt = Staged.Value()->Commit(Context);
+                QVERIFY(Receipt.HasValue() && Receipt.Value().cleanupErrors_.empty());
+                QFile Result(Path); QVERIFY(Result.open(QIODevice::ReadOnly)); QCOMPARE(Result.readAll(), Small); Result.close();
+                const auto Native = QDir::toNativeSeparators(Path).toStdWString();
+                const auto Attributes = GetFileAttributesW(Native.c_str());
+                QVERIFY(Attributes != INVALID_FILE_ATTRIBUTES);
+                QCOMPARE(Attributes & ExpectedAttributes, ExpectedAttributes);
+                QCOMPARE(bool(Attributes & FILE_ATTRIBUTE_READONLY), ReceiptIdentity);
+                const auto Published = Reader->Resolve(Target, {}).get();
+                QVERIFY(Published.HasValue());
+                QCOMPARE(Published.Value().modifiedUtcMs_, Modified);
+                QCOMPARE(QFileInfo(Path).lastModified().toMSecsSinceEpoch(), Modified);
+                if (!ReceiptIdentity) QVERIFY(QFile::remove(Path));
+            }
+        }
         const QByteArray Payload(2 * 1024 * 1024 + 17, 'R');
         QFile Source(Local.filePath("source.bin")); QVERIFY(Source.open(QIODevice::WriteOnly));
         QCOMPARE(Source.write(Payload), Payload.size()); Source.close();
@@ -1375,6 +1411,18 @@ private slots:
         auto Published = Adopted.Value()->Commit(Context); QVERIFY2(Published.HasValue(), Published.HasValue() ? "" : Published.Failure().code_.c_str());
         QVERIFY(Published.Value().cleanupErrors_.empty()); Adopted.Value().reset();
         QFile AdoptedBytes(Remote.filePath("adopted.bin")); QVERIFY(AdoptedBytes.open(QIODevice::ReadOnly)); QCOMPARE(AdoptedBytes.readAll(), QByteArray("adopted")); AdoptedBytes.close();
+        // All original writer handles have closed and several remote operations
+        // have now completed. Check the read-only copy for a deferred time update.
+        const auto Delayed = Reader->Resolve(At(PreparedName), {}).get();
+        QVERIFY(Delayed.HasValue());
+        QCOMPARE(Delayed.Value().modifiedUtcMs_, Modified);
+        QVERIFY(Delayed.Value().attributes_ & FILE_ATTRIBUTE_READONLY);
+        const auto DelayedPath = Remote.filePath(PreparedName);
+        QCOMPARE(QFileInfo(DelayedPath).lastModified().toMSecsSinceEpoch(), Modified);
+        QVERIFY(SetFileAttributesW(QDir::toNativeSeparators(DelayedPath).toStdWString().c_str(), FILE_ATTRIBUTE_NORMAL));
+        QVERIFY(QFile::remove(DelayedPath));
+        QVERIFY(QDir().rmdir(PreparedParent));
+        QVERIFY(QDir(Remote.path()).rmdir("copied"));
         QVERIFY(Remote.remove());
     }
     void smbReadSourceCopiesToLocal_data()

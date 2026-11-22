@@ -1,6 +1,7 @@
 ﻿#include "manifestFile.hpp"
 #include "commonLibs/layout/productLayout.hpp"
 #include <QCryptographicHash>
+#include "commonLibs/plugins/contentSha256.hpp"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -153,17 +154,18 @@ namespace hc::plugins
         if (!Arch.HasValue()) return Arch.Failure();
         const bool Companion = Manifest.compatibility_ == "total7zip" && Relative == "7z.dll" && !Executable && Arch.Value() == Architecture::X86;
         if (Arch.Value() != Parsed.Value().architecture_ && !Companion) return Invalid("plugin-binary-architecture-mismatch");
-        if (!File.seek(0)) return Error{ErrorCategory::Unavailable, "plugin-binary-read", {"plugin"}};
-        QCryptographicHash Hash(QCryptographicHash::Sha256); qint64 Bytes = 0;
+        ContentSha256 Hash;
+        if (!Hash.Add(Header.constData(), ULONG(Header.size()))) return Invalid("plugin-binary-hash");
+        qint64 Bytes = Header.size();
         while (!File.atEnd())
         {
             if (const auto Stop = Context.Check({"plugin"})) return *Stop;
             const auto Chunk = File.read(65536);
             if (Chunk.isEmpty() || File.error() != QFileDevice::NoError) return Error{ErrorCategory::Unavailable, "plugin-binary-read", {"plugin"}};
             Bytes += Chunk.size(); if (Bytes > Limit) return Error{ErrorCategory::BudgetExceeded, "plugin-binary-budget", {"plugin"}};
-            Hash.addData(Chunk);
+            if (!Hash.Add(Chunk.constData(), ULONG(Chunk.size()))) return Invalid("plugin-binary-hash");
         }
-        if (Hash.result().toHex().toStdString() != ExpectedHash) return Invalid("plugin-binary-hash-mismatch");
+        if (Hash.Finish().toHex().toStdString() != ExpectedHash) return Invalid("plugin-binary-hash-mismatch");
         if (const auto Stop = Context.Check({"plugin"})) return *Stop;
         return Binary;
         };
@@ -254,17 +256,23 @@ namespace hc::plugins
             if (!Canonical.startsWith(Root.endsWith('/') ? Root : Root + '/', Qt::CaseInsensitive)) return Invalid("plugin-binary-outside-root");
             QFile File(Canonical); if (!File.open(QIODevice::ReadOnly)) return Error{ErrorCategory::Unavailable, "plugin-binary-open", {"plugin"}};
             if (File.size() > 512LL * 1024 * 1024) return Error{ErrorCategory::BudgetExceeded, "plugin-binary-budget", {"plugin"}};
-            const auto Header = File.peek(1024 * 1024);
+            const auto Header = File.read(1024 * 1024);
             auto Arch = InspectPe(std::span(reinterpret_cast<const std::byte*>(Header.constData()), Header.size()), Executable);
             if (!Arch.HasValue()) return Arch.Failure();
             if (Arch.Value() != Architecture::X64 && !(Companion && Arch.Value() == Architecture::X86)) return Invalid("plugin-binary-architecture-mismatch");
-            QCryptographicHash Hash(QCryptographicHash::Sha256);
+            ContentSha256 Hash;
+            if (!Hash.Add(Header.constData(), ULONG(Header.size()))) return Invalid("plugin-binary-hash");
+            qint64 Total = Header.size();
             while (!File.atEnd()) {
                 if (const auto Stop = Context.Check({"plugin"})) return *Stop;
                 const auto Bytes = File.read(65536); if (Bytes.isEmpty() || File.error() != QFileDevice::NoError) return Invalid("plugin-binary-read");
-                Hash.addData(Bytes);
+                Total += Bytes.size();
+                if (Total > 512LL * 1024 * 1024) return Error{ErrorCategory::BudgetExceeded, "plugin-binary-budget", {"plugin"}};
+                if (!Hash.Add(Bytes.constData(), ULONG(Bytes.size()))) return Invalid("plugin-binary-hash");
             }
-            return Hash.result().toHex().toStdString();
+            const auto Digest = Hash.Finish();
+            if (Digest.size() != 32) return Invalid("plugin-binary-hash");
+            return Digest.toHex().toStdString();
         };
         auto Hash = HashFile(Path); if (!Hash.HasValue()) return Hash.Failure();
         Manifest.sha256_ = Hash.Value(); Manifest.version_ = "sha256-" + Hash.Value().substr(0, 16); Manifest.architecture_ = Architecture::X64;

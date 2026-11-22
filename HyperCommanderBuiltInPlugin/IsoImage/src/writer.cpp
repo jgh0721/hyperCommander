@@ -39,7 +39,8 @@ std::string PrimaryName(const std::string& Name, bool Directory, size_t Suffix)
 }
 }
 Writer::Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& Options, uint32_t Flags) : options_(Options),
-    shareContents_((Flags & HC_ISO_SHARE_DUPLICATE_CONTENTS) != 0), explicitTimestamp_((Flags & HC_ISO_EXPLICIT_TIMESTAMP) != 0)
+    shareContents_((Flags & HC_ISO_SHARE_DUPLICATE_CONTENTS) != 0), explicitTimestamp_((Flags & HC_ISO_EXPLICIT_TIMESTAMP) != 0),
+    verifyContents_((Flags & HC_ISO_VERIFY_STRUCTURE_ONLY) == 0)
 {
     Require(Options.structSize_ == sizeof(HcIsoOptions) && Options.profile_ <= HC_ISO_UDF_NO_JOLIET, "Invalid ISO build options");
     label_ = Options.volumeLabel_ ? Options.volumeLabel_ : "HYPERCOMMANDER";
@@ -141,7 +142,7 @@ void Writer::connectPayloads()
     std::map<uint64_t, size_t> Sizes;
     for (const auto& Item : nodes_) if (!Item.directory_) ++Sizes[Item.size_];
     std::map<std::pair<uint64_t, uint64_t>, std::vector<size_t>> Candidates;
-    Bytes Buffer(1024 * 1024), Other(Buffer.size());
+    Bytes Buffer, Other;
     const auto Snapshot = [](const Node& Item) {
         Require(fs::is_regular_file(fs::symlink_status(Item.source_)) && fs::file_size(Item.source_) == Item.size_
             && fs::last_write_time(Item.source_) == Item.modified_, "Source changed during duplicate comparison");
@@ -152,25 +153,28 @@ void Writer::connectPayloads()
         Pulse(options_, Compared, payloadBytes_); Snapshot(Item);
         uint64_t Fingerprint = 14695981039346656037ull;
         const bool Compare = shareContents_ && Sizes[Item.size_] > 1;
-        if (Compare) {
-            std::ifstream Input(Item.source_, std::ios::binary); Require(bool(Input), "Cannot open duplicate candidate", HC_ISO_IO);
+        if (Compare && Buffer.empty()) { Buffer.resize(1024 * 1024); Other.resize(Buffer.size()); }
+        // A pair needs just one byte comparison. Fingerprinting both first adds two full reads.
+        if (Compare && Sizes[Item.size_] > 2) {
+            DiskReader Input(Item.source_);
             for (uint64_t Offset = 0; Offset < Item.size_;) {
                 const auto Count = size_t(std::min<uint64_t>(Buffer.size(), Item.size_ - Offset));
-                Input.read(reinterpret_cast<char*>(Buffer.data()), std::streamsize(Count)); Require(size_t(Input.gcount()) == Count, "Short duplicate candidate read", HC_ISO_IO);
+                Input.Read(Offset, std::span(Buffer).first(Count));
                 // A fingerprint only indexes candidates; sharing requires exact bytes.
                 for (size_t I = 0; I < Count; ++I) { Fingerprint ^= Buffer[I]; Fingerprint *= 1099511628211ull; }
                 Offset += Count; Compared += Count; Pulse(options_, Compared, payloadBytes_);
             }
             Snapshot(Item);
+        }
+        if (Compare) {
             for (const auto Candidate : Candidates[{Item.size_, Fingerprint}]) {
                 const auto& Canonical = nodes_[payloads_[Candidate].sourceNode_]; Snapshot(Canonical);
-                std::ifstream Left(Item.source_, std::ios::binary), Right(Canonical.source_, std::ios::binary);
-                Require(bool(Left) && bool(Right), "Cannot open payload comparison", HC_ISO_IO);
+                DiskReader Left(Item.source_), Right(Canonical.source_);
                 bool Equal = true;
                 for (uint64_t Offset = 0; Offset < Item.size_;) {
                     const auto Count = size_t(std::min<uint64_t>(Buffer.size(), Item.size_ - Offset));
-                    Left.read(reinterpret_cast<char*>(Buffer.data()), std::streamsize(Count)); Right.read(reinterpret_cast<char*>(Other.data()), std::streamsize(Count));
-                    Require(size_t(Left.gcount()) == Count && size_t(Right.gcount()) == Count, "Short payload comparison", HC_ISO_IO);
+                    Left.Read(Offset, std::span(Buffer).first(Count));
+                    Right.Read(Offset, std::span(Other).first(Count));
                     Equal = std::equal(Buffer.begin(), Buffer.begin() + Count, Other.begin());
                     Offset += Count; Pulse(options_, Compared, payloadBytes_); if (!Equal) break;
                 }
@@ -241,7 +245,6 @@ void Writer::Write(const fs::path& Path)
     std::ofstream Stream(Path, std::ios::binary | std::ios::out | std::ios::noreplace);
     Require(bool(Stream), "Cannot exclusively create ISO staging file", HC_ISO_IO);
     try {
-        Stream.seekp(std::streamoff(uint64_t(totalBlocks_) * Block - 1)); Stream.put(0);
         writeAt(Stream, 16, volume(false));
         const uint32_t Terminator = hasJoliet() ? 18 : 17;
         if (hasJoliet()) writeAt(Stream, 17, volume(true));
@@ -254,19 +257,29 @@ void Writer::Write(const fs::path& Path)
             const auto& Item = nodes_[Payload.sourceNode_];
             Pulse(options_, Done, payloadBytes_ * 2);
             Require(fs::file_size(Item.source_) == Item.size_ && fs::last_write_time(Item.source_) == Item.modified_, "Source changed before writing");
-            std::ifstream Input(Item.source_, std::ios::binary); Require(bool(Input), "Cannot open input file", HC_ISO_IO);
+            DiskReader Input(Item.source_);
             Stream.seekp(std::streamoff(uint64_t(Item.dataBlock_) * Block));
             for (uint64_t Offset = 0; Offset < Item.size_;) {
                 const auto Size = std::min<uint64_t>(Buffer.size(), Item.size_ - Offset);
-                Input.read(reinterpret_cast<char*>(Buffer.data()), std::streamsize(Size)); Require(uint64_t(Input.gcount()) == Size, "Input changed or short read", HC_ISO_IO);
+                Input.Read(Offset, std::span(Buffer).first(size_t(Size)));
                 Stream.write(reinterpret_cast<const char*>(Buffer.data()), std::streamsize(Size)); Require(bool(Stream), "ISO payload write failed", HC_ISO_IO);
                 Offset += Size; Done += Size; Pulse(options_, Done, payloadBytes_ * 2);
             }
             Require(fs::file_size(Item.source_) == Item.size_ && fs::last_write_time(Item.source_) == Item.modified_, "Source changed while writing");
         }
+        // Extend to the final size after payload writes so a remote filesystem
+        // need not initialize the entire data area ahead of the first file.
+        if (hasUdf()) {
+            udfAnchor(Stream, partitionEnd_);
+            udfAnchor(Stream, totalBlocks_ - 1);
+        } else {
+            Stream.seekp(std::streamoff(uint64_t(totalBlocks_) * Block - 1));
+            Stream.put(0);
+        }
         Stream.flush(); Require(bool(Stream), "ISO flush failed", HC_ISO_IO); Stream.close();
         // Compare every emitted namespace with the inventory. Primary aliases are
         // deterministic and deliberately checked independently of Unicode names.
+        Bytes Expected(verifyContents_ ? Buffer.size() : 0);
         for (uint32_t Namespace = HC_ISO_PRIMARY; Namespace <= (hasUdf() ? HC_ISO_UDF : options_.profile_ == HC_ISO_9660_JOLIET ? HC_ISO_JOLIET : HC_ISO_PRIMARY); ++Namespace) {
             if (Namespace == HC_ISO_JOLIET && !hasJoliet()) continue;
             Reader Image(Path, Namespace); Require(Image.Entries().size() + 1 == nodes_.size(), "Reopened inventory count mismatch");
@@ -280,13 +293,27 @@ void Writer::Write(const fs::path& Path)
                 const auto Found = Lookup.find(Names[Child]); Require(Found != Lookup.end(), "Reopened path mismatch");
                 const auto& Actual = Image.Entries()[Found->second]; Require(Actual.directory_ == Item.directory_ && Actual.size_ == Item.size_, "Reopened file metadata mismatch");
                 if (Item.directory_) continue;
-                std::ifstream Input(Item.source_, std::ios::binary); Bytes Expected(Buffer.size());
+                // Each namespace may split an extent differently. Validate the
+                // exact physical byte sequence before sharing its payload check.
+                uint64_t Covered = 0;
+                for (const auto& Extent : Actual.extents_) {
+                    Require(Extent.size_ <= Item.size_ - Covered, "Reopened extent exceeds file");
+                    if (Extent.size_) Require(Extent.offset_ == uint64_t(Item.dataBlock_) * Block + Covered, "Reopened extent location mismatch");
+                    Covered += Extent.size_;
+                }
+                Require(Actual.embedded_.empty() && Covered == Item.size_, "Reopened extent coverage mismatch");
+                if (Namespace != HC_ISO_PRIMARY || !verifyContents_) {
+                    Require(fs::file_size(Item.source_) == Item.size_ && fs::last_write_time(Item.source_) == Item.modified_, "Source changed during verification");
+                    Pulse(options_, Done, payloadBytes_ * 2);
+                    continue;
+                }
+                DiskReader Input(Item.source_);
                 for (uint64_t Offset = 0; Offset < Item.size_;) {
                     const auto Size = uint32_t(std::min<uint64_t>(Buffer.size(), Item.size_ - Offset));
                     Require(Image.Read(Found->second, Offset, std::span(Buffer).first(Size)) == Size, "Reopened payload truncated");
-                    Input.read(reinterpret_cast<char*>(Expected.data()), Size);
-                    Require(Input.gcount() == Size && std::equal(Buffer.begin(), Buffer.begin() + Size, Expected.begin()), "Reopened payload differs from source");
-                    Offset += Size; Pulse(options_, payloadBytes_ + Offset, payloadBytes_ * 2);
+                    Input.Read(Offset, std::span(Expected).first(Size));
+                    Require(std::equal(Buffer.begin(), Buffer.begin() + Size, Expected.begin()), "Reopened payload differs from source");
+                    Offset += Size; Done = std::min(payloadBytes_ * 2, Done + Size); Pulse(options_, Done, payloadBytes_ * 2);
                 }
                 Require(fs::file_size(Item.source_) == Item.size_ && fs::last_write_time(Item.source_) == Item.modified_, "Source changed during verification");
             }

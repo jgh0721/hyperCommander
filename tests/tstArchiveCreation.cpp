@@ -2,10 +2,13 @@
 #include "UniqueLibs/archive/creationJob.hpp"
 
 #include "UniqueLibs/archive/creatorRegistry.hpp"
+#include "HyperCommanderBuiltInPlugin/IsoImage/builtinIso.hpp"
+#include "HyperCommanderBuiltInPlugin/SevenZip/builtinSevenZip.hpp"
 #include "UniqueLibs/archive/creationDialog.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
+#include "commonLibs/storage/nativeTemporaryDirectory.hpp"
 #include <QtTest>
 #include <QKeyEvent>
 #include <QtWidgets>
@@ -327,6 +330,132 @@ private slots:
         }
         Reader.reset(); QVERIFY(Remote.remove());
     }
+    void publicationBenchmark_data() { nativeCreation_data(); }
+    void publicationBenchmark()
+    {
+        if (!qEnvironmentVariableIsSet("HC_ARCHIVE_BENCH")) QSKIP("Opt-in archive publication benchmark");
+        QFETCH(QString, Format);
+        QTemporaryDir Dir;
+        QVERIFY(Dir.isValid());
+        const auto InputRoot = qEnvironmentVariable("HC_BENCH_SOURCE_ROOT", Dir.path());
+        const auto OutputRoot = qEnvironmentVariable("HC_BENCH_DESTINATION_ROOT", Dir.path());
+        native::TemporaryDirectory Inputs(InputRoot, "hc-input-");
+        native::TemporaryDirectory Outputs(OutputRoot, "hc-output-");
+        QVERIFY(Inputs.IsValid() && Outputs.IsValid());
+        const auto Kind = [](QString Path) { return QDir::fromNativeSeparators(Path).startsWith("//") ? LocatorKind::Smb : LocatorKind::Local; };
+        const auto Input = Inputs.FilePath("src");
+        QVERIFY(QDir().mkdir(Input));
+        const auto SourcePath = QDir(Input).filePath("INPUT.BIN");
+        const auto MiB = qEnvironmentVariableIntValue("HC_BENCH_MIB");
+        QVERIFY(MiB >= 0 && MiB <= 128);
+        qsizetype PayloadSize = (MiB ? MiB : 8) * 1024 * 1024;
+        if (qEnvironmentVariableIsSet("HC_BENCH_BYTES")) {
+            bool Valid = false;
+            PayloadSize = qEnvironmentVariable("HC_BENCH_BYTES").toLongLong(&Valid);
+            QVERIFY(Valid && PayloadSize >= 0 && PayloadSize <= 128 * 1024 * 1024);
+        }
+        const QByteArray Data(PayloadSize, 'z');
+        QVERIFY(Put(SourcePath, Data));
+        auto CliInput = Input;
+        if (qEnvironmentVariableIsSet("HC_BENCH_SEPARATE_INPUTS")) {
+            // Independent, freshly written files prevent either tool from warming the other's input.
+            CliInput = Inputs.FilePath("cli-src");
+            QVERIFY(QDir().mkdir(CliInput));
+            QVERIFY(Put(QDir(CliInput).filePath("INPUT.BIN"), Data));
+        }
+        hc::settings::Repository Settings(Dir.filePath("settings"));
+        auto Reader = MakeNativeReadProvider(Kind(SourcePath));
+        auto Entry = Reader->Resolve({Kind(SourcePath), SourcePath.toStdString()}, {}).get();
+        QVERIFY(Entry.HasValue());
+        const auto HcPath = Outputs.FilePath("hc." + Format);
+        auto R = Request(Settings, {{Entry.Value(), Reader, {}}}, HcPath, Format.toStdString());
+        R.value_.output_.kind_ = Kind(HcPath);
+        if (Format == "iso") {
+            auto& Iso = std::get<IsoCreateSettings>(R.value_.settings_);
+            Iso.profile_ = IsoCreateProfile::Iso9660;
+            Iso.volumeLabel_ = "HC_ISO";
+            Iso.verifyContents_ = !qEnvironmentVariableIsSet("HC_BENCH_QUICK");
+        } else {
+            auto& Seven = std::get<SevenZipCreateSettings>(R.value_.settings_);
+            Seven.verifyContents_ = !qEnvironmentVariableIsSet("HC_BENCH_QUICK");
+            Seven.level_ = 1;
+            Seven.solid_ = ArchiveSolidMode::Off;
+        }
+        const auto Tool = qEnvironmentVariable("HC_BENCH_7Z");
+        QVERIFY(QFileInfo(Tool).isFile());
+        const auto Ref = Outputs.FilePath("ref." + Format);
+        QProcess Cli;
+        Cli.setWorkingDirectory(CliInput);
+        QElapsedTimer Clock;
+        const bool CliFirst = qEnvironmentVariableIsSet("HC_BENCH_CLI_FIRST");
+        qint64 CliMs = 0;
+        qint64 HcMs = 0;
+        for (const bool External : {CliFirst, !CliFirst}) {
+            Clock.start();
+            if (External) {
+                if (Format == "iso") {
+                    Cli.start(qEnvironmentVariable("HC_OSCDIMG"), {"-lHC_ISO", "-g", "-t01/01/2000,00:00:00", QDir::toNativeSeparators(CliInput), QDir::toNativeSeparators(Ref)});
+                } else {
+                    QStringList Args{"a", "-mx=1"};
+                    if (Format == "7z") Args << "-ms=off" << "-mf=off" << "-m0=LZMA2";
+                    Cli.start(Tool, Args << Ref << "INPUT.BIN");
+                }
+                QVERIFY(Cli.waitForFinished(60000));
+                QCOMPARE(Cli.exitCode(), 0);
+                CliMs = Clock.elapsed();
+            } else {
+                OperationContext Context;
+                // FileJobUi::Submit defaults to delayed writes. Measure durable flush separately on request.
+                Context.flushFileContents_ = qEnvironmentVariableIsSet("HC_BENCH_FLUSH");
+                auto Prepared = PrepareCreation(R, Context);
+                QVERIFY(Prepared.HasValue());
+                const auto Job = Run(std::move(Prepared.Value()));
+                QCOMPARE(Job.snapshot_.state_, JobState::Completed);
+                HcMs = Clock.elapsed();
+            }
+        }
+        for (const auto& Path : {HcPath, Ref}) {
+            Cli.start(Tool, {"x", "-so", Path, "INPUT.BIN"});
+            QVERIFY(Cli.waitForFinished(60000));
+            QCOMPARE(Cli.exitCode(), 0);
+            QCOMPARE(Cli.readAllStandardOutput(), Data);
+        }
+        qInfo() << Format << "publication-ms" << HcMs << "external-ms" << CliMs;
+        if (qEnvironmentVariableIsSet("HC_BENCH_EXTRACT")) {
+            auto ExtractPath = HcPath;
+            const auto Reference = qEnvironmentVariable("HC_BENCH_EXTRACT_REF_DIR");
+            if (!Reference.isEmpty()) {
+                ExtractPath = Outputs.FilePath("shared-ref." + Format);
+                QVERIFY(QFile::copy(QDir(Reference).filePath("ref." + Format), ExtractPath));
+            }
+            for (const bool External : {false, true}) {
+                const auto Folder = Inputs.FilePath(External ? "external" : "host");
+                QVERIFY(QDir().mkdir(Folder));
+                const auto Target = QDir(Folder).filePath("INPUT.BIN");
+                Clock.restart();
+                if (External) {
+                    Cli.start(Tool, {"x", "-y", "-o" + Folder, ExtractPath, "INPUT.BIN"});
+                    QVERIFY(Cli.waitForFinished(60000));
+                    QCOMPARE(Cli.exitCode(), 0);
+                } else {
+                    const auto Backend = MakeApprovedWcxBackend(Format == "iso" ? BuiltinIsoOptions() : BuiltinSevenZipOptions());
+                    auto Listing = Backend->Enumerate(ExtractPath.toStdString(), false, {});
+                    QVERIFY(Listing.HasValue());
+                    auto Page = Listing.Value()->Next(2, {});
+                    QVERIFY(Page.HasValue());
+                    QCOMPARE(Page.Value().entries_.size(), size_t(1));
+                    Listing.Value().reset();
+                    auto Done = Backend->Extract(ExtractPath.toStdString(), Page.Value().entries_.front(), Target.toStdString(), {});
+                    QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+                }
+                const auto Ms = Clock.elapsed();
+                QFile Restored(Target);
+                QVERIFY(Restored.open(QIODevice::ReadOnly));
+                QCOMPARE(Restored.readAll(), Data);
+                qInfo() << Format << (External ? "external" : "host") << "restore-ms" << Ms;
+            }
+        }
+    }
     void nativeCreation_data() { QTest::addColumn<QString>("Format"); for (const auto F : {"7z", "zip", "iso"}) QTest::newRow(F) << QString(F); }
     void nativeCreation()
     {
@@ -371,7 +500,7 @@ private slots:
     }
     void encryptedCreation()
     {
-        const auto Tool = QDir(QCoreApplication::applicationDirPath()).filePath("../sevenzip-tools/official/7z.exe"); QVERIFY(QFileInfo::exists(Tool));
+        const auto Tool = qEnvironmentVariable("HC_BENCH_7Z", QDir(QCoreApplication::applicationDirPath()).filePath("../sevenzip-tools/official/7z.exe")); QVERIFY(QFileInfo::exists(Tool));
         for (const auto Format : {"7z", "zip"}) {
             QTemporaryDir Dir; hc::settings::Repository Settings(Dir.filePath("settings")); const auto File = Dir.filePath("secret.txt"); QVERIFY(Put(File, "encrypted job bytes"));
             const auto Target = Dir.filePath(QString("encrypted.") + Format); auto Reader = MakeNativeReadProvider(LocatorKind::Local);

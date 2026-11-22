@@ -84,6 +84,7 @@ namespace hc::operations
             if (At.kind_ == LocatorKind::Plugin && Path.ends_with(':')) Path += '\\';
             return At;
         }
+        bool NativeFileKind(LocatorKind Kind) { return Kind == LocatorKind::Local || Kind == LocatorKind::Smb; }
         std::string NativeKey(std::string Path)
         {
             std::replace(Path.begin(), Path.end(), '/', '\\');
@@ -111,6 +112,7 @@ namespace hc::operations
             bool readOnly_ = false, excluded_ = false, recursiveRemoval_ = false;
             // Returned by the bulk tree removal: list it through the provider.
             bool classicTraversal_ = false;
+            bool verifiedReadAhead_ = false, readAheadAttempted_ = false;
             std::size_t root_ = 0;
             std::shared_ptr<const Error> preparationError_;
         };
@@ -162,6 +164,55 @@ namespace hc::operations
             bool closing_ = false;
         };
         CopyExecutor& CopyWorkers() { static CopyExecutor Workers; return Workers; }
+        // Only the coordinator queues streams. A copy worker claims its exact
+        // source snapshot after resolving conflicts. No speculative open writes.
+        class SourceReadWindow
+        {
+        public:
+            using Read = Task<std::shared_ptr<IReadStream>>;
+            static constexpr std::size_t Capacity = 8;
+            void ObservePause(std::stop_token Signal)
+            {
+                if (pauseSignal_ == Signal) return;
+                pauseSignal_ = std::move(Signal);
+                pauseCallback_.emplace(pauseSignal_, [this] { Clear(); });
+            }
+            void Queue(const OperationSource& Source, OperationContext Context)
+            {
+                Context.denyConcurrentMutation_ = true;
+                Context.workerRead_ = false;
+                Context.expectedWriteBytes_ = Source.entry_.size_;
+                // Only the coordinator adds entries. Worker consumption and pause
+                // cleanup may proceed while the provider opens the source.
+                { std::lock_guard Lock(mutex_); if (pending_.size() >= Capacity || pauseSignal_.stop_requested()) return; }
+                try {
+                    auto Opened = Source.reader_->OpenRead(Source.entry_.id_, std::move(Context));
+                    std::lock_guard Lock(mutex_);
+                    if (!pauseSignal_.stop_requested()) pending_.emplace_back(Source.entry_.id_, std::move(Opened));
+                }
+                catch (const std::system_error&) { /* Thread unavailable: open normally when consumed. */ }
+            }
+            Read Take(const ResourceId& Id)
+            {
+                std::lock_guard Lock(mutex_);
+                const auto It = std::ranges::find_if(pending_, [&](const auto& Entry) { return Entry.first == Id; });
+                if (It == pending_.end()) return {};
+                auto Stream = std::move(It->second);
+                pending_.erase(It);
+                return Stream;
+            }
+            void Clear()
+            {
+                decltype(pending_) Pending;
+                { std::lock_guard Lock(mutex_); Pending.swap(pending_); }
+                for (auto& Entry : Pending) if (Entry.second.valid()) Entry.second.wait();
+            }
+        private:
+            std::mutex mutex_;
+            std::vector<std::pair<ResourceId, Read>> pending_;
+            std::stop_token pauseSignal_;
+            std::optional<std::stop_callback<std::function<void()>>> pauseCallback_;
+        };
         class FileTask final : public IJobTask
         {
         public:
@@ -203,6 +254,14 @@ namespace hc::operations
                 if (production_.valid()) production_.wait();
             }
             JobStep Advance(JobStepContext Context) override
+            {
+                auto Step = advance(std::move(Context));
+                if (sourceReads_ && ownsMutationScope_ && (Step.interaction_ || Step.retry_ || IsTerminal(Step.next_)))
+                    sourceReads_->Clear();
+                return Step;
+            }
+        private:
+            JobStep advance(JobStepContext Context)
             {
                 if (Context.operation_.allowReadOnlyRemoval_) { request_.readOnly_ = ReadOnlyPolicy::Allow; allowAllReadOnly_ = true; }
                 // Advance already belongs to a coordinator/continuation worker.
@@ -267,6 +326,10 @@ namespace hc::operations
                 if (phase_ == Phase::Conflict) return conflict(Context);
                 if (phase_ == Phase::AutomaticName) return automaticName(Context);
                 if (phase_ == Phase::Begin) {
+                    if (sourceReads_ && ownsMutationScope_ && !Context.committing_ && !Context.answer_) {
+                        sourceReads_->ObservePause(Context.pauseSignal_);
+                        queueSourceReads(Context.operation_);
+                    }
                     if (!copies_.empty() || canStartCopies(Context.operation_)) return advanceCopies(std::move(Context));
                     return begin(Context.operation_);
                 }
@@ -294,7 +357,13 @@ namespace hc::operations
                     }
                     if (!producer_)
                     {
-                        auto Opened = current().source_.reader_->OpenRead(current().source_.entry_.id_, ReadContext).get();
+                        auto Prepared = sourceReads_ ? sourceReads_->Take(current().source_.entry_.id_) : SourceReadWindow::Read{};
+                        const bool HadRead = Prepared.valid();
+                        auto Opened = HadRead ? Prepared.get() : current().source_.reader_->OpenRead(current().source_.entry_.id_, ReadContext).get();
+                        if (HadRead && !Opened.HasValue()) {
+                            if (const auto Stop = ReadContext.Check(current().source_.reader_->Id())) Opened = *Stop;
+                            else Opened = current().source_.reader_->OpenRead(current().source_.entry_.id_, ReadContext).get();
+                        }
                         if (!Opened.HasValue()) {
                             if (Opened.Failure().retryable_ && Context.retryAttempt_ < 3)
                             { JobStep Step{JobState::Running}; Step.error_ = Opened.Failure(); Step.retry_ = true; return Step; }
@@ -441,6 +510,7 @@ namespace hc::operations
                 if (!Context.committing_) return failed({ErrorCategory::Internal, "commit-boundary-required"});
                 return commit(Context.operation_);
             }
+        public:
             CompletedEffects TakeCompletedEffects() override
             {
                 // Tree removal and transfer run ahead of the steps. A cancelled,
@@ -469,6 +539,7 @@ namespace hc::operations
             }
             std::vector<Error> Finalize(JobState State) override
             {
+                if (sourceReads_ && ownsMutationScope_) sourceReads_->Clear();
                 if (tree_) { tree_->Release(); tree_.reset(); }
                 if (transfer_) { transfer_->Release(); transfer_.reset(); }
                 transferStop_.request_stop();
@@ -524,6 +595,8 @@ namespace hc::operations
             struct PreparedCopy
             {
                 std::unique_ptr<FileTask> task_;
+                std::string plannedDestinationKey_;
+                bool answered_ = false;
                 std::future<JobStep> work_;
                 std::optional<JobStep> barrier_;
                 std::atomic<std::uint64_t> bytes_{0};
@@ -535,10 +608,26 @@ namespace hc::operations
             {
                 if (Index >= items_.size()) return false;
                 const auto& Item = items_[Index];
+                const bool Remote = Item.source_.entry_.locator_.kind_ == LocatorKind::Smb || Item.destination_.kind_ == LocatorKind::Smb;
+                const auto Limit = Remote ? 16u * 1024 * 1024 : 1024u * 1024;
                 return !Item.excluded_ && !Item.preparationError_ && !Item.source_.entry_.directory_ && !Item.removeDirectory_
-                    && Item.source_.entry_.locator_.kind_ == LocatorKind::Local && Item.destination_.kind_ == LocatorKind::Local
-                    && Item.source_.entry_.size_ <= 1024 * 1024 && !(Item.source_.entry_.attributes_ & (0x400 | 0x200 | 0x800 | 0x4000))
+                    && NativeFileKind(Item.source_.entry_.locator_.kind_) && NativeFileKind(Item.destination_.kind_)
+                    && Item.source_.entry_.size_ <= Limit && !(Item.source_.entry_.attributes_ & (0x400 | 0x200 | 0x800 | 0x4000))
                     && Item.source_.reader_->SupportsParallelReads();
+            }
+            void queueSourceReads(const OperationContext& Context)
+            {
+                const auto Limit = Context.fileCopyWorkers_ ? std::min(SourceReadWindow::Capacity, Context.fileCopyWorkers_) : SourceReadWindow::Capacity;
+                const auto End = index_ + std::min(Limit, items_.size() - index_);
+                for (auto I = index_; I < End; ++I) {
+                    auto& Item = items_[I];
+                    if (!Item.source_.entry_.directory_ && !copyCandidate(I)) break;
+                    if (Item.readAheadAttempted_ || !Item.verifiedReadAhead_ || !Item.source_.entry_.id_.revision_
+                        || Item.source_.entry_.attributes_ != 0x20 || Item.source_.entry_.directory_
+                        || !sourceReadDirectories_.contains({Item.root_, NativeKey(Parent(Item.destination_).root_)})) continue;
+                    Item.readAheadAttempted_ = true;
+                    sourceReads_->Queue(Item.source_, Context);
+                }
             }
             bool canStartCopies(const OperationContext& Context)
             {
@@ -547,8 +636,10 @@ namespace hc::operations
                     || Context.writeCheckpoint_ || Context.workload_.IsAutomatic()
                     || !request_.destinationWriter_->SupportsParallelCopies() || !copyCandidate(index_)) return false;
                 if (!copyWorkers_) {
+                    // A short redirected or UNC selection can already spend seconds on round trips.
+                    const bool Remote = current().source_.entry_.locator_.kind_ == LocatorKind::Smb || current().destination_.kind_ == LocatorKind::Smb;
                     copyWorkers_ = std::min<std::size_t>(8, Context.fileCopyWorkers_ ? Context.fileCopyWorkers_
-                        : items_.size() >= 32 ? request_.destinationWriter_->PreferredCopyWorkers(current().source_.entry_.locator_, current().destination_) : 1);
+                        : Remote || items_.size() >= 32 ? request_.destinationWriter_->PreferredCopyWorkers(current().source_.entry_.locator_, current().destination_) : 1);
                 }
                 return copyWorkers_ > 1 && (copyCandidate(index_ + 1) || !copies_.empty());
             }
@@ -577,6 +668,9 @@ namespace hc::operations
                 // All file workers belong to one job. Reuse its parent pins and
                 // capability lifetime rather than recreating/clearing per file.
                 Task->mutationScope_ = mutationScope_; Task->ownsMutationScope_ = false;
+                Task->sourceReads_ = sourceReads_;
+                Copy.plannedDestinationKey_ = NativeKey(Item.destination_.root_);
+                Copy.answered_ = false;
                 Copy.task_ = std::move(Task); Copy.barrier_.reset(); Copy.recheck_ = false;
             }
             static void copyBytes(PreparedCopy& Copy, std::uint64_t Bytes)
@@ -602,6 +696,10 @@ namespace hc::operations
                             }
                             auto Step = Copy.task_->Advance(Context); Context.answer_.reset();
                             if (Step.progress_) copyBytes(Copy, Step.progress_->bytesDone_);
+                            if (Step.next_ == JobState::Committing && Copy.task_->phase_ == Phase::Commit && Copy.task_->session_) {
+                                auto Prepared = Copy.task_->session_->PreparePublication(Context.operation_, false);
+                                if (!Prepared.HasValue()) return Copy.task_->failed(Prepared.Failure());
+                            }
                             if (Step.next_ == JobState::Committing || Step.next_ == JobState::WaitingForUser
                                 || IsTerminal(Step.next_) || Step.item_ || Step.retry_ || Step.deferFor_.count()) return Step;
                         }
@@ -619,11 +717,14 @@ namespace hc::operations
             JobStep advanceCopies(JobStepContext Context)
             {
                 // The coordinator alone consumes answers and enters commit.
-                if (!Context.committing_ && !Context.answer_) {
+                // A conflict answer can make the front worker choose a new name.
+                // Drain it before admitting new copies. Previously queued copies recheck below.
+                if (!Context.committing_ && !Context.answer_ && (copies_.empty() || !copies_.front()->answered_)) {
                     while (copies_.size() < copyWorkers_ && copyCandidate(index_ + copies_.size())) {
                         const auto& Item = items_[index_ + copies_.size()];
+                        const auto DestinationKey = NativeKey(Item.destination_.root_);
                         if (std::any_of(copies_.begin(), copies_.end(), [&](const auto& Pending) {
-                            return NativeKey(Pending->task_->items_.front().destination_.root_) == NativeKey(Item.destination_.root_);
+                            return Pending->plannedDestinationKey_ == DestinationKey;
                         })) break;
                         auto Copy = std::make_unique<PreparedCopy>();
                         auto Slots = CopySlots.load();
@@ -662,7 +763,10 @@ namespace hc::operations
                     // A user's rename/replace can change the meaning of another
                     // queued path, including aliases. Inspect those paths again
                     // after this file completes, before showing their questions.
-                    if (Context.answer_) for (auto& Pending : copies_) if (Pending.get() != &Copy) Pending->recheck_ = true;
+                    if (Context.answer_) {
+                        Copy.answered_ = true;
+                        for (auto& Pending : copies_) if (Pending.get() != &Copy) Pending->recheck_ = true;
+                    }
                 }
                 if (IsTerminal(Barrier.next_) && Barrier.next_ != JobState::Completed) {
                     const auto Error = Barrier.error_.value_or(storage::Error{ErrorCategory::Internal, "copy-worker-failed"});
@@ -874,6 +978,7 @@ namespace hc::operations
             }
             JobStep done(ItemOutcome::Status Status = ItemOutcome::Status::Completed, bool Destination = false, bool Removed = false)
             {
+                if (sourceReads_) sourceReads_->Take(current().source_.entry_.id_);
                 if (request_.operation_ == FileOperation::Delete && Status == ItemOutcome::Status::Completed && Removed)
                     deletedFiles_ += current().source_.entry_.directory_ ? (request_.deleteMode_ == DeleteMode::Recycle ? rootFiles_[current().root_] : 0) : 1;
                 auto Step = progress();
@@ -1086,7 +1191,9 @@ namespace hc::operations
                         if (!SafeName(Entry.name_)) return failed({ErrorCategory::InvalidRequest, "unsafe-entry-name"});
                         PlannedItem Item{{Entry, enumerating_.source_.reader_, enumerating_.source_.writer_},
                             Child(request_.preservePaths_ ? enumerating_.destination_ : request_.destination_, Entry.name_), enumerating_.depth_ + 1};
-                        Item.freshMetadata_ = Context.freshEnumerationMetadata_ && Item.source_.reader_->SupportsFreshEnumerationMetadata();
+                        Item.verifiedReadAhead_ = Context.freshEnumerationMetadata_ && Page.Value().verifiedChildMetadata_;
+                        Item.freshMetadata_ = Context.freshEnumerationMetadata_ && (Item.source_.reader_->SupportsFreshEnumerationMetadata()
+                            || (request_.operation_ == FileOperation::Copy && Page.Value().verifiedChildMetadata_));
                         Item.root_ = enumerating_.root_; pending_.push_back(std::move(Item));
                     }
                     if (Page.Value().end_) cursor_.reset();
@@ -1478,10 +1585,13 @@ namespace hc::operations
             }
             bool transferAllowed(const PlannedItem& Item, const OperationContext& Context) const
             {
-                // Whole local folders with the default copy semantics. Durable
+                // Whole folders with the default copy semantics. Durable
                 // recovery, filters, limits, verification and copy extras keep the
                 // per-item path and its per-file commit boundaries; so do folders
                 // the engine already returned.
+                if (Item.destination_.kind_ == LocatorKind::Smb && (Item.depth_ || request_.operation_ != FileOperation::Copy
+                    || Context.flushFileContents_ || Context.pinPublishedFile_ || !Context.directContent_
+                    || request_.maxEntries_ != std::numeric_limits<std::size_t>::max())) return false;
                 return Context.fileTransferWorkers_ != 1 && !Context.writeCheckpoint_ && !Context.workload_.IsAutomatic()
                     && (request_.operation_ == FileOperation::Copy || request_.operation_ == FileOperation::Move)
                     && Item.source_.entry_.directory_ && !Item.preparationError_ && !Item.classicTraversal_
@@ -1841,6 +1951,18 @@ namespace hc::operations
                 {
                     const auto Made = request_.destinationWriter_->MakeDirectory(current().destination_, Context);
                     if (!Made.HasValue()) return failed(Made.Failure());
+                    const auto& Item = current();
+                    if (request_.operation_ == FileOperation::Copy && request_.preservePaths_
+                        && !Context.workload_.IsAutomatic() && !Context.writeCheckpoint_ && !request_.bytesPerSecondLimit_
+                        && !request_.copyOptions_.streams_ && !request_.copyOptions_.acl_ && request_.includePattern_ == "*") {
+                        const bool Eligible = Item.depth_ == 0
+                            ? request_.destinationWriter_->SupportsSourceReadAhead(*Item.source_.reader_, Item.source_.entry_.locator_, Item.destination_)
+                            : sourceReadDirectories_.contains({Item.root_, NativeKey(Parent(Item.destination_).root_)});
+                        if (Eligible) {
+                            if (!sourceReads_) sourceReads_ = std::make_shared<SourceReadWindow>();
+                            sourceReadDirectories_.emplace(Item.root_, NativeKey(Item.destination_.root_));
+                        }
+                    }
                     return done(ItemOutcome::Status::Completed, true);
                 }
                 if (phase_ == Phase::Rename)
@@ -2011,6 +2133,8 @@ namespace hc::operations
             std::deque<std::unique_ptr<PreparedCopy>> copies_;
             std::stop_source copyStop_;
             std::size_t copyWorkers_ = 0;
+            std::shared_ptr<SourceReadWindow> sourceReads_;
+            std::set<std::pair<std::size_t, std::string>> sourceReadDirectories_;
             Phase phase_ = Phase::Preparing;
             Phase resumePhase_ = Phase::Remove;
             Error lockError_;
@@ -2182,7 +2306,7 @@ namespace hc::operations
             if (offset_ == request_.selection_->Count()) return JobStep{JobState::Completed};
             const auto SelectedReader = request_.selection_->Provider();
             const bool CopyPage = request_.operation_ == FileOperation::Copy && Context.operation_.fileCopyWorkers_ != 1
-                && request_.selectionRoot_.kind_ == LocatorKind::Local && request_.destination_.kind_ == LocatorKind::Local
+                && NativeFileKind(request_.selectionRoot_.kind_) && NativeFileKind(request_.destination_.kind_)
                 && request_.maxBytes_ == std::numeric_limits<std::uint64_t>::max() && !request_.bytesPerSecondLimit_
                 && !request_.copyOptions_.streams_ && !Context.operation_.writeCheckpoint_ && !Context.operation_.workload_.IsAutomatic()
                 && SelectedReader->SupportsParallelReads() && request_.destinationWriter_->SupportsParallelCopies();

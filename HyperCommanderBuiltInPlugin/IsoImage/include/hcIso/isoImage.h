@@ -39,7 +39,7 @@ typedef struct HcIsoOptions {
     void* context_;
 } HcIsoOptions;
 
-enum HcIsoBuildFlags { HC_ISO_SHARE_DUPLICATE_CONTENTS = 1, HC_ISO_EXPLICIT_TIMESTAMP = 2 };
+enum HcIsoBuildFlags { HC_ISO_SHARE_DUPLICATE_CONTENTS = 1, HC_ISO_EXPLICIT_TIMESTAMP = 2, HC_ISO_VERIFY_STRUCTURE_ONLY = 4 };
 typedef struct HcIsoOptionsEx {
     uint32_t structSize_;
     uint32_t version_; // 1; unknown versions and flags are rejected.

@@ -157,14 +157,14 @@ Result<Unit> RevalidateCreator(const CreatorRuntime& Creator, OperationContext C
     return Unit{};
 }
 Result<PreparedArchiveOutput> CreatePreparedArchive(const CreatorRuntime& Creator, const ArchiveCreateSettings& Settings,
-    std::string Format, const OutputPlan& Plan, const QString& Input, const QString& Temporary, OperationContext Context)
+    std::string Format, const OutputPlan& Plan, const QString& Input, const QString& Temporary, OperationContext Context, std::shared_ptr<IArchiveBackend> Backend)
 {
     auto SettingsLease = AcquireCreatorSettings(Creator, Context); if (!SettingsLease.HasValue()) return SettingsLease.Failure();
     auto Checked = RevalidateCreator(Creator, Context); if (!Checked.HasValue()) return Checked.Failure();
     if (Creator.descriptor_.kind_ == ArchiveCreatorKind::BuiltinIso) {
         const auto& Value = std::get<IsoCreateSettings>(Settings); iso::RewriteRequest Request;
         Request.profile_ = uint32_t(Value.profile_); Request.volumeLabel_ = Value.volumeLabel_; Request.maxImageBytes_ = Value.maxImageBytes_;
-        Request.shareDuplicateContents_ = Value.shareDuplicateContents_; Request.timestampUtc_ = Value.timestampUtc_; Request.explicitTimestamp_ = true;
+        Request.shareDuplicateContents_ = Value.shareDuplicateContents_; Request.timestampUtc_ = Value.timestampUtc_; Request.explicitTimestamp_ = true; Request.verifyContents_ = Value.verifyContents_;
         Request.temporaryBase_ = Temporary;
         for (size_t Index = 0; Index < Plan.entries_.size(); ++Index) {
             const auto& Entry = Plan.entries_[Index];
@@ -192,7 +192,17 @@ Result<PreparedArchiveOutput> CreatePreparedArchive(const CreatorRuntime& Creato
             const auto& Value = std::get<SevenZipCreateSettings>(Settings); Update.encrypt_ = Value.encrypt_;
             Update.creation_ = ArchiveCreationOptions{Value.level_, Value.solid_ != ArchiveSolidMode::Off, Value};
         } else Update.createNew_ = true;
-        auto Backend = MakeApprovedWcxBackend(Creator.options_); auto Written = Backend->Update(std::move(Update), Context); if (!Written.HasValue()) return Written.Failure();
+        if (Creator.descriptor_.kind_ == ArchiveCreatorKind::BuiltinSevenZip && !Update.encrypt_
+            && Creator.options_.approval_.granted_.contains(Permission::WriteContent)
+            && Creator.options_.manifestPath_ == BuiltinSevenZipOptions().manifestPath_) {
+            const auto Written = CreateBuiltinSevenZipArchive(Update, Context);
+            if (Written.HasValue()) return PreparedArchiveOutput{Target, {}};
+            // A package on a junction or traverse-only install can use its isolated host.
+            if (Written.Failure().code_ != "sevenzip-native-package-pin" && Written.Failure().code_ != "sevenzip-native-package-path"
+                && Written.Failure().code_ != "sevenzip-native-package-load") return Written.Failure();
+        }
+        if (!Backend) Backend = MakeApprovedWcxBackend(Creator.options_);
+        auto Written = Backend->Update(std::move(Update), Context); if (!Written.HasValue()) return Written.Failure();
         if (Creator.descriptor_.kind_ == ArchiveCreatorKind::Wcx) { auto Verified = VerifyWcx(Backend, Target, Plan, Plan.inputDirectory_.isEmpty() ? Input : Plan.inputDirectory_, Temporary, Context); if (!Verified.HasValue()) return Verified.Failure(); }
     }
     return PreparedArchiveOutput{Target, {}};

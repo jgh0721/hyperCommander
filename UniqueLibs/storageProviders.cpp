@@ -89,14 +89,17 @@ namespace hc::storage
                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
             if (Handle == INVALID_HANDLE_VALUE) return false;
             BY_HANDLE_FILE_INFORMATION Info{};
-            const bool Success = GetFileInformationByHandle(Handle, &Info);
+            const bool RedirectedSnapshot = !ActualInfo && native::IsRedirectedPath(Path)
+                && native::ReadRedirectedBasicAndSize(Handle, Info);
+            const bool Success = RedirectedSnapshot || GetFileInformationByHandle(Handle, &Info);
             const auto Code = GetLastError();
             if (ReparseTag) {
                 FILE_ATTRIBUTE_TAG_INFO Tag{};
                 *ReparseTag = Success && (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
                     && GetFileInformationByHandleEx(Handle, FileAttributeTagInfo, &Tag, sizeof(Tag)) ? Tag.ReparseTag : 0;
             }
-            if (Success && ActualRevision) *ActualRevision = native::HandleRevision(Handle, Info, Path);
+            if (Success && ActualRevision) *ActualRevision = RedirectedSnapshot
+                ? native::RedirectedRevision(Info) : native::HandleRevision(Handle, Info, Path);
             CloseHandle(Handle);
             if (!Success) { SetLastError(Code); return false; }
             Data = {Info.dwFileAttributes, Info.ftCreationTime, Info.ftLastAccessTime, Info.ftLastWriteTime, Info.nFileSizeHigh, Info.nFileSizeLow};
@@ -257,8 +260,8 @@ namespace hc::storage
         class SnapshotCursor final : public IEntryCursor
         {
         public:
-            SnapshotCursor(std::vector<EntrySnapshot> Entries, ProviderId Provider)
-                : entries_(std::move(Entries)), provider_(std::move(Provider)) {}
+            SnapshotCursor(std::vector<EntrySnapshot> Entries, ProviderId Provider, bool VerifiedChildMetadata = false)
+                : entries_(std::move(Entries)), provider_(std::move(Provider)), verifiedChildMetadata_(VerifiedChildMetadata) {}
             Task<EntryPage> Next(std::size_t MaxItems, OperationContext Context) override
             {
                 if (const auto Failure = Context.Check(provider_)) return Ready<EntryPage>(*Failure);
@@ -268,17 +271,21 @@ namespace hc::storage
                 Page.entries_.assign(entries_.begin() + offset_, entries_.begin() + offset_ + Count);
                 offset_ += Count;
                 Page.end_ = offset_ == entries_.size();
+                Page.verifiedChildMetadata_ = verifiedChildMetadata_;
                 return Ready<EntryPage>(std::move(Page));
             }
         private:
             std::vector<EntrySnapshot> entries_;
             ProviderId provider_;
             std::size_t offset_ = 0;
+            bool verifiedChildMetadata_ = false;
         };
         struct FileState
         {
             HANDLE handle_ = INVALID_HANDLE_VALUE;
             std::mutex mutex_;
+            std::optional<std::uint64_t> pinnedSize_;
+            std::uint64_t position_ = 0;
             ProviderId provider_;
             ~FileState() { if (handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_); }
         };
@@ -296,6 +303,7 @@ namespace hc::storage
                     const auto Count = (std::min)({MaxBytes, Context.maxReadBytes_,
                         std::clamp<std::size_t>(Context.nativeCopyBufferBytes_, 1, 8 * 1024 * 1024)});
                     ReadChunk Chunk;
+                    if (State->pinnedSize_ && State->position_ == *State->pinnedSize_) { Chunk.eof_ = true; return Chunk; }
                     { operations::OperationMetric Timing("native.read.allocate", Count, true); Chunk.bytes_.resize(Count); }
                     DWORD Read = 0;
                     { operations::OperationMetric Timing("native.read.io", 0, true);
@@ -303,7 +311,8 @@ namespace hc::storage
                             return NativeError(GetLastError(), State->provider_);
                         Timing.SetBytes(Read); }
                     Chunk.bytes_.resize(Read);
-                    Chunk.eof_ = Read == 0;
+                    State->position_ += Read;
+                    Chunk.eof_ = Read == 0 || (State->pinnedSize_ && State->position_ == *State->pinnedSize_);
                     return Chunk;
                 };
                 return Run<ReadChunk>(std::move(Work), Context.workerRead_);
@@ -318,6 +327,7 @@ namespace hc::storage
                     if (Offset > static_cast<std::uint64_t>(Size.QuadPart)) return Error{ErrorCategory::InvalidRequest, "seek-out-of-range", State->provider_};
                     Position.QuadPart = static_cast<LONGLONG>(Offset);
                     if (!SetFilePointerEx(State->handle_, Position, nullptr, FILE_BEGIN)) return NativeError(GetLastError(), State->provider_);
+                    State->position_ = Offset;
                     return Unit{};
                 });
             }
@@ -331,13 +341,13 @@ namespace hc::storage
             explicit NativeProvider(LocatorKind Kind) : kind_(Kind), id_{Kind == LocatorKind::Smb ? "smb" : "local"}, session_(Session()) {}
             ProviderId Id() const override { return id_; }
             bool SupportsFreshEnumerationMetadata() const override { return kind_ == LocatorKind::Local; }
-            bool SupportsParallelReads() const override { return kind_ == LocatorKind::Local; }
+            bool SupportsParallelReads() const override { return true; }
             Task<CopyExtras> CopyExtrasAt(Locator At, OperationContext Context) override {
                 return Run<CopyExtras>([At = std::move(At), Context, Id = id_, Kind = kind_]() -> Result<CopyExtras> {
                     if (const auto Failure = Context.Check(Id)) return *Failure;
                     if (At.kind_ != Kind || At.root_.empty() || !At.nesting_.empty()) return Error{ErrorCategory::InvalidRequest, "locator-kind", Id};
                     return native::CopyExtrasAt(FilePath(At.root_), Context);
-                }, Context.workerRead_ && kind_ == LocatorKind::Local);
+                }, Context.workerRead_);
             }
             Result<EntrySnapshot> BindSnapshot(EntrySnapshot Entry) const {
                 if (Entry.locator_.kind_ != kind_ || !Entry.locator_.nesting_.empty()) return Error{ErrorCategory::InvalidRequest, "native-snapshot-kind"};
@@ -383,6 +393,7 @@ namespace hc::storage
                     auto Server = QDir::toNativeSeparators(QString::fromStdString(At.root_));
                     while (Server.size() > 2 && Server.endsWith('\\')) Server.chop(1);
                     std::vector<EntrySnapshot> Entries;
+                    bool VerifiedRedirectedChildren = false;
                     if (Kind == LocatorKind::Smb && Server.compare("\\\\tsclient", Qt::CaseInsensitive) == 0)
                     {
                         // RDP redirected devices are connected resources, not SMB
@@ -528,11 +539,13 @@ namespace hc::storage
                             } while (FindNextFileW(Handle, &Found));
                             const auto Code = GetLastError();
                             if (Code != ERROR_NO_MORE_FILES) return DirectoryError(Code, Id, At.root_, "next-entry", &Recovery);
+                            VerifiedRedirectedChildren = Context.freshEnumerationMetadata_ && !Context.allowUnavailableChildMetadata_
+                                && native::IsRedirectedPath(Path);
                         }
                     }
                     if (const auto Failure = Context.Check(Id)) return *Failure;
-                    return std::unique_ptr<IEntryCursor>(new SnapshotCursor(std::move(Entries), Id));
-                }, Context.workerRead_ && kind_ == LocatorKind::Local);
+                    return std::unique_ptr<IEntryCursor>(new SnapshotCursor(std::move(Entries), Id, VerifiedRedirectedChildren));
+                }, Context.workerRead_);
             }
             Task<EntrySnapshot> Stat(ResourceId Resource, OperationContext Context) override
             {
@@ -545,19 +558,28 @@ namespace hc::storage
                     WIN32_FILE_ATTRIBUTE_DATA Data{};
                     ResourceRevision ActualRevision;
                     BY_HANDLE_FILE_INFORMATION Info{};
-                    if (!ReadAttributes(FilePath(At.Value().root_), Data, &ActualRevision, &Info)) return NativeError(GetLastError(), Id);
+                    // A redirected revision is fully described by basic information and size.
+                    // Legacy revisions still need the full handle snapshot for the fallback below.
+                    const bool RedirectedRevision = Resource.revision_ && Resource.revision_->token_.starts_with("rdp:");
+                    if (!ReadAttributes(FilePath(At.Value().root_), Data, &ActualRevision, RedirectedRevision ? nullptr : &Info))
+                        return NativeError(GetLastError(), Id);
                     auto Value = Entry(Id, Prefix, At.Value(), QFileInfo(QString::fromUtf8(At.Value().root_)).fileName().toStdString(), Data);
                     Value.id_.revision_ = std::move(ActualRevision);
                     if (Resource.revision_ && *Resource.revision_ != *Value.id_.revision_
-                        && !native::MatchesRevision(*Resource.revision_, Info)) return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource, false, "refresh"};
+                        && (RedirectedRevision || !native::MatchesRevision(*Resource.revision_, Info)))
+                        return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource, false, "refresh"};
                     return Value;
-                }, Context.workerRead_ && kind_ == LocatorKind::Local);
+                }, Context.workerRead_);
             }
             Task<std::optional<ContentProducer>> PrepareContent(ResourceId Resource, OperationContext Context) override
             {
                 using Prepared = std::optional<ContentProducer>;
-                if (kind_ != LocatorKind::Local || Context.workload_.IsAutomatic() || !Resource.revision_) return Ready<Prepared>(Prepared{});
+                if ((kind_ != LocatorKind::Local && kind_ != LocatorKind::Smb) || Context.workload_.IsAutomatic() || !Resource.revision_) return Ready<Prepared>(Prepared{});
                 if (Context.expectedWriteBytes_ && *Context.expectedWriteBytes_ <= 1024 * 1024) return Ready<Prepared>(Prepared{});
+                // Redirected snapshots use the streaming reader below. Decline before
+                // a remote Stat merely to rediscover the transport. OpenRead still
+                // checks the source revision on its pinned handle.
+                if (Resource.revision_->token_.starts_with("rdp:")) return Ready<Prepared>(Prepared{});
                 // Some product targets use an older NTDDI header guard. The flag
                 // itself is available at runtime starting with Windows 10 19041.
                 static const bool CopyAvailable = [] {
@@ -570,7 +592,7 @@ namespace hc::storage
                 auto Entry = Stat(Resource, Context).get(); if (!Entry.HasValue()) return Ready<Prepared>(Entry.Failure());
                 // A single-buffer transfer avoids CopyFile2 setup and a second
                 // temporary file. Cold small/mixed trials favour this route.
-                if (Entry.Value().size_ <= 1024 * 1024) return Ready<Prepared>(Prepared{});
+                if (Entry.Value().size_ <= 1024 * 1024 || native::IsRedirectedPath(FilePath(Entry.Value().locator_.root_))) return Ready<Prepared>(Prepared{});
                 constexpr DWORD Special = FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_SPARSE_FILE | FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_COMPRESSED;
                 if (Entry.Value().directory_ || (Entry.Value().attributes_ & Special)) return Ready<Prepared>(Prepared{});
                 Context.denyConcurrentMutation_ = true;
@@ -582,8 +604,8 @@ namespace hc::storage
                     COPYFILE2_EXTENDED_PARAMETERS Parameters{}; Parameters.dwSize = sizeof(Parameters);
                     constexpr DWORD SkipAlternateStreams = 0x00008000;
                     Parameters.dwCopyFlags = COPY_FILE_FAIL_IF_EXISTS | SkipAlternateStreams;
-                    struct CallbackState { OperationContext* context_; const ResourceRevision* revision_; std::atomic<bool> changed_ = false; };
-                    CallbackState Callback{&Context, &Revision};
+                    struct CallbackState { OperationContext* context_; const ResourceRevision* revision_; const std::wstring* path_; std::atomic<bool> changed_ = false; };
+                    CallbackState Callback{&Context, &Revision, &Path};
                     Parameters.pvCallbackContext = &Callback;
                     Parameters.pProgressRoutine = [](const COPYFILE2_MESSAGE* Message, void* Opaque) -> COPYFILE2_MESSAGE_ACTION {
                         auto& Callback = *static_cast<CallbackState*>(Opaque); const auto& Context = *Callback.context_;
@@ -591,7 +613,7 @@ namespace hc::storage
                             if (Message->Type == COPYFILE2_CALLBACK_STREAM_STARTED) {
                                 BY_HANDLE_FILE_INFORMATION Info{};
                                 if (!GetFileInformationByHandle(Message->Info.StreamStarted.hSourceFile, &Info)
-                                    || !native::MatchesRevision(*Callback.revision_, Info, Message->Info.StreamStarted.hSourceFile)) {
+                                    || !native::MatchesRevision(*Callback.revision_, Info, Message->Info.StreamStarted.hSourceFile, *Callback.path_)) {
                                     Callback.changed_ = true; return COPYFILE2_PROGRESS_CANCEL;
                                 }
                             }
@@ -624,15 +646,21 @@ namespace hc::storage
                     auto State = std::make_shared<FileState>();
                     State->provider_ = Id;
                     const DWORD Share = Context.denyConcurrentMutation_ ? FILE_SHARE_READ : FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-                    State->handle_ = CreateFileW(FilePath(At.Value().root_).c_str(), GENERIC_READ, Share,
+                    const auto Path = FilePath(At.Value().root_);
+                    State->handle_ = CreateFileW(Path.c_str(), GENERIC_READ, Share,
                         nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
                     if (State->handle_ == INVALID_HANDLE_VALUE) return NativeError(GetLastError(), Id);
                     BY_HANDLE_FILE_INFORMATION Info{};
-                    if (!GetFileInformationByHandle(State->handle_, &Info)) return NativeError(GetLastError(), Id);
-                    if (Resource.revision_ && !native::MatchesRevision(*Resource.revision_, Info, State->handle_, FilePath(At.Value().root_))) return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource};
+                    const bool RedirectedInfo = Context.denyConcurrentMutation_ && native::IsRedirectedPath(Path)
+                        && native::ReadRedirectedBasicAndSize(State->handle_, Info);
+                    if (!RedirectedInfo && !GetFileInformationByHandle(State->handle_, &Info)) return NativeError(GetLastError(), Id);
+                    // The copy handle denies writers. Its final data packet can carry EOF, saving a remote read per file.
+                    if (Context.denyConcurrentMutation_ && GetFileType(State->handle_) == FILE_TYPE_DISK)
+                        State->pinnedSize_ = (std::uint64_t(Info.nFileSizeHigh) << 32) | Info.nFileSizeLow;
+                    if (Resource.revision_ && !native::MatchesRevision(*Resource.revision_, Info, State->handle_, Path)) return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource};
                     if (const auto Failure = Context.Check(Id)) return *Failure;
                     return std::shared_ptr<IReadStream>(new FileStream(std::move(State)));
-                }, Context.workerRead_ && kind_ == LocatorKind::Local);
+                }, Context.workerRead_);
             }
         private:
             LocatorKind kind_;

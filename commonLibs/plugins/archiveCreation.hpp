@@ -64,6 +64,7 @@ namespace hc::plugins
         std::optional<std::uint64_t> solidBlockBytes_;
         bool encrypt_ = false;
         bool encryptHeaders_ = true;
+        bool verifyContents_ = true;
         bool operator==(const SevenZipCreateSettings&) const = default;
     };
     inline SevenZipMethod EffectiveSevenZipMethod(std::string_view Format, const SevenZipCreateSettings& Settings)
@@ -120,6 +121,7 @@ namespace hc::plugins
         std::int64_t timestampUtc_ = 946684800;
         // This bounds the physical output, including metadata and alignment.
         std::uint64_t maxImageBytes_ = 128ull * 1024 * 1024 * 1024;
+        bool verifyContents_ = true;
         bool operator==(const IsoCreateSettings&) const = default;
     };
     // WCX/DOpus own their settings. Without a verified snapshot API they use

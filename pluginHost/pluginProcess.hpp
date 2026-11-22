@@ -37,7 +37,8 @@ namespace hc::plugins
     public:
         static storage::Result<std::unique_ptr<PluginProcess>> Start(const QString& Executable, const QString& ManifestPath,
             const PluginApproval& Approval, HostLimits Limits = {}, storage::OperationContext Context = {},
-            const QString& DefaultIniPath = {}, const QJsonObject& ImageArchiveEndpoint = {});
+            const QString& DefaultIniPath = {}, const QJsonObject& ImageArchiveEndpoint = {},
+            const std::optional<QString>& ConfiguredArchiveBinary = {});
         ~PluginProcess();
         storage::Result<QJsonObject> Probe(storage::OperationContext Context = {});
         storage::Result<QJsonObject> Ping(storage::OperationContext Context = {});

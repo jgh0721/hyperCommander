@@ -2,6 +2,7 @@
 #include "UniqueLibs/nativeFilePath.hpp"
 #include "Common/MyInitGuid.h"
 #include "commonLibs/plugins/archiveSelectionDigest.hpp"
+#include "commonLibs/storage/nativeTemporaryDirectory.hpp"
 #include <thread>
 #include "commonLibs/plugins/archiveVolumeNames.hpp"
 #include "7zip/Archive/IArchive.h"
@@ -10,6 +11,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QStorageInfo>
+#include "commonLibs/plugins/contentSha256.hpp"
+#include <QElapsedTimer>
 #include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QCryptographicHash>
@@ -88,7 +91,7 @@ struct State {
 };
 class Input final : public IInStream {
 public:
-    explicit Input(std::shared_ptr<State> State) : state_(std::move(State)) {}
+    explicit Input(std::shared_ptr<State> State, bool VerifyInput = false) : verifyInput_(VerifyInput), state_(std::move(State)) {}
     ~Input() { for (const auto& Part : parts_) CloseHandle(Part.handle_); }
     HC_COM_REFS;
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID Id, void** Value) noexcept override {
@@ -98,7 +101,7 @@ public:
     }
     bool Open(const QString& Path, bool Split = false, unsigned RequiredPart = 1) {
         auto Name = Path; unsigned Number = 1;
-        if (QDir::fromNativeSeparators(Path).startsWith("//")) readBuffer_.resize(1024 * 1024);
+        bufferRemoteReads_ = QDir::fromNativeSeparators(Path).startsWith("//");
         const auto Width = QFileInfo(Path).suffix().size();
         do {
             if (state_->Check() != S_OK) return false;
@@ -122,21 +125,24 @@ public:
             const auto Offset = position_ - bufferedAt_;
             const auto Count = UInt32(std::min<uint64_t>(Size, bufferedBytes_ - Offset));
             std::memcpy(Data, readBuffer_.constData() + Offset, Count);
-            position_ += Count;
-            if (Done) *Done = Count;
-            return S_OK;
+            return finishRead(Data, Count, Done);
         }
         for (const auto& Part : parts_) if (position_ >= Part.offset_ && position_ - Part.offset_ < Part.size_) {
             LARGE_INTEGER At{}; At.QuadPart = position_ - Part.offset_;
             // Coalesce adjacent small decoder reads over SMB. Random probes and
             // large requests go straight to the handle without speculative I/O.
-            const bool Buffer = position_ == lastReadEnd_ && Size < readBuffer_.size();
+            constexpr UInt32 BufferSize = 1024 * 1024;
+            const bool Buffer = bufferRemoteReads_ && position_ == lastReadEnd_ && Size < BufferSize;
+            if (Buffer && readBuffer_.isEmpty()) readBuffer_.resize(BufferSize);
             const auto Wanted = Buffer ? uint64_t(readBuffer_.size()) : uint64_t(Size);
             if (Buffer) bufferedBytes_ = 0;
             DWORD Count = 0;
-            if (!SetFilePointerEx(Part.handle_, At, nullptr, FILE_BEGIN) ||
-                !ReadFile(Part.handle_, Buffer ? readBuffer_.data() : Data, DWORD(std::min(Wanted, Part.size_ - At.QuadPart)), &Count, nullptr))
+            if (((lastReadHandle_ != Part.handle_ || lastReadEnd_ != position_) && !SetFilePointerEx(Part.handle_, At, nullptr, FILE_BEGIN)) ||
+                !ReadFile(Part.handle_, Buffer ? readBuffer_.data() : Data, DWORD(std::min(Wanted, Part.size_ - At.QuadPart)), &Count, nullptr)) {
+                lastReadHandle_ = INVALID_HANDLE_VALUE;
                 return HRESULT_FROM_WIN32(GetLastError());
+            }
+            lastReadHandle_ = Part.handle_;
             lastReadEnd_ = position_ + Count;
             if (Buffer) {
                 bufferedAt_ = position_;
@@ -144,7 +150,7 @@ public:
                 Count = std::min<DWORD>(Size, Count);
                 std::memcpy(Data, readBuffer_.constData(), Count);
             }
-            position_ += Count; if (Done) *Done = Count; return S_OK;
+            return finishRead(Data, Count, Done);
         }
         return E_FAIL;
     }
@@ -153,13 +159,59 @@ public:
         if (Origin > 2 || (Offset < 0 ? uint64_t(-(Offset + 1)) + 1 > Base : uint64_t(Offset) > INT64_MAX - Base)) return E_INVALIDARG;
         position_ = Base + Offset; if (Position) *Position = position_; return S_OK;
     }
+    bool TryCaptureVerificationBytes() {
+        try { captured_.resizeForOverwrite(qsizetype(size_)); return true; }
+        catch (const std::bad_alloc&) { return false; }
+    }
+    const QByteArray& CapturedBytes() const { return captured_; }
+    HRESULT FinishVerification(QByteArray& Digest) {
+        if (recorded_ < size_) {
+            const auto SeekCode = Seek(recorded_, 0, nullptr);
+            if (SeekCode != S_OK) return SeekCode;
+            QByteArray Buffer(1024 * 1024, Qt::Uninitialized);
+            while (recorded_ < size_) {
+                UInt32 Count = 0;
+                const auto Code = Read(Buffer.data(), UInt32(Buffer.size()), &Count);
+                if (Code != S_OK) return Code;
+                if (!Count) return E_FAIL;
+            }
+        }
+        Digest = size_ ? digest_ : QCryptographicHash::hash({}, QCryptographicHash::Sha256);
+        return S_OK;
+    }
+    void RestartProbe(std::shared_ptr<State> State) {
+        state_ = std::move(State);
+        position_ = 0;
+    }
     uint64_t Size() const { return size_; }
     uint64_t PartOffset(unsigned Number) const { return parts_.at(Number - 1).offset_; }
 private:
+    HRESULT finishRead(const void* Data, UInt32 Count, UInt32* Done) {
+        const auto End = position_ + Count;
+        // The pinned file is immutable. ZIP Store retries can revisit a prefix.
+        if (verifyInput_ && position_ <= recorded_ && End > recorded_) {
+            const auto* Start = static_cast<const char*>(Data) + (recorded_ - position_);
+            if (!captured_.isEmpty()) std::memcpy(captured_.data() + recorded_, Start, size_t(End - recorded_));
+            else if (!hash_.Add(Start, ULONG(End - recorded_))) return E_FAIL;
+            recorded_ = End;
+            if (recorded_ == size_ && captured_.isEmpty()) {
+                digest_ = hash_.Finish();
+                if (digest_.size() != 32) return E_FAIL;
+            }
+        }
+        position_ = End;
+        if (Done) *Done = Count;
+        return S_OK;
+    }
+    bool verifyInput_, bufferRemoteReads_ = false;
+    uint64_t recorded_ = 0;
+    ContentSha256 hash_;
+    QByteArray digest_, captured_;
     struct Part { HANDLE handle_; uint64_t offset_, size_; };
     std::vector<Part> parts_;
     QByteArray readBuffer_;
     uint64_t bufferedAt_ = 0, lastReadEnd_ = UINT64_MAX;
+    HANDLE lastReadHandle_ = INVALID_HANDLE_VALUE;
     DWORD bufferedBytes_ = 0;
     uint64_t size_ = 0, position_ = 0;
     std::shared_ptr<State> state_;
@@ -326,11 +378,14 @@ public:
         if (Size > limit_ - written_) return state_->Fail(Failure("7zip-output-size", ErrorCategory::BudgetExceeded));
         if (file_ && file_->write(static_cast<const char*>(Data), Size) != Size) return state_->Fail(Failure("7zip-output-write"));
         if (sink_) { auto Written = sink_({static_cast<const std::byte*>(Data),Size}); if (!Written.HasValue()) return state_->Fail(Written.Failure()); }
-        if (hashEnabled_) hash_.addData(QByteArrayView(static_cast<const char*>(Data), Size));
+        if (expectedBytes_ && Size && std::memcmp(expectedBytes_->constData() + written_, Data, Size) != 0)
+            return state_->Fail(Failure("7zip-input-output-digest"));
+        if (hashEnabled_ && !hash_.Add(Data, Size)) return state_->Fail(Failure("7zip-verify-hash"));
         written_ += Size; if (Done) *Done = Size; return state_->Check(written_);
     }
+    const QByteArray* expectedBytes_ = nullptr;
     uint64_t written_ = 0;
-    QCryptographicHash hash_{QCryptographicHash::Sha256};
+    ContentSha256 hash_;
 private:
     QFile* file_; uint64_t limit_; std::shared_ptr<State> state_; bool hashEnabled_; std::function<Result<Unit>(std::span<const std::byte>)> sink_;
 };
@@ -438,7 +493,7 @@ Result<Unit> PrepareNsisSizes(Archive& Value) {
     }
     return Unit{};
 }
-Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, OperationContext Context, unsigned FirstAttempt = 0) {
+Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, OperationContext Context, unsigned FirstAttempt = 0, const QString& GeneratedFormat = {}) {
     if (const auto Stop = Context.Check({"7zip"})) return *Stop;
     const auto SelectedPath = QString::fromStdString(Path);
     auto FilePath = SelectedPath;
@@ -469,9 +524,11 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
     // stored RAR/7z member inside a ZIP can be mistaken for the outer archive.
     // Then recognize the outer NSIS installer before scanning generic SFX
     // payloads: NSIS may itself contain an uncompressed 7z/ZIP member.
+    Com<Input> PinnedInput;
     const UInt64 StartOnly = 0;
-    for (unsigned Scan = 0; Scan < 3; ++Scan) for (UInt32 Index = 0; Index < Count; ++Index) {
+    for (unsigned Scan = 0; Scan < (GeneratedFormat.isEmpty() ? 3u : 1u); ++Scan) for (UInt32 Index = 0; Index < Count; ++Index) {
         Property Name, Id; if (Get(Index, NArchive::NHandlerPropID::kName, &Name) != S_OK || Get(Index, NArchive::NHandlerPropID::kClassID, &Id) != S_OK) return Failure("7zip-format-property");
+        if (!GeneratedFormat.isEmpty() && Name.Text().compare(GeneratedFormat, Qt::CaseInsensitive)) continue;
         if (!QStringList{"7z", "zip", "Rar", "Rar5", "Compound", "Cab", "Nsis"}.contains(Name.Text(), Qt::CaseInsensitive)) continue;
         if (Scan && ((Scan == 1) != (Name.Text().compare("Nsis", Qt::CaseInsensitive) == 0))) continue;
         if (Id.vt != VT_BSTR || SysStringByteLen(Id.bstrVal) != sizeof(GUID)) return Failure("7zip-format-guid");
@@ -479,7 +536,11 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
         Value->state_->volumeSet_ = Volume.kind_ != ArchiveVolumeKind::None; Value->state_->attempts_ = FirstAttempt;
         if (Redirected && Volume.kind_ != ArchiveVolumeKind::Numbered) Value->state_->selectedVolume_ = QFileInfo(SelectedPath).fileName();
         Value->callback_->SetFormat(Value->format_, Value->format_ == "zip" && IsZipx(FilePath));
-        if (!Value->input_->Open(FilePath, Volume.kind_ == ArchiveVolumeKind::Numbered, Volume.number_))
+        if (PinnedInput.value_) {
+            Value->input_.value_->Release();
+            Value->input_.value_ = std::exchange(PinnedInput.value_, nullptr);
+            Value->input_->RestartProbe(Value->state_);
+        } else if (!Value->input_->Open(FilePath, Volume.kind_ == ArchiveVolumeKind::Numbered, Volume.number_))
             return Value->state_->error_.value_or(Failure("7zip-volume-unavailable:" + QFileInfo(FilePath).fileName().toStdString(), ErrorCategory::NotFound));
         GUID Class{}; memcpy(&Class, Id.bstrVal, sizeof(Class));
         if (Create(&Class, &IID_IInArchive, reinterpret_cast<void**>(&Value->archive_.value_)) != S_OK) continue;
@@ -487,11 +548,17 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
         if (Code != S_OK && Value->state_->attempts_ > FirstAttempt && Value->state_->attempts_ < 104
             && (!Value->state_->error_ || Value->state_->error_->category_ == ErrorCategory::AccessDenied)) {
             const auto Attempt = Value->state_->attempts_; Value.reset();
-            return Open(Module, SelectedPath.toStdString(), Context, Attempt);
+            return Open(Module, SelectedPath.toStdString(), Context, Attempt, GeneratedFormat);
         }
         if (Value->state_->error_) return Value->state_->Result(Code);
         if (Code != S_OK && Value->state_->attempts_ > FirstAttempt) return Failure("7zip-password-or-header-error", ErrorCategory::AccessDenied);
-        if (Code == S_FALSE) continue;
+        if (Code == S_FALSE) {
+            // Only the rejecting handler is discarded. Preserve the pinned input
+            // and its remote read buffer for the next candidate in the same Open.
+            PinnedInput.value_ = Value->input_.value_;
+            PinnedInput->AddRef();
+            continue;
+        }
         if (Code != S_OK) return Value->state_->volumeError_.value_or(Value->state_->Result(Code));
         // The ZIP handler can return S_OK and a central-directory listing even
         // when a data volume is missing. Do not expose such a partial ZIPX set.
@@ -683,6 +750,11 @@ private:
 };
 #include "sevenZipMsi.inl"
 #undef HC_COM_REFS
+}
+storage::Result<storage::Unit> EncodePrivateSevenZipCandidate(HMODULE Module, ArchiveUpdate Request, storage::OperationContext Context)
+{
+    if (!Request.creation_ || Request.encrypt_) return Failure("7zip-private-create-options", ErrorCategory::InvalidRequest);
+    return UpdatePlainArchive(Module, std::move(Request), std::move(Context), true);
 }
 std::shared_ptr<IArchiveBackend> MakeSevenZipBackend(HMODULE Module) { return std::make_shared<msiBrowse::Adapter>(Module); }
 }

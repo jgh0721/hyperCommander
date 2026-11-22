@@ -153,7 +153,11 @@ public:
     HRESULT STDMETHODCALLTYPE GetStream(UInt32 Index, ISequentialOutStream** Stream, Int32 Mode) noexcept override {
         *Stream = nullptr; if (output_) { output_->Release(); output_ = nullptr; } item_ = nullptr;
         if (Mode == NArchive::NExtract::NAskMode::kExtract && items_.contains(Index)) {
-            item_ = items_.at(Index); output_ = new Output(nullptr, item_->size_, state_, true); output_->AddRef(); *Stream = output_;
+            item_ = items_.at(Index);
+            const auto* Bytes = item_->input_ && !item_->input_->CapturedBytes().isEmpty() ? &item_->input_->CapturedBytes() : nullptr;
+            output_ = new Output(nullptr, item_->size_, state_, !Bytes);
+            output_->expectedBytes_ = Bytes;
+            output_->AddRef(); *Stream = output_;
         }
         return report([&] { if (item_) progress_.currentItem_ = item_->name_.toStdString(); });
     }
@@ -161,7 +165,7 @@ public:
     HRESULT STDMETHODCALLTYPE SetOperationResult(Int32 Code) noexcept override {
         if (Code) return state_->Fail(Failure("7zip-verify-result:" + std::to_string(Code)));
         if (item_) {
-            if (output_->written_ != item_->size_ || output_->hash_.result() != item_->digest_) return state_->Fail(Failure("7zip-input-output-digest"));
+            if (output_->written_ != item_->size_ || (!output_->expectedBytes_ && output_->hash_.Finish() != item_->digest_)) return state_->Fail(Failure("7zip-input-output-digest"));
             ++verified_;
         }
         return report([&] { progress_.itemsDone_ = verified_; });
@@ -181,14 +185,20 @@ private:
 };
 #include "sevenZipMetadata.inl"
 #include "sevenZipGroups.inl"
-Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, OperationContext Context) {
+Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, OperationContext Context, bool PrivateCandidate = false) {
     if (const auto Stop = Context.Check({"7zip"})) return *Stop;
     const auto Target = QString::fromStdString(Request.archive_);
     const auto Root = QDir::cleanPath(QString::fromStdString(Request.inputDirectory_));
     if (!QFileInfo(Target).isAbsolute() || !QFileInfo(Root).isAbsolute() || Target.contains(QChar::Null) || Root.contains(QChar::Null)
         || (Request.add_.empty() && Request.remove_.empty()) || !Request.maxOutputBytes_)
         return Failure("7zip-invalid-update", ErrorCategory::InvalidRequest);
+    QElapsedTimer Timing;
+    if (qEnvironmentVariableIsSet("HC_ARCHIVE_TIMINGS")) Timing.start();
+    const auto Mark = [&](const char* Phase) {
+        if (Timing.isValid()) qInfo() << "7zip phase" << Phase << "ms" << Timing.restart();
+    };
     const bool Existing = QFileInfo::exists(Target);
+    const bool VerifyContents = Existing || Request.encrypt_ || !Request.creation_ || !Request.creation_->advanced_ || Request.creation_->advanced_->verifyContents_;
     if (!Request.sourcePaths_.empty() && (Request.sourcePaths_.size() != Request.add_.size() || Existing || !Request.creation_
         || !Request.remove_.empty() || !Request.metadataOrigins_.empty() || !Request.reuseData_.empty()))
         return Failure("7zip-invalid-source-mapping", ErrorCategory::InvalidRequest);
@@ -238,6 +248,7 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
     std::map<QString, UInt32> OldNames; std::set<QString> Removed, Names;
     std::map<QString, QString> Origins, Destinations; std::set<QString> OriginNames, Reused;
     std::vector<UpdateItem> Items;
+    uint64_t CaptureBudget = !Original && VerifyContents && !Request.encrypt_ ? 8ULL * 1024 * 1024 : 0;
     for (const auto& Name : Request.remove_) { const auto Key = EntryKey(QString::fromStdString(Name)); if (!SafeUpdateName(Key) || !Removed.insert(Key).second) return Failure("7zip-remove-name", ErrorCategory::InvalidRequest); }
     if (!Request.metadataOrigins_.empty() && Request.metadataOrigins_.size() != Request.add_.size()) return Failure("7zip-metadata-origin-count", ErrorCategory::InvalidRequest);
     if (!Request.reuseData_.empty() && Request.reuseData_.size() != Request.add_.size()) return Failure("7zip-reuse-count", ErrorCategory::InvalidRequest);
@@ -360,9 +371,16 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
         }
         if (Format == "zip") Item.zipEncryption_ = Origins.contains(Name) ? CipherByName.at(Origins.at(Name)) : Request.encrypt_ ? (Encryption.isEmpty() ? "AES256" : Encryption) : QString{};
         if (!Item.directory_) {
-            Item.input_ = std::shared_ptr<Input>(new Input(Shared), [](Input* Value) { Value->Release(); });
+            Item.input_ = std::shared_ptr<Input>(new Input(Shared, !Original && VerifyContents), [](Input* Value) { Value->Release(); });
             if (!Item.input_->Open(Item.path_)) return Failure("7zip-input-pin"); Item.size_ = Item.input_->Size();
+            // Bound plaintext retained across all members of this creation.
+            if (Item.size_ && Item.size_ <= CaptureBudget && Item.input_->TryCaptureVerificationBytes())
+                CaptureBudget -= Item.size_;
             if (Context.workload_.IsAutomatic() && Item.size_ > Context.workload_.automaticFileBytes_) return Failure("automatic-content-budget", ErrorCategory::BudgetExceeded);
+            if (!Original) {
+                Items.push_back(std::move(Item));
+                continue;
+            }
             QCryptographicHash Hash(QCryptographicHash::Sha256), Legacy(QCryptographicHash::Md5); QByteArray Buffer(1024 * 1024, Qt::Uninitialized);
             for (;;) { UInt32 Done = 0; const auto Code = Item.input_->Read(Buffer.data(), UInt32(Buffer.size()), &Done); if (Code != S_OK) return Shared->Result(Code); if (!Done) break; const auto Bytes = QByteArrayView(Buffer.constData(), Done); Hash.addData(Bytes); if (Format == "zip" && Item.metadata_ != UINT32_MAX) Legacy.addData(Bytes); }
             Item.digest_ = Hash.result();
@@ -438,9 +456,13 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
     const auto Settings = Properties->SetProperties(KeyPointers.data(), Variants.data(), UInt32(Variants.size()));
     for (auto& Value : Variants) PropVariantClear(&Value);
     if (Settings != S_OK) return Failure("7zip-compression-options");
-    QTemporaryDir Staging(QFileInfo(Target).dir().filePath(".hc-7zip-XXXXXX"));
-    if (!Staging.isValid()) return Failure("7zip-prepared-directory");
-    QFile Prepared(Staging.filePath("archive." + Format));
+    std::optional<native::TemporaryDirectory> Staging;
+    if (!PrivateCandidate) {
+        Staging.emplace(QFileInfo(Target).absolutePath(), ".hc-7zip-");
+        if (!Staging->IsValid()) return Staging->Failure("7zip-prepared-directory", {"7zip"});
+    }
+    QFile Prepared(Staging ? Staging->FilePath("archive." + Format) : Target);
+    Mark("prepare");
     if (Format == "zip" && ZipGroups.size() > 1) {
         auto Written = WriteZipGroups(Module, Writer.value_, Original.get(), Items, Prepared.fileName(), Method, Request.creation_.value_or(ArchiveCreationOptions{}).level_, Request.maxOutputBytes_, Shared);
         if (!Written.HasValue()) return Written;
@@ -452,15 +474,23 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
         if (Code != S_OK || Shared->error_) return Shared->Result(Code);
         if (!Prepared.flush()) return Failure("7zip-prepared-flush"); Prepared.close();
     }
+    if (!Original && VerifyContents) {
+        for (auto& Item : Items) {
+            if (!Item.input_) continue;
+            const auto Code = Item.input_->FinishVerification(Item.digest_);
+            if (Code != S_OK) return Shared->Result(Code);
+        }
+    }
+    Mark("encode-and-digest");
     auto VerifyContext = Context;
     if (Shared->password_) VerifyContext.passwordPrompt_ = [Shared](const std::string&, unsigned, const OperationContext&) -> Result<storage::Password> { return storage::Password(Shared->password_->Value()); };
     std::map<QString, const UpdateItem*> Expected; for (const auto& Item : Items) Expected.emplace(Item.name_, &Item);
     if (Original && Format == "zip" && (!Origins.empty() || ZipAlignment)) {
-        auto Fresh = Open(Module, Prepared.fileName().toStdString(), VerifyContext); if (!Fresh.HasValue()) return Fresh.Failure();
+        auto Fresh = Open(Module, Prepared.fileName().toStdString(), VerifyContext, 0, Format); if (!Fresh.HasValue()) return Fresh.Failure();
         auto Restored = zipMetadata::Restore(*Original, *Fresh.Value(), Prepared.fileName(), Expected, Request.maxOutputBytes_, Context);
         if (!Restored.HasValue()) return Restored;
     }
-    auto Checked = Open(Module, Prepared.fileName().toStdString(), VerifyContext); if (!Checked.HasValue()) return Checked.Failure(); auto& Verified = *Checked.Value();
+    auto Checked = Open(Module, Prepared.fileName().toStdString(), VerifyContext, 0, Format); if (!Checked.HasValue()) return Checked.Failure(); auto& Verified = *Checked.Value();
     if (Verified.count_ != Items.size() || Verified.format_ != Format) return Failure("7zip-output-entry-count");
     std::map<UInt32, const UpdateItem*> NewItems;
     if (Original) for (const auto Id : {kpidComment}) { Property Before, After; if (Original->archive_->GetArchiveProperty(Id, &Before) != S_OK || Verified.archive_->GetArchiveProperty(Id, &After) != S_OK || !SameProperty(Before, After)) return Failure("7zip-archive-metadata-not-preserved", ErrorCategory::Unsupported); }
@@ -493,19 +523,24 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
         if (Item.old_ == UINT32_MAX && !Item.directory_) NewItems.emplace(I, &Item);
         Expected.erase(Found);
     }
-    if (!NewItems.empty()) {
+    Mark("verify-metadata");
+    if (VerifyContents && !NewItems.empty()) {
         std::vector<UInt32> Indices; for (const auto& [Index, Item] : NewItems) Indices.push_back(Index);
         Com<VerifyCallback> Compare{new VerifyCallback(Verified.state_, NewItems)};
         const auto Compared = Verified.archive_->Extract(Indices.data(), UInt32(Indices.size()), 0, Compare.value_);
         if (Compared != S_OK || Verified.state_->error_) return Verified.state_->Result(Compared);
         if (Compare->verified_ != NewItems.size()) return Failure("7zip-output-not-verified");
     }
-    // Single full pass checks retained compressed payloads, including solid blocks.
-    Com<ExtractCallback> Test{new ExtractCallback(Verified.state_, nullptr, UINT32_MAX)};
-    const auto Tested = Verified.archive_->Extract(nullptr, UINT32_MAX, 1, Test.value_);
-    if (Tested != S_OK || Verified.state_->error_) return Verified.state_->Result(Tested);
+    // New archives have no retained payloads outside the digest comparison.
+    if (VerifyContents && (Original || NewItems.empty())) {
+        Com<ExtractCallback> Test{new ExtractCallback(Verified.state_, nullptr, UINT32_MAX)};
+        const auto Tested = Verified.archive_->Extract(nullptr, UINT32_MAX, 1, Test.value_);
+        if (Tested != S_OK || Verified.state_->error_) return Verified.state_->Result(Tested);
+    }
+    Mark("verify-content");
     Checked.Value().reset(); Properties.value_->Release(); Properties.value_ = nullptr; Writer.value_->Release(); Writer.value_ = nullptr; Original.reset();
     if (const auto Stop = Context.Check({"7zip"})) return *Stop;
+    if (PrivateCandidate) return Unit{};
     // This only publishes the verified private candidate. The common operation
     // coordinator owns revision checks and atomic publication of the real target.
     if (!MoveFileExW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(Prepared.fileName()).utf16()),

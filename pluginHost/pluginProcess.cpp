@@ -260,7 +260,8 @@ namespace hc::plugins
     PluginProcess::PluginProcess(std::unique_ptr<State> Value) : state_(std::move(Value)) {}
     PluginProcess::~PluginProcess() { Close(); }
     Result<std::unique_ptr<PluginProcess>> PluginProcess::Start(const QString& Executable, const QString& ManifestPath,
-        const PluginApproval& Approval, HostLimits Limits, OperationContext Context, const QString& DefaultIniPath, const QJsonObject& ImageArchiveEndpoint)
+        const PluginApproval& Approval, HostLimits Limits, OperationContext Context, const QString& DefaultIniPath, const QJsonObject& ImageArchiveEndpoint,
+        const std::optional<QString>& ConfiguredArchiveBinary)
     {
         if (Limits.startupMs_ < 100 || Limits.startupMs_ > 60000 || Limits.requestMs_ < 100 || Limits.requestMs_ > 60000
             || Limits.archiveWriteMs_ < 100 || Limits.archiveWriteMs_ > 3600000
@@ -270,6 +271,11 @@ namespace hc::plugins
         const auto CallerContext = Context;
         Context = Bound(Context, Limits.startupMs_);
         auto Inspected = InspectManifestFile(ManifestPath, Context); if (!Inspected.HasValue()) return Inspected.Failure();
+        if (ConfiguredArchiveBinary) {
+            const auto Expected = QFileInfo(*ConfiguredArchiveBinary).canonicalFilePath();
+            if (Expected.isEmpty() || Expected.compare(Inspected.Value().binaryPath_, Qt::CaseInsensitive) != 0)
+                return Error{ErrorCategory::InvalidRequest, "plugin-configured-binary-mismatch", {"wcx"}};
+        }
         const auto Format = Inspected.Value().manifest_.format_;
         const bool ArchiveHost = Format == PluginFormat::Wcx || Format == PluginFormat::SevenZip
             || Format == PluginFormat::UnEgg || Format == PluginFormat::DopusVfs;

@@ -42,6 +42,11 @@ void Writer::udfLayout()
         nextBlock_ += uint32_t(Round(Item.udfData_.size()) / Block);
     }
 }
+void Writer::udfAnchor(std::ofstream& Stream, uint32_t Sector)
+{
+    Bytes Anchor(Block); LongAd(Anchor, 16, 16 * Block, 32); LongAd(Anchor, 24, 16 * Block, 48);
+    Tag(Anchor, 2, Sector, 512); writeAt(Stream, Sector, Anchor);
+}
 void Writer::udfWrite(std::ofstream& Stream)
 {
     for (uint32_t I = 0; I < 3; ++I) {
@@ -68,10 +73,7 @@ void Writer::udfWrite(std::ofstream& Stream)
         Bytes Usd(Block); Put(Usd, 16, 4, 4); Tag(Usd, 7, Base + 4, 24); writeAt(Stream, Base + 4, Usd);
         Bytes End(Block); Tag(End, 8, Base + 5, 512); writeAt(Stream, Base + 5, End);
     }
-    for (const uint32_t Sector : {256u, partitionEnd_, totalBlocks_ - 1}) {
-        Bytes Anchor(Block); LongAd(Anchor, 16, 16 * Block, 32); LongAd(Anchor, 24, 16 * Block, 48);
-        Tag(Anchor, 2, Sector, 512); writeAt(Stream, Sector, Anchor);
-    }
+    udfAnchor(Stream, 256);
     Bytes Integrity(Block); Timestamp(Integrity, 16, options_.timestampUtc_, true, explicitTimestamp_); Put(Integrity, 28, 1, 4);
     Put(Integrity, 40, nodes_.size() + 16, 8); Put(Integrity, 72, 1, 4); Put(Integrity, 76, 46, 4);
     Put(Integrity, 84, partitionEnd_ - PartitionStart, 4); Entity(Integrity, 88, "*HyperCommander");

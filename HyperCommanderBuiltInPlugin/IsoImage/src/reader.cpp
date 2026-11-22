@@ -5,6 +5,12 @@
 #include "image.hpp"
 #include <cstring>
 #include <functional>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace hc::iso {
 namespace {
@@ -15,9 +21,47 @@ uint32_t Paired(std::span<const uint8_t> Data, size_t Offset, size_t Width)
     return uint32_t(Value);
 }
 }
-Reader::Reader(const fs::path& Path, uint32_t Namespace) : stream_(Path, std::ios::binary)
+DiskReader::DiskReader(const fs::path& Path)
 {
-    Require(bool(stream_), "Cannot open ISO", HC_ISO_IO);
+#ifdef _WIN32
+    handle_ = CreateFileW(Path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    Require(handle_ != INVALID_HANDLE_VALUE, "Cannot open ISO input", HC_ISO_IO);
+#else
+    file_.open(Path, std::ios::binary);
+    Require(bool(file_), "Cannot open ISO input", HC_ISO_IO);
+#endif
+}
+DiskReader::~DiskReader()
+{
+#ifdef _WIN32
+    CloseHandle(handle_);
+#endif
+}
+void DiskReader::Read(uint64_t Offset, std::span<uint8_t> Data)
+{
+#ifdef _WIN32
+    if (Offset != position_) {
+        LARGE_INTEGER At{};
+        At.QuadPart = static_cast<LONGLONG>(Offset);
+        Require(SetFilePointerEx(handle_, At, nullptr, FILE_BEGIN), "ISO seek failed", HC_ISO_IO);
+    }
+    position_ = Offset;
+    while (!Data.empty()) {
+        DWORD Count = 0;
+        Require(ReadFile(handle_, Data.data(), DWORD(std::min<size_t>(Data.size(), MAXDWORD)), &Count, nullptr) && Count, "Short ISO read", HC_ISO_IO);
+        position_ += Count;
+        Data = Data.subspan(Count);
+    }
+#else
+    if (!file_ || Offset != position_) { file_.clear(); file_.seekg(std::streamoff(Offset)); }
+    file_.read(reinterpret_cast<char*>(Data.data()), std::streamsize(Data.size()));
+    position_ = Offset + uint64_t(file_.gcount());
+    Require(size_t(file_.gcount()) == Data.size(), "Short ISO read", HC_ISO_IO);
+#endif
+}
+Reader::Reader(const fs::path& Path, uint32_t Namespace) : stream_(std::make_unique<DiskReader>(Path))
+{
     info_.imageBytes_ = fs::file_size(Path);
     initialize(Namespace);
 }
@@ -33,13 +77,17 @@ void Reader::initialize(uint32_t Namespace)
     Require(info_.imageBytes_ >= 18 * Block && info_.imageBytes_ % Block == 0, "Truncated ISO image");
     Bytes Primary, Joliet;
     bool End = false, Udf = false;
-    for (uint32_t Sector = 16; Sector < 80 && uint64_t(Sector + 1) * Block <= info_.imageBytes_; ++Sector) {
-        const auto Data = ReadAt(uint64_t(Sector) * Block, Block);
+    // The descriptor search window is contiguous. One read avoids a channel
+    // round trip per sector for callback-backed images on SMB and RDP.
+    const auto EndSector = std::min<uint64_t>(80, info_.imageBytes_ / Block);
+    const auto Window = ReadAt(16 * Block, (EndSector - 16) * Block);
+    for (uint64_t Sector = 16; Sector < EndSector; ++Sector) {
+        const auto Data = std::span(Window).subspan(size_t(Sector - 16) * Block, Block);
         if (std::memcmp(Data.data() + 1, "CD001", 5) == 0 && !End) {
             Require(Data[6] == 1, "Unsupported ISO descriptor version", HC_ISO_UNSUPPORTED);
-            if (Data[0] == 1) Primary = Data;
+            if (Data[0] == 1) Primary.assign(Data.begin(), Data.end());
             if (Data[0] == 0) info_.features_ |= 1;
-            if (Data[0] == 2 && Data[88] == '%' && Data[89] == '/' && (Data[90] == '@' || Data[90] == 'C' || Data[90] == 'E')) Joliet = Data;
+            if (Data[0] == 2 && Data[88] == '%' && Data[89] == '/' && (Data[90] == '@' || Data[90] == 'C' || Data[90] == 'E')) Joliet.assign(Data.begin(), Data.end());
             if (Data[0] == 255) End = true;
         }
         if (std::memcmp(Data.data() + 1, "NSR02", 5) == 0 || std::memcmp(Data.data() + 1, "NSR03", 5) == 0) Udf = true;
@@ -83,6 +131,13 @@ Bytes Reader::ReadAt(uint64_t Offset, uint64_t Size)
 {
     Require(Offset <= info_.imageBytes_ && Size <= info_.imageBytes_ - Offset && Size <= MaxMetadata, "Extent outside image or read budget");
     Bytes Data(static_cast<size_t>(Size));
+    readInto(Offset, Data);
+    return Data;
+}
+void Reader::readInto(uint64_t Offset, std::span<uint8_t> Data)
+{
+    const auto Size = Data.size();
+    Require(Offset <= info_.imageBytes_ && Size <= info_.imageBytes_ - Offset && Size <= MaxMetadata, "Extent outside image or read budget");
     if (input_.readAt_) {
         uint64_t Done = 0;
         while (Done < Size) {
@@ -91,12 +146,9 @@ Bytes Reader::ReadAt(uint64_t Offset, uint64_t Size)
             Require(Status == HC_ISO_OK, "ISO source read failed", Status);
             Require(Read && Read <= Capacity, "Invalid source read progress", HC_ISO_IO); Done += Read;
         }
-        return Data;
+        return;
     }
-    stream_.clear(); stream_.seekg(std::streamoff(Offset));
-    stream_.read(reinterpret_cast<char*>(Data.data()), std::streamsize(Size));
-    Require(uint64_t(stream_.gcount()) == Size, "Short ISO read", HC_ISO_IO);
-    return Data;
+    stream_->Read(Offset, Data);
 }
 uint32_t Reader::Read(size_t Index, uint64_t Offset, std::span<uint8_t> Buffer)
 {
@@ -109,8 +161,7 @@ uint32_t Reader::Read(size_t Index, uint64_t Offset, std::span<uint8_t> Buffer)
     for (const auto& Ext : Item.extents_) {
         if (Offset >= Ext.size_) { Offset -= Ext.size_; continue; }
         const auto Size = std::min<uint64_t>(Wanted - Done, Ext.size_ - Offset);
-        const auto Data = ReadAt(Ext.offset_ + Offset, Size);
-        std::copy(Data.begin(), Data.end(), Buffer.begin() + Done);
+        readInto(Ext.offset_ + Offset, Buffer.subspan(Done, size_t(Size)));
         Done += size_t(Size); Offset = 0;
         if (Done == Wanted) break;
     }

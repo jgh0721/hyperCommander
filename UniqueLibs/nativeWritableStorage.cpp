@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstring>
 #include <deque>
+#include <execution>
 #include <filesystem>
 #include <limits>
 #include <stdexcept>
@@ -145,9 +146,13 @@ namespace hc::storage
                 Handle Directory(CreateFileW(Part.c_str(), FILE_READ_ATTRIBUTES | (Retain ? FILE_LIST_DIRECTORY : 0), FILE_SHARE_READ, nullptr,
                     OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
                 if (Directory.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), Id, Utf8(Part));
-                BY_HANDLE_FILE_INFORMATION Info{};
-                if (!GetFileInformationByHandle(Directory.value_, &Info)) return Failure(GetLastError(), Id);
-                if (!(Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                FILE_BASIC_INFO Basic{};
+                if (!GetFileInformationByHandleEx(Directory.value_, FileBasicInfo, &Basic, sizeof(Basic))) {
+                    BY_HANDLE_FILE_INFORMATION Info{};
+                    if (!GetFileInformationByHandle(Directory.value_, &Info)) return Failure(GetLastError(), Id);
+                    Basic.FileAttributes = Info.dwFileAttributes;
+                }
+                if (!(Basic.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (Basic.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
                     return Error{ErrorCategory::Unsupported, "reparse-parent-denied", Id};
                 Parents->push_back(std::move(Directory));
                 if (End >= Parent.size()) break;
@@ -837,19 +842,33 @@ namespace hc::storage
             Result<Unit> Start(const EntrySnapshot& Root, const NativePath& Source, const NativePath& Destination, const Locator& DestinationAt)
             {
                 // The source root is resolved by path once, below pinned ancestors.
+                redirectedCopy_ = native::IsRedirectedPath(Destination.path_);
                 auto Parents = OpenParents(Source, id_, true);
-                if (!Parents.HasValue()) Parents = OpenParents(Source, id_);
+                if (!Parents.HasValue() && !redirectedCopy_) Parents = OpenParents(Source, id_);
                 if (!Parents.HasValue()) return Parents.Failure();
                 sourceParents_ = std::move(Parents.Value());
-                // Destination ancestors are checked for links, not retained: a
-                // retained directory pin refuses renames into that folder.
-                const auto Above = OpenParents(Destination, id_);
+                // Local moves may rename children, which conflicts with retained
+                // directory pins. Redirected direct copies only create new names.
+                const auto Above = OpenParents(Destination, id_, redirectedCopy_);
                 if (!Above.HasValue()) return Above.Failure();
+                if (redirectedCopy_) {
+                    // CopyFile2 uses an absolute target path. Require this client to
+                    // enforce the pins before making any names visible. An ambiguous
+                    // result (including access denied) takes the staged item path.
+                    const auto Parent = std::filesystem::path(Destination.path_).parent_path().wstring();
+                    for (const auto Access : {DWORD(DELETE), DWORD(FILE_ADD_FILE)}) {
+                        Handle Probe(CreateFileW(Parent.c_str(), Access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                            OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                        if (Probe.value_ != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION)
+                            return Error{ErrorCategory::Unsupported, "rdp-directory-sharing-unconfirmed", id_};
+                    }
+                    destinationParents_ = Above.Value();
+                }
                 auto Top = std::make_shared<Node>();
                 Top->entry_ = Root; Top->destination_ = DestinationAt;
                 Top->sourcePath_ = Source.path_; Top->destinationPath_ = Destination.path_;
-                const auto Open = [](const std::wstring& Path, DWORD Access) {
-                    return Handle(CreateFileW(Path.c_str(), Access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                const auto Open = [&](const std::wstring& Path, DWORD Access) {
+                    return Handle(CreateFileW(Path.c_str(), Access, directoryShare(), nullptr,
                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
                 };
                 Top->source_ = Open(Source.path_, DirectoryListAccess | (moving() ? DELETE : 0));
@@ -865,6 +884,13 @@ namespace hc::storage
                     Top->target_ = Open(Destination.path_, TargetAccess);
                     if (Top->target_.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), id_, Utf8(Destination.path_));
                     if (!plainDirectory(Top->target_.value_)) return Error{ErrorCategory::StaleRevision, "destination-not-directory", id_};
+                } else if (redirectedCopy_) {
+                    // Create and pin the new name in one operation. A collision
+                    // returns to the coordinator without touching that directory.
+                    const auto Name = std::filesystem::path(Destination.path_).filename().wstring();
+                    const auto Created = CreateRelative(destinationParents_->back().value_, Name, DirectoryListAccess,
+                        FILE_SHARE_READ, RelativeCreate, FolderOptions, Top->target_);
+                    if (Created < 0) return Failure(Win32Code(Created), id_, Utf8(Destination.path_));
                 } else {
                     // A new destination root: everything below it is then written
                     // by this engine alone and an interrupted file can be removed.
@@ -921,7 +947,7 @@ namespace hc::storage
                 if (counter_.joinable()) counter_.join();
                 workers_.clear(); stopLink_.reset();
                 { std::lock_guard Lock(mutex_); directories_.clear(); chunks_.clear(); }
-                root_.reset(); sourceParents_.reset();
+                root_.reset(); sourceParents_.reset(); destinationParents_.reset();
             }
         private:
             static constexpr DWORD TargetAccess = DirectoryListAccess | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_TRAVERSE;
@@ -952,6 +978,8 @@ namespace hc::storage
                 std::atomic<bool> keep_{false};
                 bool deferred_ = false, deletable_ = true;
             };
+            struct FileIdentityInfo { ULONGLONG volumeSerial_; BYTE fileId_[16]; };
+            static_assert(sizeof(FileIdentityInfo) == 24);
             struct File
             {
                 std::wstring name_;
@@ -968,6 +996,9 @@ namespace hc::storage
                 std::size_t credits_ = 0;
             };
             enum class Copied { Done, Deferred, Stopped };
+            // Direct path copies require all source and destination directories
+            // to stay in place until every child using that path has finished.
+            DWORD directoryShare() const { return redirectedCopy_ ? FILE_SHARE_READ : FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE; }
             bool moving() const { return options_.mode_ != TreeTransferMode::Copy; }
             bool stopped() const { return stop_.stop_requested(); }
             static bool plainDirectory(HANDLE Directory)
@@ -1092,7 +1123,7 @@ namespace hc::storage
             bool openSource(Node& Current)
             {
                 const auto Parent = Current.parent_->source_.value_;
-                if (OpenRelative(Parent, Current.name_, DirectoryListAccess | (moving() ? DELETE : 0), FolderOptions, Current.source_) < 0) {
+                if (CreateRelative(Parent, Current.name_, DirectoryListAccess | (moving() ? DELETE : 0), directoryShare(), RelativeOpen, FolderOptions, Current.source_) < 0) {
                     // List and empty it anyway; the coordinator retries its removal.
                     if (!moving() || OpenRelative(Parent, Current.name_, DirectoryListAccess, FolderOptions, Current.source_) < 0) return false;
                     Current.deletable_ = false;
@@ -1116,6 +1147,9 @@ namespace hc::storage
             // Children that this engine never decides go to the per-item path.
             bool deferredChild(DWORD Attributes, std::size_t Depth) const
             {
+                // Redirected CopyFile2 may add ARCHIVE to a hidden-only file.
+                // Let the verified per-file path apply every nonstandard file attribute.
+                if (redirectedCopy_ && !(Attributes & FILE_ATTRIBUTE_DIRECTORY) && Attributes != FILE_ATTRIBUTE_ARCHIVE) return true;
                 return Depth > options_.maxDepth_ || (Attributes & FILE_ATTRIBUTE_REPARSE_POINT)
                     || (moving() && !(Attributes & FILE_ATTRIBUTE_DIRECTORY) && (Attributes & FILE_ATTRIBUTE_READONLY) && !options_.allowReadOnly_);
             }
@@ -1145,8 +1179,8 @@ namespace hc::storage
                 });
                 if (stopped()) return;
                 if (!Listed || Unnamed) { deferFolder(Current, State); return; }
-                if (Current != root_ && CreateRelative(Current->parent_->target_.value_, Current->name_, TargetAccess,
-                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, RelativeCreate, FolderOptions, Current->target_) < 0) {
+                if (Current != root_ && CreateRelative(Current->parent_->target_.value_, Current->name_, redirectedCopy_ ? DirectoryListAccess : TargetAccess,
+                        directoryShare(), RelativeCreate, FolderOptions, Current->target_) < 0) {
                     deferFolder(Current, State); return;
                 }
                 if (!Deferred.empty()) {
@@ -1166,7 +1200,7 @@ namespace hc::storage
                     for (auto& Folder : Folders) { ++Current->pending_; directories_.push_back(std::move(Folder)); }
                     Group Next{Current, {}}; std::uint64_t Bytes = 0;
                     for (auto& Item : Files) {
-                        if (!Next.files_.empty() && (Next.files_.size() >= GroupFiles || Bytes + Item.entry_.size_ > GroupBytes)) {
+                        if (!Next.files_.empty() && (Next.files_.size() >= (redirectedCopy_ ? 1u : GroupFiles) || Bytes + Item.entry_.size_ > GroupBytes)) {
                             ++Current->pending_; chunks_.push_back(std::move(Next)); Next = Group{Current, {}}; Bytes = 0;
                         }
                         Bytes += Item.entry_.size_; Next.files_.push_back(std::move(Item));
@@ -1220,6 +1254,24 @@ namespace hc::storage
                 // than a single CopyFile2 thread.
                 operations::OperationMetric Timing("transfer.file", Item.entry_.size_, true);
                 const auto SourcePath = Folder.sourcePath_ + L"\\" + Item.name_, TargetPath = Folder.destinationPath_ + L"\\" + Item.name_;
+                Handle SourcePin;
+                if (redirectedCopy_) {
+                    // CopyFile2 takes a path. Hold the locally listed file against
+                    // replacement and changes for the whole call, including pauses.
+                    if (CreateRelative(Folder.source_.value_, Item.name_, GENERIC_READ | SYNCHRONIZE, FILE_SHARE_READ,
+                            RelativeOpen, RelativeNonDirectory | RelativeOpenReparsePoint | RelativeSynchronous, SourcePin) < 0)
+                        return Copied::Deferred;
+                    FileIdentityInfo Identity{};
+                    FILE_BASIC_INFO Basic{};
+                    FILE_STANDARD_INFO Standard{};
+                    if (!GetFileInformationByHandleEx(SourcePin.value_, static_cast<FILE_INFO_BY_HANDLE_CLASS>(18), &Identity, sizeof(Identity))
+                        || !GetFileInformationByHandleEx(SourcePin.value_, FileBasicInfo, &Basic, sizeof(Basic))
+                        || !GetFileInformationByHandleEx(SourcePin.value_, FileStandardInfo, &Standard, sizeof(Standard))
+                        || std::memcmp(Identity.fileId_, Item.fileId_, sizeof(Item.fileId_))
+                        || Basic.FileAttributes != Item.entry_.attributes_ || Basic.LastWriteTime.QuadPart != Item.lastWriteTime_
+                        || std::uint64_t(Standard.EndOfFile.QuadPart) != Item.entry_.size_)
+                        return Copied::Deferred;
+                }
                 struct Progress { NativeTreeTransfer* owner_; std::uint64_t reported_ = 0; } Callback{this};
                 COPYFILE2_EXTENDED_PARAMETERS Parameters{}; Parameters.dwSize = sizeof(Parameters);
                 constexpr DWORD SkipAlternateStreams = 0x00008000;
@@ -1252,8 +1304,7 @@ namespace hc::storage
                 Handle Removal(CreateFileW(SourcePath.c_str(), DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_SHARE_READ, nullptr,
                     OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
                 // FileIdInfo (Windows 8 ABI); product PCHs keep an older NTDDI guard.
-                struct FileIdentityInfo { ULONGLONG volumeSerial_; BYTE fileId_[16]; } Identity{};
-                static_assert(sizeof(FileIdentityInfo) == 24);
+                FileIdentityInfo Identity{};
                 constexpr auto IdentityClass = static_cast<FILE_INFO_BY_HANDLE_CLASS>(18);
                 FILE_BASIC_INFO Basic{}; FILE_STANDARD_INFO Length{};
                 if (Removal.value_ == INVALID_HANDLE_VALUE
@@ -1428,7 +1479,8 @@ namespace hc::storage
             std::stop_token external_;
             std::stop_source stop_;
             std::optional<std::stop_callback<std::function<void()>>> stopLink_;
-            ParentPins sourceParents_;
+            ParentPins sourceParents_, destinationParents_;
+            bool redirectedCopy_ = false;
             std::shared_ptr<Node> root_;
             std::mutex mutex_;
             std::condition_variable changed_;
@@ -1483,7 +1535,11 @@ namespace hc::storage
                 if (Context.expectedWriteBytes_) {
                     if (*Context.expectedWriteBytes_ > uint64_t(INT64_MAX)) return Error{ErrorCategory::Unsupported, "native-file-size-range", id_};
                     FILE_ALLOCATION_INFO Allocation{}; Allocation.AllocationSize.QuadPart = LONGLONG(*Context.expectedWriteBytes_);
-                    if (!Context.producingContent_ && !SetFileInformationByHandle(file_.value_, FileAllocationInfo, &Allocation, sizeof(Allocation))) return Failure(GetLastError(), id_);
+                    // A single remote write already allocates the payload. An allocation
+                    // request of its own adds a round trip before the first byte.
+                    const bool SingleRemoteWrite = destination_.kind_ == LocatorKind::Smb
+                        && *expectedBytes_ <= std::min(Context.nativeCopyBufferBytes_, Context.maxReadBytes_);
+                    if (!Context.producingContent_ && !SingleRemoteWrite && !SetFileInformationByHandle(file_.value_, FileAllocationInfo, &Allocation, sizeof(Allocation))) return Failure(GetLastError(), id_);
                 }
                 return checkpoint(WritePhase::Writing);
             }
@@ -1765,6 +1821,22 @@ namespace hc::storage
                 if (verificationStream_.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), id_);
                 readHash_->reset(); return false;
             }
+            Result<Unit> PreparePublication(OperationContext Context, bool RequireReceiptIdentity) override
+            {
+                if (expected_.exists_ || checkpoint_ || Context.pinPublishedFile_ || Context.flushFileContents_ || !native::IsRedirectedPath(path_.path_)) return Unit{};
+                if (const auto Error = Context.Check(id_)) return *Error;
+                if (closed_ || failed_ || (sourceHash_ && !verified_)) return Error{ErrorCategory::InvalidRequest, "write-session-not-ready", id_};
+                if (preparedStage_) return Unit{};
+                operations::OperationMetric Timing("native.stage.prepare-parallel", 0, true);
+                BY_HANDLE_FILE_INFORMATION Info{};
+                auto Prepared = prepareStage(Info, false, RequireReceiptIdentity);
+                if (Prepared.HasValue()) {
+                    if (parents_ && parents_.use_count() == 1 && parents_->size() >= 4)
+                        parents_->reserve(parents_->size() + 1);
+                    preparedStage_ = Info;
+                }
+                return Prepared;
+            }
             Result<WriteReceipt> Commit(OperationContext Context) override
             {
                 operations::OperationMetric Timing("native.commit.total", 0, true);
@@ -1773,29 +1845,13 @@ namespace hc::storage
                 if (sourceHash_ && !verified_) return Error{ErrorCategory::InvalidRequest, "copy-verification-required", id_};
                 if (Context.flushFileContents_) { operations::OperationMetric Timing("payload.flush"); if (!FlushFileBuffers(file_.value_)) return Failure(GetLastError(), id_); }
                 else { operations::OperationMetric Skipped("payload.flush.skipped"); }
-                if (metadata_.modifiedUtcMs_)
-                {
-                    const auto Value = static_cast<std::uint64_t>(*metadata_.modifiedUtcMs_ + 11644473600000LL) * 10000;
-                    FILETIME Time{static_cast<DWORD>(Value), static_cast<DWORD>(Value >> 32)};
-                    if (!SetFileTime(file_.value_, nullptr, nullptr, &Time)) return Failure(GetLastError(), id_);
-                }
-                FILE_BASIC_INFO Basic{};
-                Basic.FileAttributes = metadata_.attributes_.value_or(FILE_ATTRIBUTE_NORMAL)
-                    & (FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY);
-                if (!Basic.FileAttributes) Basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
-                // Apply readonly after rename so failed commits remain removable.
-                const auto FinalAttributes = Basic.FileAttributes;
-                Basic.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
-                if (!Basic.FileAttributes) Basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
-                // Keep the existing pre-publication metadata order; only
-                // redundant information queries are elided on the SMB path.
-                if (!SetFileInformationByHandle(file_.value_, FileBasicInfo, &Basic, sizeof(Basic))) return Failure(GetLastError(), id_);
                 BY_HANDLE_FILE_INFORMATION StageInfo{};
-                if (!GetFileInformationByHandle(file_.value_, &StageInfo)) return Failure(GetLastError(), id_, Utf8(stagePath_));
                 const bool ContentIdentity = checkpoint_ && native::NeedsContentIdentity(file_.value_, path_.path_);
-                auto StageIdentity = RecoveryIdentity(file_.value_, stagePath_, ContentIdentity, expectedBytes_ ? &StageInfo : nullptr);
-                if (!StageIdentity.HasValue()) return StageIdentity.Failure();
-                record_.stageIdentity_ = std::move(StageIdentity.Value());
+                if (preparedStage_) StageInfo = *preparedStage_;
+                else {
+                    auto Prepared = prepareStage(StageInfo, ContentIdentity);
+                    if (!Prepared.HasValue()) return Prepared.Failure();
+                }
                 if (expected_.exists_)
                 {
                     if (!expected_.revision_) return Error{ErrorCategory::InvalidRequest, "expected-revision-required", id_};
@@ -1834,8 +1890,12 @@ namespace hc::storage
                 committed_ = true;
                 WriteReceipt Receipt{destination_};
                 Receipt.transaction_ = record_.transaction_; Receipt.destinationIdentity_ = record_.stageIdentity_;
-                const auto Reopened = native::RefreshRenamedHandle(file_.value_, path_.path_,
-                    GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE, StageInfo);
+                const auto FinalAttributes = finalAttributes();
+                DWORD ReopenedAttributes = 0;
+                const bool ReleaseWithConfirmation = preparedStage_ && !Context.pinPublishedFile_ && productionDirectory_.empty()
+                    && parents_ && parents_.use_count() == 1 && parents_->size() >= 4 && parents_->capacity() > parents_->size();
+                const auto Reopened = ReleaseWithConfirmation ? confirmPreparedFile(StageInfo, ReopenedAttributes)
+                    : native::RefreshRenamedHandle(file_.value_, path_.path_, GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE, StageInfo, &ReopenedAttributes);
                 if (Reopened) {
                     auto Error = Failure(Reopened, id_, destination_.root_); Error.userAction_ = "published-file-reopen";
                     Receipt.cleanupErrors_.push_back(std::move(Error));
@@ -1848,12 +1908,15 @@ namespace hc::storage
                     if (!backupPath_.empty()) Receipt.preservedArtifacts_.push_back(record_.backup_);
                     file_.Close(); backup_.Close(); parents_.reset(); return Receipt;
                 }
+                FILE_BASIC_INFO Basic{};
                 Basic.FileAttributes = FinalAttributes;
-                if (!SetFileInformationByHandle(file_.value_, FileBasicInfo, &Basic, sizeof(Basic))) {
+                // Reapply and verify only if the published attributes are still unconfirmed.
+                const bool AttributesConfirmed = ReopenedAttributes == FinalAttributes;
+                if (!AttributesConfirmed && !SetFileInformationByHandle(file_.value_, FileBasicInfo, &Basic, sizeof(Basic))) {
                     auto Error = Failure(GetLastError(), id_, destination_.root_); Error.userAction_ = "published-file-metadata";
                     Receipt.cleanupErrors_.push_back(std::move(Error));
                 }
-                else if (metadata_.attributes_)
+                else if (!AttributesConfirmed && metadata_.attributes_)
                 {
                     // SMB servers can acknowledge the update yet derive HIDDEN from
                     // the final name (for example Samba's hide dot files policy).
@@ -1861,10 +1924,16 @@ namespace hc::storage
                     // the file against rename/delete. SMB handle queries may retain
                     // attributes derived from the stage name. Report a committed
                     // copy with a metadata error so moves retain their source.
-                    Handle Final(CreateFileW(path_.path_.c_str(), FILE_READ_ATTRIBUTES,
-                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                    // RefreshRenamedHandle already reopened the final name on RDP.
+                    Handle Final;
+                    HANDLE Query = file_.value_;
+                    if (!native::IsRedirectedPath(path_.path_)) {
+                        Final = Handle(CreateFileW(path_.path_.c_str(), FILE_READ_ATTRIBUTES,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                        Query = Final.value_;
+                    }
                     FILE_BASIC_INFO Actual{};
-                    if (Final.value_ == INVALID_HANDLE_VALUE || !GetFileInformationByHandleEx(Final.value_, FileBasicInfo, &Actual, sizeof(Actual)))
+                    if (Query == INVALID_HANDLE_VALUE || !GetFileInformationByHandleEx(Query, FileBasicInfo, &Actual, sizeof(Actual)))
                         Receipt.cleanupErrors_.push_back(Failure(GetLastError(), id_, destination_.root_));
                     else
                     {
@@ -1879,7 +1948,22 @@ namespace hc::storage
                         }
                     }
                 }
-                file_.Close();
+                // Redirected clients can acknowledge the combined stage metadata request
+                // while keeping the write time assigned to the last data packet. The fresh
+                // final handle matched StageInfo on reopen. Repair a mismatch explicitly.
+                if (ReopenedAttributes && metadata_.modifiedUtcMs_) {
+                    const auto Requested = std::uint64_t(*metadata_.modifiedUtcMs_ + 11644473600000LL) * 10000;
+                    if (native::FileTimeTicks(StageInfo.ftLastWriteTime) != Requested) {
+                        const FILETIME Time{DWORD(Requested), DWORD(Requested >> 32)};
+                        FILETIME Actual{};
+                        if (!SetFileTime(file_.value_, nullptr, nullptr, &Time) || !GetFileTime(file_.value_, nullptr, nullptr, &Actual))
+                            Receipt.cleanupErrors_.push_back(Failure(GetLastError(), id_, destination_.root_));
+                        else if (native::FileTimeTicks(Actual) != Requested)
+                            Receipt.cleanupErrors_.push_back({ErrorCategory::Unavailable, "published-file-time-mismatch", id_});
+                    }
+                }
+                if (Context.pinPublishedFile_) Receipt.destinationLease_ = std::make_shared<Handle>(std::move(file_));
+                else file_.Close();
                 if (backup_.value_ != INVALID_HANDLE_VALUE)
                 {
                     const auto Deleted = DeleteHandle(backup_.value_, id_);
@@ -1895,6 +1979,12 @@ namespace hc::storage
                 }
                 auto ProductionCleaned = cleanupProduction();
                 if (!ProductionCleaned.HasValue()) Receipt.cleanupErrors_.push_back(ProductionCleaned.Failure());
+                // Every path operation for this item is complete. RDP sends each close
+                // to the client. Join all independent closes before reporting completion.
+                if (parents_ && parents_.use_count() == 1 && parents_->size() >= 4 && native::IsRedirectedPath(path_.path_)) {
+                    operations::OperationMetric Timing("native.parent-release.parallel", 0, true);
+                    std::for_each(std::execution::par, parents_->begin(), parents_->end(), [](Handle& Parent) { Parent.Close(); });
+                }
                 parents_.reset();
                 auto Finished = checkpoint(WritePhase::Finished);
                 if (!Finished.HasValue()) Receipt.cleanupErrors_.push_back(Finished.Failure());
@@ -1945,6 +2035,68 @@ namespace hc::storage
                 }
                 productionDirectory_.clear(); return Unit{};
             }
+            DWORD confirmPreparedFile(const BY_HANDLE_FILE_INFORMATION& StageInfo, DWORD& Attributes)
+            {
+                operations::OperationMetric Timing("native.publish.confirm-and-release", 0, true);
+                // Parents protect the path until the final name is open. The new
+                // handle denies writers and deletion, and any remaining metadata
+                // repair uses this handle. No further path mutation is needed.
+                if (const auto Error = native::OpenRenamedHandle(file_.value_, path_.path_, FILE_WRITE_ATTRIBUTES | FILE_READ_ATTRIBUTES | DELETE))
+                    return Error;
+                parents_->push_back(std::move(file_)); // capacity reserved before publication
+                auto& Published = parents_->back();
+                DWORD Error = ERROR_SUCCESS;
+                const bool TimeMatches = !metadata_.modifiedUtcMs_ || native::FileTimeTicks(StageInfo.ftLastWriteTime)
+                    == std::uint64_t(*metadata_.modifiedUtcMs_ + 11644473600000LL) * 10000;
+                std::for_each(std::execution::par, parents_->begin(), parents_->end(), [&](Handle& Item) {
+                    if (&Item == &Published) {
+                        Error = native::VerifyRenamedHandle(Item.value_, StageInfo, &Attributes);
+                        if (!Error && (Attributes != finalAttributes() || !TimeMatches)) return; // keep for repair
+                    }
+                    Item.Close();
+                });
+                file_ = std::move(Published);
+                parents_.reset();
+                return Error;
+            }
+            DWORD finalAttributes() const
+            {
+                const DWORD Attributes = metadata_.attributes_.value_or(FILE_ATTRIBUTE_NORMAL)
+                    & (FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY);
+                return Attributes ? Attributes : FILE_ATTRIBUTE_NORMAL;
+            }
+            Result<Unit> prepareStage(BY_HANDLE_FILE_INFORMATION& StageInfo, bool ContentIdentity, bool RequireReceiptIdentity = true)
+            {
+                FILE_BASIC_INFO Basic{};
+                if (metadata_.modifiedUtcMs_)
+                    Basic.LastWriteTime.QuadPart = (*metadata_.modifiedUtcMs_ + 11644473600000LL) * 10000ULL;
+                Basic.FileAttributes = finalAttributes();
+                // Apply readonly after rename so failed commits remain removable.
+                Basic.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
+                if (!Basic.FileAttributes) Basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+                // Keep the existing pre-publication metadata order; only
+                // redundant information queries are elided on the SMB path.
+                if (!SetFileInformationByHandle(file_.value_, FileBasicInfo, &Basic, sizeof(Basic))) return Failure(GetLastError(), id_);
+                // RDP may apply just the attributes of a combined basic-information
+                // request. Set the requested time on the private stage while workers overlap.
+                if (metadata_.modifiedUtcMs_ && native::IsRedirectedPath(path_.path_)) {
+                    const FILETIME Time{Basic.LastWriteTime.LowPart, DWORD(Basic.LastWriteTime.HighPart)};
+                    if (!SetFileTime(file_.value_, nullptr, nullptr, &Time)) return Failure(GetLastError(), id_, Utf8(stagePath_));
+                }
+                if (!RequireReceiptIdentity) {
+                    // The coordinator still reopens the final name and compares size,
+                    // type and modification time. RDP file IDs are local to a handle.
+                    if (!native::ReadRedirectedBasicAndSize(file_.value_, StageInfo) && !GetFileInformationByHandle(file_.value_, &StageInfo))
+                        return Failure(GetLastError(), id_, Utf8(stagePath_));
+                    return Unit{};
+                }
+                if (!GetFileInformationByHandle(file_.value_, &StageInfo)) return Failure(GetLastError(), id_, Utf8(stagePath_));
+                auto StageIdentity = RecoveryIdentity(file_.value_, stagePath_, ContentIdentity, expectedBytes_ ? &StageInfo : nullptr);
+                if (!StageIdentity.HasValue()) return StageIdentity.Failure();
+                record_.stageIdentity_ = std::move(StageIdentity.Value());
+                return Unit{};
+            }
+            std::optional<BY_HANDLE_FILE_INFORMATION> preparedStage_;
             std::optional<std::uint64_t> expectedBytes_;
             FILE_BASIC_INFO initialTimes_{};
             std::wstring productionDirectory_;
@@ -2074,7 +2226,7 @@ namespace hc::storage
                 const auto Extras = native::CopyExtrasAt(Path.Value().root_, Context);
                 return CopyCapabilities{true, true, Extras.acl_, Extras.streams_};
             }
-            bool SupportsParallelCopies() const override { return kind_ == LocatorKind::Local; }
+            bool SupportsParallelCopies() const override { return true; }
             bool SupportsParallelRemovals() const override { return kind_ == LocatorKind::Local; }
             bool SerializesDirectoryRemovals() const override { return kind_ == LocatorKind::Local; }
             std::size_t PreferredDeleteWorkers(Locator At) const override
@@ -2115,6 +2267,7 @@ namespace hc::storage
             }
             std::size_t PreferredCopyWorkers(Locator Source, Locator Destination) const override
             {
+                if (Source.kind_ == LocatorKind::Smb || Destination.kind_ == LocatorKind::Smb) return 8;
                 if (kind_ != LocatorKind::Local || Source.kind_ != LocatorKind::Local || Destination.kind_ != LocatorKind::Local) return 1;
                 const auto From = Normalize(Source, kind_, id_), To = Normalize(Destination, kind_, id_);
                 if (!From.HasValue() || !To.HasValue()) return 1;
@@ -2123,14 +2276,12 @@ namespace hc::storage
             }
             bool SupportsTreeTransfer(const IStorageProvider& Reader, const Locator& Source, const IWritableStorage& DestinationWriter, const Locator& Destination) const override
             {
-                // The engine replaces only this writer's own reader listing, and
-                // writes only where another native local writer would.
-                if (kind_ != LocatorKind::Local || &Reader != reader_.get() || Source.kind_ != LocatorKind::Local || Destination.kind_ != LocatorKind::Local) return false;
+                if (kind_ != LocatorKind::Local || &Reader != reader_.get() || Source.kind_ != LocatorKind::Local) return false;
                 const auto* Target = dynamic_cast<const NativeWritableStorage*>(&DestinationWriter);
-                if (!Target || Target->kind_ != LocatorKind::Local) return false;
-                const auto From = Normalize(Source, kind_, id_), To = Normalize(Destination, kind_, id_);
+                if (!Target || Target->kind_ != Destination.kind_) return false;
+                const auto From = Normalize(Source, kind_, id_), To = Normalize(Destination, Destination.kind_, Target->id_);
                 if (!From.HasValue() || !To.HasValue() || From.Value().path_ == From.Value().root_ || To.Value().path_ == To.Value().root_
-                    || native::IsRedirectedPath(From.Value().path_) || native::IsRedirectedPath(To.Value().path_)) return false;
+                    || native::IsRedirectedPath(From.Value().path_)) return false;
                 // Listing needs FileIdExtdDirectoryInfo (NTFS, ReFS). Destinations
                 // may also be FAT-family removable or fixed volumes.
                 const auto Local = [](const std::wstring& Root, bool Fat) {
@@ -2140,10 +2291,24 @@ namespace hc::storage
                         && (!_wcsicmp(FileSystem, L"NTFS") || !_wcsicmp(FileSystem, L"ReFS")
                             || (Fat && (!_wcsicmp(FileSystem, L"exFAT") || !_wcsicmp(FileSystem, L"FAT32") || !_wcsicmp(FileSystem, L"FAT"))));
                 };
-                return Local(From.Value().root_, false) && Local(To.Value().root_, true);
+                return Local(From.Value().root_, false) && (Destination.kind_ == LocatorKind::Smb ? native::IsRedirectedPath(To.Value().path_) : Local(To.Value().root_, true));
+            }
+            bool SupportsSourceReadAhead(const IStorageProvider& Reader, const Locator& Source, const Locator& Destination) const override
+            {
+                if (kind_ != LocatorKind::Local || Destination.kind_ != kind_ || Source.kind_ != LocatorKind::Smb
+                    || Reader.Id().value_ != "smb" || !Reader.SupportsParallelReads()) return false;
+                const auto From = Normalize(Source, LocatorKind::Smb, Reader.Id());
+                const auto To = Normalize(Destination, kind_, id_);
+                if (!From.HasValue() || !To.HasValue() || !native::IsRedirectedPath(From.Value().path_)) return false;
+                const auto Type = GetDriveTypeW(To.Value().root_.c_str());
+                return Type == DRIVE_FIXED || Type == DRIVE_REMOVABLE || Type == DRIVE_RAMDISK;
             }
             std::size_t PreferredTreeTransferWorkers(Locator Source, Locator Destination) const override
             {
+                if (Source.kind_ == LocatorKind::Local && Destination.kind_ == LocatorKind::Smb) {
+                    const auto Target = Normalize(Destination, Destination.kind_, id_);
+                    if (Target.HasValue() && native::IsRedirectedPath(Target.Value().path_)) return 8;
+                }
                 // Workers take folders and groups of files, like robocopy's default
                 // eight threads; spinning disks keep two to limit seeking.
                 if (kind_ != LocatorKind::Local || Source.kind_ != LocatorKind::Local || Destination.kind_ != LocatorKind::Local) return 1;
@@ -2155,11 +2320,16 @@ namespace hc::storage
             Result<std::unique_ptr<ITreeTransfer>> BeginTreeTransfer(EntrySnapshot Root, Locator Destination, TreeTransferOptions Options, OperationContext Context) override
             {
                 if (const auto Error = Context.Check(id_)) return *Error;
+                if (kind_ != LocatorKind::Local) return Error{ErrorCategory::Unsupported, "tree-transfer-source", id_};
                 if (!Root.directory_ || Root.id_.providerId_ != id_ || !Root.id_.revision_) return Error{ErrorCategory::InvalidRequest, "tree-transfer-root", id_};
                 const auto Source = Normalize(Root.locator_, kind_, id_);
                 if (!Source.HasValue()) return Source.Failure();
-                const auto Target = Normalize(Destination, kind_, id_);
+                const auto Target = Normalize(Destination, Destination.kind_, id_);
                 if (!Target.HasValue()) return Target.Failure();
+                if (Destination.kind_ != kind_ && (Destination.kind_ != LocatorKind::Smb || !native::IsRedirectedPath(Target.Value().path_)
+                    || Options.mode_ != TreeTransferMode::Copy || Context.flushFileContents_ || Context.writeCheckpoint_
+                    || Context.pinPublishedFile_ || !Context.directContent_))
+                    return Error{ErrorCategory::Unsupported, "tree-transfer-destination", id_};
                 if (Source.Value().path_ == Source.Value().root_ || Target.Value().path_ == Target.Value().root_)
                     return Error{ErrorCategory::InvalidRequest, "root-mutation-denied", id_};
                 const auto& From = Source.Value().path_; const auto& To = Target.Value().path_;

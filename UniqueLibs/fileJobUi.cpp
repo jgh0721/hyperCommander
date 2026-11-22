@@ -773,8 +773,10 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
     Request.calculateSizeBefore_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeBeforeOperations"].toBool(hc::defaults::DefaultValue("options/folderSizeBeforeOperations").toBool());
     Request.deleteWhileListing_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["deleteWhileListing"].toBool(hc::defaults::DefaultValue("options/deleteWhileListing").toBool());
     Context.providerInteractions_ = true;
-    if (Request.operation_ == hc::operations::FileOperation::Copy && Request.selection_ && Request.calculateSizeBefore_
-        && Request.selectionRoot_.kind_ == LocatorKind::Local && Request.destination_.kind_ == LocatorKind::Local
+    const bool RemoteCopy = Request.destination_.kind_ == LocatorKind::Smb || Request.selectionRoot_.kind_ == LocatorKind::Smb
+        || std::ranges::any_of(Request.sources_, [](const auto& Source) { return Source.entry_.locator_.kind_ == LocatorKind::Smb; });
+    if (Request.operation_ == hc::operations::FileOperation::Copy && Request.calculateSizeBefore_
+        && (RemoteCopy || (Request.selection_ && Request.selectionRoot_.kind_ == LocatorKind::Local && Request.destination_.kind_ == LocatorKind::Local))
         && !hc::settings::AppSettings().CommittedObject()["options"].toObject()["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()))
         Context.fileCopyWorkers_ = 0;
     // 로컬 폴더 복사·이동은 폴더 단위 병렬 엔진이 처리한다. 작업 복구를 켜면

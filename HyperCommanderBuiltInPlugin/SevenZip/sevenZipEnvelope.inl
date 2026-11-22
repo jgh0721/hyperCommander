@@ -61,8 +61,9 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
     auto Stub = envelope::CheckStub(*Original.input_.value_, Prefix); if (!Stub.HasValue()) return Stub;
     const auto Suffix = Total - Prefix - Body;
     if (Prefix > Request.maxOutputBytes_ || Suffix > Request.maxOutputBytes_ - Prefix) return Failure("7zip-output-limit", ErrorCategory::BudgetExceeded);
-    QTemporaryDir Stage(QFileInfo(Target).dir().filePath(".hc-envelope-XXXXXX")); if (!Stage.isValid()) return Failure("7zip-envelope-directory");
-    const auto Bare = Stage.filePath("body." + Original.format_); QFile File(Bare);
+    native::TemporaryDirectory Stage(QFileInfo(Target).absolutePath(), ".hc-envelope-");
+    if (!Stage.IsValid()) return Stage.Failure("7zip-envelope-directory", {"7zip"});
+    const auto Bare = Stage.FilePath("body." + Original.format_); QFile File(Bare);
     if (!File.open(QIODevice::ReadWrite | QIODevice::NewOnly)) return Failure("7zip-envelope-open");
     auto Copied = envelope::Copy(*Original.input_.value_, Prefix, Body, File, Context); if (!Copied.HasValue()) return Copied;
     if (Original.format_ == "zip" && Prefix) {
@@ -78,7 +79,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
     auto Updated = UpdatePlainArchive(Module, std::move(Inner), Context); if (!Updated.HasValue()) return Updated;
     Com<Input> Payload{new Input(Original.state_)}; if (!Payload->Open(Bare)) return Failure("7zip-envelope-body-open");
     const auto NewBody = Payload->Size(); if (NewBody > Request.maxOutputBytes_ - Prefix - Suffix) return Failure("7zip-output-limit", ErrorCategory::BudgetExceeded);
-    const auto Candidate = Stage.filePath("prepared." + Original.format_); QFile Output(Candidate);
+    const auto Candidate = Stage.FilePath("prepared." + Original.format_); QFile Output(Candidate);
     if (!Output.open(QIODevice::ReadWrite | QIODevice::NewOnly)) return Failure("7zip-envelope-output-open");
     Copied = envelope::Copy(*Original.input_.value_, 0, Prefix, Output, Context); if (!Copied.HasValue()) return Copied;
     Copied = envelope::Copy(*Payload.value_, 0, NewBody, Output, Context); if (!Copied.HasValue()) return Copied;

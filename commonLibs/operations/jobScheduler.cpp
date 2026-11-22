@@ -86,7 +86,7 @@ namespace hc::operations
             JobRequest request_;
             std::unique_ptr<IJobTask> task_;
             JobResult result_;
-            std::stop_source stop_;
+            std::stop_source stop_, pauseSignal_;
             std::unique_ptr<std::stop_callback<std::function<void()>>> externalStop_;
             std::promise<JobResult> promise_;
             std::shared_future<JobResult> future_ = promise_.get_future().share();
@@ -340,6 +340,7 @@ namespace hc::operations
         if (Ids.empty() || Ids.size() > 65536 || Control < JobControl::Start || Control > JobControl::Cancel)
             return Error{ErrorCategory::InvalidRequest, "invalid-job-batch"};
         std::vector<std::shared_ptr<Job>> Values;
+        std::vector<std::stop_source> PauseSignals;
         {
             std::lock_guard Lock(state_->mutex_);
             std::set<std::string> Seen;
@@ -357,13 +358,17 @@ namespace hc::operations
                 if (Control == JobControl::Cancel) Snapshot.cancelRequested_ = true;
                 else if (Control == JobControl::Start) Snapshot.deferred_ = false;
                 else {
-                    Snapshot.pauseRequested_ = Control == JobControl::Pause;
+                    const bool Pause = Control == JobControl::Pause;
+                    if (Pause && !Snapshot.pauseRequested_) PauseSignals.push_back(Value->pauseSignal_);
+                    if (!Pause && Snapshot.pauseRequested_) Value->pauseSignal_ = std::stop_source{};
+                    Snapshot.pauseRequested_ = Pause;
                     if (!Snapshot.pauseRequested_ && Snapshot.state_ == JobState::Paused) state_->transition(*Value, Value->resume_);
                 }
                 state_->notify(*Value, "job.changed");
             }
         }
         // Stop callbacks can call scheduler APIs: never invoke them inside its lock.
+        for (auto& Signal : PauseSignals) Signal.request_stop();
         if (Control == JobControl::Cancel) for (const auto& Value : Values) Value->stop_.request_stop();
         state_->changed_.notify_all(); flushEvents(state_); return storage::Unit{};
     }
@@ -550,6 +555,7 @@ namespace hc::operations
                     const bool EnteringCommit = Snapshot.state_ == JobState::Committing;
                     if (EnteringCommit && !Abort) Value->commitEntered_ = true;
                     Context.jobId_ = Snapshot.id_;
+                    Context.pauseSignal_ = Value->pauseSignal_.get_token();
                     Context.operation_ = Value->request_.operation_;
                     Context.operation_.pauseRequested_ = [WeakState = std::weak_ptr<State>(Shared), WeakJob = std::weak_ptr<Job>(Value)] {
                         const auto Owner = WeakState.lock(); const auto Job = WeakJob.lock();

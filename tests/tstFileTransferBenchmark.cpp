@@ -1,8 +1,12 @@
 ﻿#include "stdafx.h"
+#include <QCryptographicHash>
 #include <QtTest>
 #include <QTemporaryDir>
+#include <QUuid>
+#include "commonLibs/storage/nativeTemporaryDirectory.hpp"
 #include <QProcess>
 #include <QFile>
+#include <QSaveFile>
 #include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -27,6 +31,7 @@
 #include <map>
 #include <mutex>
 #include <random>
+#include "commonLibs/storage/nativePath.hpp"
 #include <thread>
 
 using namespace hc::storage;
@@ -146,7 +151,7 @@ TreePlan PlanTree(const Scenario& Shape, double Scale)
     Plan.averageFileDepth_ = Plan.files_.empty() ? 0 : DepthSum / double(Plan.files_.size());
     return Plan;
 }
-std::wstring Long(const QString& Path) { return L"\\\\?\\" + QDir::toNativeSeparators(QDir::cleanPath(Path)).toStdWString(); }
+std::wstring Long(const QString& Path) { return native::ExtendedPath(QDir::toNativeSeparators(QDir::cleanPath(Path)).toStdWString()); }
 std::wstring Join(const std::wstring& Parent, const std::wstring& Name) { return Name.empty() ? Parent : Parent + L"\\" + Name; }
 bool Exists(const std::wstring& Path) { return GetFileAttributesW(Path.c_str()) != INVALID_FILE_ATTRIBUTES; }
 QString Win32Text(const char* Stage, DWORD Code, const std::wstring& Path = {})
@@ -362,7 +367,8 @@ QString Robocopy(const QString& From, const QString& To, bool Move, int Threads)
     QProcess Process;
     Process.setProcessChannelMode(QProcess::MergedChannels);
     QStringList Arguments{QDir::toNativeSeparators(From), QDir::toNativeSeparators(To), "/E", "/COPY:DAT", "/DCOPY:DA",
-        QStringLiteral("/MT:%1").arg(Threads), "/R:0", "/W:0", "/NFL", "/NDL", "/NJH", "/NJS", "/NP"};
+        "/R:0", "/W:0", "/NFL", "/NDL", "/NJH", "/NJS", "/NP"};
+    if (Threads > 0) Arguments << QStringLiteral("/MT:%1").arg(Threads);
     if (Move) Arguments << "/MOVE";
     Process.start("robocopy.exe", Arguments);
     if (!Process.waitForStarted(30000)) return "robocopy-start";
@@ -420,6 +426,33 @@ QJsonObject VolumeInfo(const QString& Path)
     return Value;
 }
 struct RunOutcome { QString error_; double milliseconds_ = 0; QJsonObject details_; };
+class DestinationObserver
+{
+public:
+    bool Start(const QString& Target)
+    {
+        if (marker_.isEmpty()) return true;
+        const auto Bytes = Target.toUtf8();
+        QSaveFile File(marker_);
+        if (!File.open(QIODevice::WriteOnly) || File.write(Bytes) != Bytes.size() || !File.commit()) return false;
+        return QueryPerformanceCounter(&start_) != FALSE;
+    }
+    void Finish(RunOutcome& Run) const
+    {
+        if (marker_.isEmpty()) return;
+        Run.details_.insert("startPerformanceCounter", QString::number(start_.QuadPart));
+        // The independent reader finishes before untimed validation and cleanup.
+        if (!Run.error_.isEmpty()) return;
+        const auto Acknowledged = marker_ + ".done";
+        QElapsedTimer Wait; Wait.start();
+        while (!QFileInfo::exists(Acknowledged) && !Wait.hasExpired(40000))
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        if (!QFileInfo::exists(Acknowledged)) Run.error_ = "observer-timeout";
+    }
+private:
+    QString marker_ = qEnvironmentVariable("HC_TRANSFER_BENCH_OBSERVATION");
+    LARGE_INTEGER start_{};
+};
 RunOutcome RunHyperCommander(hc::operations::FileOperation Operation, const QString& Source, const QString& DestinationParent,
     std::size_t Workers, const QString& Scratch, bool Detailed)
 {
@@ -432,17 +465,26 @@ RunOutcome RunHyperCommander(hc::operations::FileOperation Operation, const QStr
     if (!JournalDirectory.isValid()) { Value.error_ = "journal-directory"; return Value; }
     auto Journal = MakeFileJobJournal(JournalDirectory.filePath("journal"), false, true, false);
     JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 3, 1024, Journal);
-    auto Reader = MakeNativeReadProvider(LocatorKind::Local);
-    auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
-    auto Destination = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
-    const Locator From{LocatorKind::Local, QDir::toNativeSeparators(Source).toStdString()};
-    const Locator To{LocatorKind::Local, QDir::toNativeSeparators(DestinationParent).toStdString()};
+    const auto Kind = [](const QString& Path) {
+        return QDir::fromNativeSeparators(Path).startsWith("//") ? LocatorKind::Smb : LocatorKind::Local;
+    };
+    const Locator From{Kind(Source), QDir::toNativeSeparators(Source).toStdString()};
+    const Locator To{Kind(DestinationParent), QDir::toNativeSeparators(DestinationParent).toStdString()};
+    auto Reader = MakeNativeReadProvider(From.kind_);
+    auto Writer = MakeNativeWritableStorage(From.kind_, Reader);
+    auto Destination = MakeNativeWritableStorage(To.kind_, MakeNativeReadProvider(To.kind_));
     OperationMetrics::Instance().Reset(Detailed);
+    DestinationObserver Observer;
+    if (!Observer.Start(QDir(DestinationParent).filePath(QFileInfo(Source).fileName()))) {
+        Value.error_ = "observation-marker"; return Value;
+    }
     QElapsedTimer Clock; Clock.start();
     auto Entry = Reader->Resolve(From, {}).get();
     if (!Entry.HasValue()) { Value.error_ = QString::fromStdString("resolve: " + Entry.Failure().code_); return Value; }
     FileOperationRequest Request;
     Request.operation_ = Operation;
+    // Benchmarks time the job after the user has approved the owned deletion.
+    Request.confirmDelete_ = false;
     Request.sources_ = {{Entry.Value(), Reader, Writer}};
     Request.destination_ = To; Request.destinationWriter_ = Destination;
     // FileJobUi::Submit with productDefaults.hpp: folder sizes first, lock
@@ -450,6 +492,7 @@ RunOutcome RunHyperCommander(hc::operations::FileOperation Operation, const QStr
     Request.fileLockInteractions_ = true; Request.calculateSizeBefore_ = true;
     OperationContext Context;
     Context.flushFileContents_ = false; Context.fileCopyWorkers_ = Workers;
+    if (qEnvironmentVariableIsSet("HC_TRANSFER_BENCH_STREAM_ONLY")) Context.directContent_ = false;
     // Local folders use the folder engine unless job recovery is on. Set
     // HC_TRANSFER_BENCH_FOLDER_WORKERS to 1 for the per-item path, or to a count.
     Context.fileTransferWorkers_ = qEnvironmentVariableIsSet("HC_TRANSFER_BENCH_FOLDER_WORKERS")
@@ -470,6 +513,7 @@ RunOutcome RunHyperCommander(hc::operations::FileOperation Operation, const QStr
     Value.details_ = QJsonObject{{"completedItems", double(Done.snapshot_.completedItems_)}, {"skippedItems", double(Done.snapshot_.skippedItems_)},
         {"fileCopyWorkers", int(Workers)}, {"preferredCopyWorkers", int(Destination->PreferredCopyWorkers(From, To))},
         {"folderWorkers", int(Context.fileTransferWorkers_)}, {"preferredFolderWorkers", int(Writer->PreferredTreeTransferWorkers(From, To))}, {"metrics", Metrics}};
+    Observer.Finish(Value);
     return Value;
 }
 double Median(std::vector<double> Values)
@@ -485,14 +529,19 @@ QStringList Selected(const char* Variable, const QStringList& All)
     return Requested.isEmpty() ? All : Requested;
 }
 const QStringList AllOperations{"copy-same", "copy-cross", "move-same", "move-same-merge", "move-cross"};
-const QStringList AllImplementations{"hypercommander", "hypercommander-auto", "win32", "robocopy"};
+const QStringList AllImplementations{"hypercommander", "hypercommander-auto", "win32", "robocopy", "robocopy-default", "robocopy-private-tree"};
 QStringList Applicable(const QString& Operation)
 {
     // Robocopy has no rename move. hypercommander-auto differs only where the
     // endpoint policy can select workers: small files between NVMe disks.
-    if (Operation == "copy-same") return {"hypercommander", "win32", "robocopy"};
-    if (Operation == "copy-cross") return {"hypercommander", "hypercommander-auto", "win32", "robocopy"};
-    if (Operation == "move-cross") return {"hypercommander", "win32", "robocopy"};
+    if (Operation == "copy-same") return {"hypercommander", "hypercommander-auto", "win32", "robocopy", "robocopy-default"};
+    if (Operation == "copy-cross") {
+        QStringList Candidates{"hypercommander", "hypercommander-auto", "win32", "robocopy", "robocopy-default"};
+        if (qEnvironmentVariable("HC_TRANSFER_BENCH_IMPLEMENTATIONS").split(',').contains("robocopy-private-tree"))
+            Candidates.append("robocopy-private-tree");
+        return Candidates;
+    }
+    if (Operation == "move-cross") return {"hypercommander", "win32", "robocopy", "robocopy-default"};
     return {"hypercommander", "win32"};
 }
 }
@@ -501,6 +550,42 @@ class TransferBenchmark : public QObject
 {
     Q_OBJECT
 private slots:
+    void singleFileBenchmark_data()
+    {
+        QTest::addColumn<int>("Action");
+        QTest::newRow("copy") << int(hc::operations::FileOperation::Copy);
+        QTest::newRow("move") << int(hc::operations::FileOperation::Move);
+        QTest::newRow("delete") << int(hc::operations::FileOperation::Delete);
+    }
+    void singleFileBenchmark()
+    {
+        if (!qEnvironmentVariableIsSet("HC_SINGLE_FILE_BENCH")) QSKIP("Opt-in single-file comparison");
+        QFETCH(int, Action);
+        const auto Operation = hc::operations::FileOperation(Action);
+        QTemporaryDir Scratch;
+        QVERIFY(Scratch.isValid());
+        native::TemporaryDirectory Inputs(qEnvironmentVariable("HC_BENCH_SOURCE_ROOT", Scratch.path()), "hc-single-in-");
+        native::TemporaryDirectory Outputs(qEnvironmentVariable("HC_BENCH_DESTINATION_ROOT", Scratch.path()), "hc-single-out-");
+        QVERIFY(Inputs.IsValid() && Outputs.IsValid());
+        const QByteArray Payload(8 * 1024 * 1024, 'z');
+        QFile Source(Inputs.FilePath("INPUT.BIN"));
+        QVERIFY(Source.open(QIODevice::WriteOnly));
+        QCOMPARE(Source.write(Payload), Payload.size());
+        Source.close();
+        const int SettleMs = qEnvironmentVariableIntValue("HC_SINGLE_BENCH_SETTLE_MS");
+        if (SettleMs > 0) QTest::qSleep(SettleMs);
+        const bool Detailed = qEnvironmentVariableIsSet("HC_TRANSFER_BENCH_DETAILED");
+        const auto Result = RunHyperCommander(Operation, Source.fileName(), Outputs.Path(), 0, Scratch.path(), Detailed);
+        if (Detailed) qInfo().noquote() << "single-file-metrics" << QJsonDocument(Result.details_).toJson(QJsonDocument::Compact);
+        QVERIFY2(Result.error_.isEmpty(), qPrintable(Result.error_));
+        QCOMPARE(Source.exists(), Operation == hc::operations::FileOperation::Copy);
+        QFile Output(Outputs.FilePath("INPUT.BIN"));
+        if (Operation != hc::operations::FileOperation::Delete) {
+            QVERIFY(Output.open(QIODevice::ReadOnly));
+            QCOMPARE(Output.readAll(), Payload);
+        } else QVERIFY(!Output.exists());
+        qInfo() << "single-file-ms" << Result.milliseconds_;
+    }
     void initTestCase()
     {
         root_ = qEnvironmentVariable("HC_TRANSFER_BENCH_ROOT");
@@ -512,7 +597,17 @@ private slots:
             QVERIFY(QDir().mkpath(Path));
         }
         const auto Root = VolumeInfo(root_), Other = other_.isEmpty() ? QJsonObject{} : VolumeInfo(other_);
-        if (!other_.isEmpty()) QVERIFY2(Root["volume"] != Other["volume"], "HC_TRANSFER_BENCH_OTHER_ROOT must be on another volume");
+        if (!other_.isEmpty()) {
+            // SMB shares do not expose a local volume GUID. Copy comparisons
+            // between different UNC endpoints do not require distinct physical disks.
+            const auto Endpoint = [](const QString& Path) {
+                const auto Normal = QDir::fromNativeSeparators(Path);
+                return Normal.startsWith("//") ? Normal.section('/', 0, 3).toCaseFolded() : QString{};
+            };
+            const bool DifferentShares = qEnvironmentVariable("HC_TRANSFER_BENCH_OPERATIONS") == "copy-cross"
+                && !Endpoint(root_).isEmpty() && !Endpoint(other_).isEmpty() && Endpoint(root_) != Endpoint(other_);
+            QVERIFY2(Root["volume"] != Other["volume"] || DifferentShares, "comparison requires distinct volumes or UNC copy endpoints");
+        }
         MEMORYSTATUSEX Memory{}; Memory.dwLength = sizeof(Memory); GlobalMemoryStatusEx(&Memory);
         environment_ = QJsonObject{{"createdUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
             {"label", qEnvironmentVariable("HC_TRANSFER_BENCH_LABEL")}, {"logicalProcessors", int(std::thread::hardware_concurrency())},
@@ -543,7 +638,7 @@ private slots:
         const bool Cross = std::any_of(Operations.begin(), Operations.end(), [](const QString& Operation) { return Operation.endsWith("-cross"); });
         const int Repeats = qEnvironmentVariableIntValue("HC_TRANSFER_BENCH_REPEATS") > 0
             ? qEnvironmentVariableIntValue("HC_TRANSFER_BENCH_REPEATS") : Shape.heavy_ ? 2 : 3;
-        QVERIFY(Repeats <= 10);
+        QVERIFY(Repeats <= 30);
 
         const auto Plan = PlanTree(Shape, Scale());
         // Pristine source, consumable move source and one destination at a time.
@@ -558,22 +653,22 @@ private slots:
         const auto Owner = QJsonDocument(QJsonObject{{"task", "copy-move-benchmark"}, {"scenario", scenario},
             {"createdUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
             {"expiresUtc", QDateTime::currentDateTimeUtc().addDays(7).toString(Qt::ISODate)}}).toJson();
-        QTemporaryDir Base(QDir(root_).filePath("hc-transfer-XXXXXX")); QVERIFY(Base.isValid());
-        { QFile File(Base.filePath("owner.json")); QVERIFY(File.open(QIODevice::WriteOnly) && File.write(Owner) == Owner.size()); }
-        std::optional<QTemporaryDir> Far;
+        hc::storage::native::TemporaryDirectory Base(root_, "hc-transfer-"); QVERIFY(Base.IsValid());
+        { QFile File(Base.FilePath("owner.json")); QVERIFY(File.open(QIODevice::WriteOnly) && File.write(Owner) == Owner.size()); }
+        std::optional<hc::storage::native::TemporaryDirectory> Far;
         if (Cross) {
-            Far.emplace(QDir(other_).filePath("hc-transfer-XXXXXX")); QVERIFY(Far->isValid());
-            QFile File(Far->filePath("owner.json")); QVERIFY(File.open(QIODevice::WriteOnly) && File.write(Owner) == Owner.size());
+            Far.emplace(other_, "hc-transfer-"); QVERIFY(Far->IsValid());
+            QFile File(Far->FilePath("owner.json")); QVERIFY(File.open(QIODevice::WriteOnly) && File.write(Owner) == Owner.size());
         }
-        const auto Pristine = Base.filePath("pristine/data"), Work = Base.filePath("work/data");
+        const auto Pristine = Base.FilePath("pristine/data"), Work = Base.FilePath("work/data");
         // Long paths and large trees: remove every fixture with the parallel
         // helper, also after a failed comparison. The report keeps the evidence.
         const auto Cleanup = qScopeGuard([&] {
-            for (const auto& Folder : {"pristine", "work", "copy-same", "move-same"}) RemoveTree(Long(Base.filePath(Folder)));
-            if (Far) for (const auto& Folder : {"copy-cross", "move-cross"}) RemoveTree(Long(Far->filePath(Folder)));
+            for (const auto& Folder : {"pristine", "work", "copy-same", "move-same"}) RemoveTree(Long(Base.FilePath(Folder)));
+            if (Far) for (const auto& Folder : {"copy-cross", "move-cross"}) RemoveTree(Long(Far->FilePath(Folder)));
         });
-        for (const auto& Folder : {"pristine", "work", "copy-same", "move-same", "scratch"}) QVERIFY(QDir(Base.path()).mkdir(Folder));
-        if (Far) for (const auto& Folder : {"copy-cross", "move-cross"}) QVERIFY(QDir(Far->path()).mkdir(Folder));
+        for (const auto& Folder : {"pristine", "work", "copy-same", "move-same", "scratch"}) QVERIFY(QDir(Base.Path()).mkdir(Folder));
+        if (Far) for (const auto& Folder : {"copy-cross", "move-cross"}) QVERIFY(QDir(Far->Path()).mkdir(Folder));
 
         QElapsedTimer Generation; Generation.start();
         const auto Generated = Materialize(Plan, Long(Pristine));
@@ -601,8 +696,8 @@ private slots:
             for (const auto& Implementation : Applicable(Operation)) if (Implementations.contains(Implementation)) Candidates << Implementation;
             const bool Moving = Operation.startsWith("move");
             if (Moving && !WorkReady) { const auto Error = Clone(); QVERIFY2(Error.isEmpty(), qPrintable(Error)); WorkReady = true; }
-            const auto DestinationParent = Operation == "copy-same" ? Base.filePath("copy-same") : Operation == "copy-cross" ? Far->filePath("copy-cross")
-                : Operation == "move-cross" ? Far->filePath("move-cross") : Base.filePath("move-same");
+            const auto DestinationParent = Operation == "copy-same" ? Base.FilePath("copy-same") : Operation == "copy-cross" ? Far->FilePath("copy-cross")
+                : Operation == "move-cross" ? Far->FilePath("move-cross") : Base.FilePath("move-same");
             const auto Source = Moving ? Work : Pristine;
             const auto Target = QDir(DestinationParent).filePath("data");
             const bool WritesData = Operation.startsWith("copy") || Operation == "move-cross";
@@ -620,11 +715,26 @@ private slots:
                 RunOutcome Run;
                 if (Implementation.startsWith("hypercommander")) {
                     Run = RunHyperCommander(Moving ? hc::operations::FileOperation::Move : hc::operations::FileOperation::Copy, Source, DestinationParent,
-                        Implementation == "hypercommander-auto" ? 0 : 1, Base.filePath("scratch"), qEnvironmentVariableIsSet("HC_TRANSFER_BENCH_DETAILED"));
+                        Implementation == "hypercommander-auto" ? 0 : 1, Base.FilePath("scratch"), qEnvironmentVariableIsSet("HC_TRANSFER_BENCH_DETAILED"));
                 } else {
+                    DestinationObserver Observer;
+                    QVERIFY2(Observer.Start(Target), "observation-marker");
                     QElapsedTimer Clock; Clock.start();
-                    if (Implementation == "robocopy") {
-                        Run.error_ = Robocopy(Source, Target, Moving, 8);
+                    if (Implementation == "robocopy-private-tree") {
+                        // Experimental whole-folder publication. Include private directory
+                        // creation and a no-replace rename in the elapsed time.
+                        // Use the same parent and inherited DACL as the final target.
+                        // The existing fixture cleanup owns this entire destination parent.
+                        const auto Tree = QDir(DestinationParent).filePath("hc-private-" + QUuid::createUuid().toString(QUuid::Id128));
+                        if (!CreateDirectoryW(Long(Tree).c_str(), nullptr))
+                            Run.error_ = Win32Text("private-directory", GetLastError());
+                        else {
+                            Run.error_ = Robocopy(Source, Tree, false, 8);
+                            if (Run.error_.isEmpty() && !MoveFileExW(Long(Tree).c_str(), Long(Target).c_str(), 0))
+                                Run.error_ = Win32Text("private-folder-publish", GetLastError());
+                        }
+                    } else if (Implementation == "robocopy" || Implementation == "robocopy-default") {
+                        Run.error_ = Robocopy(Source, Target, Moving, Implementation == "robocopy" ? 8 : 0);
                         // Remove the emptied selected folder as a user-visible move would.
                         if (Run.error_.isEmpty() && Moving && Exists(Long(Source)) && !RemoveDirectoryW(Long(Source).c_str())) Run.error_ = Win32Text("robocopy-root", GetLastError());
                     } else {
@@ -637,6 +747,7 @@ private slots:
                         if (Error) Run.error_ = Win32Text("win32", Error, Win32Failure);
                     }
                     Run.milliseconds_ = double(Clock.nsecsElapsed()) / 1e6;
+                    Observer.Finish(Run);
                 }
                 QJsonObject Result{{"scenario", scenario}, {"operation", Operation}, {"implementation", Implementation}, {"repeat", Repeat + 1},
                     {"position", Position + 1}, {"files", double(Plan.files_.size())}, {"directories", double(Plan.directories_.size() - 1)},
@@ -649,6 +760,20 @@ private slots:
                     Result["flushMilliseconds"] = double(Clock.nsecsElapsed()) / 1e6;
                 }
                 auto Error = Verify(Plan, Long(Target));
+                if (Error.isEmpty() && !Moving && qEnvironmentVariableIsSet("HC_TRANSFER_BENCH_VERIFY_CONTENT")) {
+                    for (const auto& File : Plan.files_) {
+                        const auto& Parent = Plan.directories_[File.directory_];
+                        const auto Relative = Parent.empty() ? File.name_ : Join(Parent, File.name_);
+                        QFile Input(QString::fromStdWString(Join(Long(Source), Relative)));
+                        QFile Output(QString::fromStdWString(Join(Long(Target), Relative)));
+                        QCryptographicHash Original(QCryptographicHash::Sha256), Copied(QCryptographicHash::Sha256);
+                        if (!Input.open(QIODevice::ReadOnly) || !Output.open(QIODevice::ReadOnly) || !Original.addData(&Input)
+                            || !Copied.addData(&Output) || Original.result() != Copied.result()) {
+                            Error = "content mismatch: " + QString::fromStdWString(Relative);
+                            break;
+                        }
+                    }
+                }
                 if (Error.isEmpty() && Moving && Exists(Long(Source))) Error = "move left its source folder";
                 if (!Error.isEmpty()) { Result["error"] = Error; results_.append(Result); writeReport(); QFAIL(qPrintable(Error)); }
                 const auto Seconds = Run.milliseconds_ / 1000;
