@@ -48,7 +48,6 @@
 #include <QFile>
 #include <QMessageBox>
 #include <QSignalBlocker>
-#include <QStyle>
 #include <QStyledItemDelegate>
 #include <QThreadPool>
 #include <QTimer>
@@ -100,66 +99,63 @@ public:
 // ═══════════════════════════════════════════════════════════
 namespace
 {
-    // Keeps the thumbnail grid as wide as the list viewport so every page sits in the centre.
-    class ThumbnailColumn final : public QObject
-    {
-    public:
-        explicit ThumbnailColumn(QListWidget* List) : QObject(List), list_(List) {}
-    protected:
-        bool eventFilter(QObject* Watched, QEvent* Event) override
-        {
-            if (Event->type() == QEvent::Resize && Watched == list_->viewport()) {
-                // Room for the delegate's padding around the page and its number.
-                const int Height = list_->iconSize().height() + list_->fontMetrics().height() + 24;
-                list_->setGridSize(QSize(qMax(list_->iconSize().width() + 20, list_->viewport()->width()), Height));
-            }
-            return QObject::eventFilter(Watched, Event);
-        }
-    private:
-        QListWidget* list_;
-    };
+    constexpr QSize ThumbnailSize(180, 160);
 
     // Marks the page on screen with an accent frame on the selection colour. It follows the
     // view's current page rather than the list selection, which a click can clear.
     class ThumbnailDelegate final : public QStyledItemDelegate
     {
     public:
-        ThumbnailDelegate(std::function<int()> Current, QObject* Parent) : QStyledItemDelegate(Parent), current_(std::move(Current)) {}
+        ThumbnailDelegate(const int& CurrentPage, const QCache<int, QPixmap>& Thumbnails, QObject* Parent)
+            : QStyledItemDelegate(Parent), currentPage_(CurrentPage), thumbnails_(Thumbnails) {}
 
-        QSize sizeHint(const QStyleOptionViewItem& Option, const QModelIndex& Index) const override
+        QSize sizeHint(const QStyleOptionViewItem& Option, const QModelIndex&) const override
         {
-            return QStyledItemDelegate::sizeHint(Option, Index) + QSize(2 * PadX, 2 * PadY);
+            return {0, ThumbnailSize.height() + LabelGap + Option.fontMetrics.height() + 2 * PadY};
         }
 
         void paint(QPainter* Painter, const QStyleOptionViewItem& Option, const QModelIndex& Index) const override
         {
             using fm::style::Token;
-            QStyleOptionViewItem Item(Option);
-            initStyleOption(&Item, Index);
-            const bool Current = current_ && Index.row() == current_();
-            const auto& Colors = fm::style::themeColorsFor(Item.widget);
-            // The frame replaces the style's own selection, hover and focus marks.
-            Item.state &= ~(QStyle::State_Selected | QStyle::State_HasFocus | QStyle::State_MouseOver);
+            const bool Current = Index.row() == currentPage_;
+            const auto& Colors = fm::style::themeColorsFor(Option.widget);
+            Painter->save();
             if (Current) {
-                Painter->save();
                 Painter->setRenderHint(QPainter::Antialiasing);
                 Painter->setPen(QPen(Colors[Token::Accent], 2));
                 Painter->setBrush(Colors[Token::Sel]);
-                Painter->drawRoundedRect(QRectF(Item.rect).adjusted(1, 1, -1, -1), 5, 5);
-                Painter->restore();
+                Painter->drawRoundedRect(QRectF(Option.rect).adjusted(4, 2, -4, -2), 5, 5);
             }
+
+            const QRect Content = Option.rect.adjusted(PadX, PadY, -PadX, -PadY);
+            const int LabelHeight = Option.fontMetrics.height();
+            QRect LabelRect(Content.left(), Content.top() + (Content.height() - LabelHeight) / 2,
+                            Content.width(), LabelHeight);
+            const auto* Thumbnail = thumbnails_.object(Index.row());
+            if (Thumbnail && !Thumbnail->isNull() && Content.width() > 0) {
+                const QSizeF Bounds(qMin(Content.width(), ThumbnailSize.width()), ThumbnailSize.height());
+                const QSize Size = Thumbnail->deviceIndependentSize().scaled(Bounds, Qt::KeepAspectRatio)
+                    .toSize().expandedTo(QSize(1, 1));
+                const QRect Page(Content.left() + (Content.width() - Size.width()) / 2,
+                                 Content.top() + (Content.height() - Size.height() - LabelGap - LabelHeight) / 2,
+                                 Size.width(), Size.height());
+                Painter->setRenderHint(QPainter::SmoothPixmapTransform);
+                Painter->drawPixmap(Page, *Thumbnail, Thumbnail->rect());
+                LabelRect.moveTop(Page.bottom() + 1 + LabelGap);
+            }
+
             // Designs that fill the selection with the accent need the on-accent text colour.
             const QColor Text = !Current ? Colors[Token::Fg2] : Colors.fillsSelection() ? Colors[Token::OnAccent] : Colors[Token::Fg];
-            Item.palette.setColor(QPalette::Text, Text);
-            Item.rect.adjust(PadX, PadY, -PadX, -PadY);
-            const QWidget* Widget = Item.widget;
-            QStyle* Style = Widget ? Widget->style() : QApplication::style();
-            Style->drawControl(QStyle::CE_ItemViewItem, &Item, Painter, Widget);
+            Painter->setFont(Option.font);
+            Painter->setPen(Text);
+            Painter->drawText(LabelRect, Qt::AlignCenter, Index.data(Qt::DisplayRole).toString());
+            Painter->restore();
         }
 
     private:
-        static constexpr int PadX = 6, PadY = 4;
-        std::function<int()> current_;
+        static constexpr int PadX = 8, PadY = 6, LabelGap = 4;
+        const int& currentPage_;
+        const QCache<int, QPixmap>& thumbnails_;
     };
 }
 
@@ -211,17 +207,12 @@ void QPDFView::setupUI()
     });
 
     // 사이드바 탭 (썸네일 + 목차)
-    m_thumbList->setIconSize(QSize(120, 160));
-    // One centred column: icon mode with a grid as wide as the list, the page number under each page.
-    m_thumbList->setViewMode(QListView::IconMode);
-    m_thumbList->setFlow(QListView::TopToBottom);
-    m_thumbList->setWrapping(false);
-    m_thumbList->setMovement(QListView::Static);
-    m_thumbList->setResizeMode(QListView::Adjust);
+    // List mode gives each page a full row for centring, hit testing and keyboard navigation.
+    m_thumbList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_thumbList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_thumbList->setUniformItemSizes(true);
     m_thumbList->setObjectName(QStringLiteral("pdfThumbnails"));
-    m_thumbList->viewport()->installEventFilter(new ThumbnailColumn(m_thumbList));
-    m_thumbList->setItemDelegate(new ThumbnailDelegate([this] { return m_currentPage; }, m_thumbList));
+    m_thumbList->setItemDelegate(new ThumbnailDelegate(m_currentPage, thumbnails_, m_thumbList));
     m_thumbList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_thumbList, &QWidget::customContextMenuRequested, this, &QPDFView::showThumbnailContextMenu);
     m_bookmarkTree->setHeaderHidden(true);
@@ -357,7 +348,7 @@ void QPDFView::closeFileInternal(bool emitSignals)
     if (m_document) { FPDF_CloseDocument(m_document); m_document = nullptr; }
     m_fileData.clear();
     continuousPages_.clear();continuousScale_=0;continuousHeight_=continuousTop_=0;continuousRotation_=-1;
-    m_pageCount = 0; m_currentPage = 0;bookmarksLoaded_=false;thumbnailsDone_.clear();renderSnapshot_.clear();renderHasEdits_=false; setModifiedState(false);
+    m_pageCount = 0; m_currentPage = 0;bookmarksLoaded_=false;thumbnails_.clear();renderSnapshot_.clear();renderHasEdits_=false; setModifiedState(false);
     m_viewRotation = 0; m_previousLocation = -1;
     m_searchPage = 0; m_searchMatchStart = -1; m_searchMatchCount = 0;
     m_searchResultIndex = -1; m_searchResultTotal = 0;
@@ -564,7 +555,8 @@ void QPDFView::setViewRotation(int Degrees)
         return;
     m_viewRotation = Rotation;
     m_pageCache.clear();
-    thumbnailsDone_.clear();
+    thumbnails_.clear();
+    m_thumbList->viewport()->update();
     renderCurrentPage();
     emit viewStateChanged();
 }
@@ -580,7 +572,7 @@ void QPDFView::RotateCurrentPage(RotationAngle Angle)
     auto Page=FPDF_LoadPage(m_document,m_currentPage); if (!Page) return;
     FPDFPage_SetRotation(Page,(int(Angle)/90)%4); FPDF_ClosePage(Page);
     // The page size changed, so the continuous layout and this page's thumbnail are stale.
-    continuousRotation_=-1; thumbnailsDone_.remove(m_currentPage);
+    continuousRotation_=-1; thumbnails_.remove(m_currentPage);
     m_pageCache.clear(); setModifiedState(true); renderCurrentPage(); emit viewStateChanged();
 }
 
@@ -1190,39 +1182,54 @@ void QPDFView::renderCurrentPageNow()
     emit viewStateChanged();
 }
 
-void QPDFView::updateSidebar()
-{
-    m_thumbList->clear();
-    for (int i = 0; i < m_pageCount; ++i) {
-        QImage thumb = renderPageToImage(i, 0.2);
-        auto* item = new QListWidgetItem(QIcon(QPixmap::fromImage(thumb)), tr("Page %1").arg(i + 1));
-        m_thumbList->addItem(item);
-        updateLoadingProgress(tr("PDF 썸네일 생성 중..."), i + 1, m_pageCount);
-    }
-}
-
 void QPDFView::startThumbnailGeneration()
 {
-    if(!m_thumbList)return;m_thumbList->clear();thumbnailsDone_.clear();
-    for(int i=0;i<m_pageCount;++i){auto* item=new QListWidgetItem(tr("%1쪽").arg(i+1),m_thumbList);item->setTextAlignment(Qt::AlignHCenter|Qt::AlignTop);}
-    if(m_thumbnailTimer)m_thumbnailTimer->start(30);
+    m_thumbList->clear();
+    thumbnails_.clear();
+    for (int Page = 0; Page < m_pageCount; ++Page)
+        m_thumbList->addItem(tr("%1쪽").arg(Page + 1));
+    m_thumbnailTimer->start(30);
 }
+
 void QPDFView::generateNextThumbnail()
 {
-    if(!m_document || !m_thumbList || IsRendering())return;
-    if(!m_sidebarTabs->isVisible())return;
-    if(m_sidebarTabs->currentWidget()==m_bookmarkTree){if(!bookmarksLoaded_)loadBookmarks();return;}
-    // Pages sit centred in a viewport-wide grid, so probe down the middle; a probe may land
-    // in the gap between two pages, hence the short walk over one grid row.
-    QModelIndex top;
-    const int centerX=m_thumbList->viewport()->width()/2,rowHeight=qMax(1,m_thumbList->gridSize().height());
-    for(int y=0;y<=rowHeight && !top.isValid();y+=4)top=m_thumbList->indexAt(QPoint(centerX,y));
-    const int first=qMax(0,top.row());
-    for(int i=first;i<m_thumbList->count();++i){
-        auto* item=m_thumbList->item(i);const auto rect=m_thumbList->visualItemRect(item);
-        if(rect.top()>m_thumbList->viewport()->height())break;
-        if(thumbnailsDone_.contains(i)||!rect.intersects(m_thumbList->viewport()->rect()))continue;
-        const auto image=renderPageToImage(i,.2);item->setIcon(QIcon(QPixmap::fromImage(image)));thumbnailsDone_.insert(i);return;
+    if (!m_document || IsRendering() || !m_sidebarTabs->isVisible())
+        return;
+    if (m_sidebarTabs->currentWidget() == m_bookmarkTree) {
+        if (!bookmarksLoaded_)
+            loadBookmarks();
+        return;
+    }
+
+    auto* Viewport = m_thumbList->viewport();
+    const qreal Dpr = Viewport->devicePixelRatioF();
+    if (thumbnailDpr_ != Dpr) {
+        thumbnailDpr_ = Dpr;
+        thumbnails_.clear();
+        Viewport->update();
+    }
+
+    const QModelIndex First = m_thumbList->indexAt(QPoint(Viewport->width() / 2, 0));
+    if (!First.isValid())
+        return;
+    for (int Page = First.row(); Page < m_thumbList->count(); ++Page) {
+        const QRect Row = m_thumbList->visualItemRect(m_thumbList->item(Page));
+        if (Row.top() >= Viewport->height())
+            break;
+        if (thumbnails_.contains(Page))
+            continue;
+
+        const QSizeF PageSize = rotatedPageSize(Page);
+        QImage Image;
+        if (PageSize.width() > 0 && PageSize.height() > 0) {
+            const qreal Scale = Dpr * qMin(ThumbnailSize.width() / PageSize.width(),
+                                           ThumbnailSize.height() / PageSize.height());
+            Image = renderPageToImage(Page, Scale);
+        }
+        Image.setDevicePixelRatio(Dpr);
+        thumbnails_.insert(Page, new QPixmap(QPixmap::fromImage(Image)), 1 + Image.sizeInBytes() / 1024);
+        Viewport->update(Row);
+        return;
     }
 }
 

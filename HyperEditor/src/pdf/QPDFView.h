@@ -14,6 +14,7 @@
 #include <QTabWidget>
 #include <QLineEdit>
 #include <QCache>
+#include <QPixmap>
 #include <QRubberBand>
 #include <QVector>
 
@@ -196,11 +197,11 @@ private:
     QList<QPair<int,qreal>> renderQueue_;
     QSet<int> renderFailed_;
     bool renderTickPending_ = false, bookmarksLoaded_ = false;
-    QSet<int> thumbnailsDone_;
+    QCache<int, QPixmap> thumbnails_{16 * 1024}; // Cache cost is measured in KiB.
+    qreal thumbnailDpr_ = 0;
     QByteArray renderSnapshot_;
     bool renderHasEdits_=false;
     bool renderPending_ = false;
-    void updateSidebar();
     void startThumbnailGeneration();
     void generateNextThumbnail();
     void loadBookmarks();

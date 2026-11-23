@@ -34,9 +34,21 @@ bool Put(const QString& Path,const QByteArray& Bytes){QFile File(Path);return Fi
 QByteArray Read(const QString& Path){QFile File(Path);return File.open(QIODevice::ReadOnly)?File.readAll():QByteArray{};}
 QJsonObject Doc(const DocumentWorkspaceWidget& Workspace,const QString& Id){for(auto Item:Workspace.Snapshot()["documents"].toArray())if(Item.toObject()["documentId"]==Id)return Item.toObject();return {};}
 bool Ready(const DocumentWorkspaceWidget& Workspace,const QString& Id){return Doc(Workspace,Id)["lifecycle"]=="ready";}
-QByteArray PdfFixture(int Pages=2,double Height=400){
+QByteArray PdfFixture(int Pages=2,double Height=400,bool PaintPage=false){
     InitializeDocumentPdfium();auto Document=FPDF_CreateNewDocument();
     for(int At=0;At<Pages;++At){auto Page=FPDFPage_New(Document,At,300,Height);FPDFPage_SetRotation(Page,At?2:0);
+        if (PaintPage) {
+            auto Background = FPDFPageObj_CreateNewRect(0, 0, 300, float(Height));
+            FPDFPageObj_SetFillColor(Background, 210, 61, 37, 255);
+            FPDFPath_SetDrawMode(Background, FPDF_FILLMODE_WINDING, false);
+            FPDFPage_InsertObject(Page, Background);
+            for (const auto Corner : {QPointF(0, 0), QPointF(280, Height - 20)}) {
+                auto Marker = FPDFPageObj_CreateNewRect(float(Corner.x()), float(Corner.y()), 20, 20);
+                FPDFPageObj_SetFillColor(Marker, 18, 170, 70, 255);
+                FPDFPath_SetDrawMode(Marker, FPDF_FILLMODE_WINDING, false);
+                FPDFPage_InsertObject(Page, Marker);
+            }
+        }
         auto Text=FPDFPageObj_NewTextObj(Document,"Helvetica",18);const unsigned short Message[]={'P','2',' ','s','e','a','r','c','h',0};
         FPDFText_SetText(Text,Message);FPDFPageObj_Transform(Text,1,0,0,1,30,250);FPDFPage_InsertObject(Page,Text);FPDFPage_GenerateContent(Page);FPDF_ClosePage(Page);}
     struct Writer:FPDF_FILEWRITE {QByteArray bytes_;static int Write(FPDF_FILEWRITE* Self,const void* Data,unsigned long Size){static_cast<Writer*>(Self)->bytes_.append(static_cast<const char*>(Data),Size);return 1;}} Writer;
@@ -82,6 +94,62 @@ void continuousPdfShowsLastPageWithoutWholeBookBitmap(){
     View.RotateCurrentPage(QPDFView::Rotate90);QTRY_VERIFY(!View.IsRendering());
     QVERIFY(View.isModified());QCOMPARE(View.currentPageRotation(),QPDFView::Rotate90);QCOMPARE(View.viewRotation(),90);
 }
+void pdfThumbnailsFitAndCenter(){
+    QPDFView View;
+    View.resize(900, 650);
+    View.setSidebarPosition(QPDFView::SidebarLeft);
+    QVERIFY(View.LoadContent(PdfFixture(12, 400, true), "thumbnails.pdf"));
+    View.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&View));
+
+    auto* List = View.findChild<QListWidget*>("pdfThumbnails");
+    auto* Splitter = View.findChild<QSplitter*>();
+    QVERIFY(List && Splitter);
+    Splitter->setSizes({220, 680});
+    auto* Viewport = List->viewport();
+    const qreal Dpr = Viewport->devicePixelRatioF();
+    const auto Fits = [&](int Page, bool Landscape) {
+        const auto Pixmap = Viewport->grab();
+        const auto Frame = Pixmap.toImage();
+        const auto Row = List->visualItemRect(List->item(Page));
+        const QRect Pixels = QRectF(Row.x() * Dpr, Row.y() * Dpr, Row.width() * Dpr, Row.height() * Dpr)
+            .toAlignedRect().intersected(Frame.rect());
+        QRect Bounds;
+        QRect Corners;
+        for (int Y = Pixels.top(); Y <= Pixels.bottom(); ++Y) {
+            for (int X = Pixels.left(); X <= Pixels.right(); ++X) {
+                const auto Color = Frame.pixelColor(X, Y);
+                if (Color.red() > 195 && Color.green() < 75 && Color.blue() < 50)
+                    Bounds |= QRect(X, Y, 1, 1);
+                if (Color.red() < 35 && Color.green() > 150 && Color.blue() < 90)
+                    Corners |= QRect(X, Y, 1, 1);
+            }
+        }
+        const qreal Ratio = Landscape ? 4.0 / 3 : 3.0 / 4;
+        return Bounds.width() >= 75 * Dpr
+            && qAbs(Bounds.width() - Ratio * Bounds.height()) <= 3 * Dpr
+            && qAbs(Bounds.center().x() - Frame.rect().center().x()) <= 2 * Dpr
+            && qAbs(Corners.width() - Bounds.width()) <= 3 * Dpr
+            && qAbs(Corners.height() - Bounds.height()) <= 3 * Dpr;
+    };
+
+    QTRY_VERIFY(Fits(0, false));
+    QTest::mouseClick(Viewport, Qt::LeftButton, Qt::NoModifier, List->visualItemRect(List->item(1)).center());
+    QTRY_COMPARE(View.currentPage(), 1);
+    QTest::keyClick(List, Qt::Key_Up);
+    QTRY_COMPARE(View.currentPage(), 0);
+
+    View.setViewRotation(90);
+    QTRY_VERIFY(Fits(0, true));
+    const int WideWidth = Viewport->width();
+    Splitter->setSizes({120, 780});
+    QTRY_VERIFY(Viewport->width() < WideWidth);
+    QTRY_VERIFY(Fits(0, true));
+    View.goToPage(11);
+    QTRY_COMPARE(List->currentRow(), 11);
+    QTRY_VERIFY(Fits(11, true));
+}
+
 void imageFitTracksViewportAfterHiddenLoad(){
     QImageView View; View.resize(900,650);
     QImage Source(320,200,QImage::Format_RGB32); Source.fill(Qt::blue);
