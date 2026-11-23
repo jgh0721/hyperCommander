@@ -26,6 +26,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
 #include <QMenu>
@@ -309,6 +310,20 @@ private slots:
         const auto ExplorerTab = std::ranges::find(ExplorerTabs, Explorer->title(), &QWidget::accessibleName);
         QVERIFY(ExplorerTab != ExplorerTabs.end());
         QTRY_VERIFY((*ExplorerTab)->isVisible() && !(*ExplorerTab)->rect().isEmpty());
+
+        Manager->expandAutoHide(Tree);
+        QTRY_VERIFY(Tree->isVisible());
+        auto* TreeTitle = Tree->parentWidget()->findChild<QWidget*>("fmDockFlyoutTitle", Qt::FindDirectChildrenOnly);
+        QVERIFY(TreeTitle && TreeTitle->isVisible());
+        auto* Resources = Tree->findChild<QWidget*>("epubResourcePane");
+        QVERIFY(Resources && Resources->isVisible());
+        for (auto* Label : Resources->findChildren<QLabel*>())
+            QVERIFY(!Label->isVisible() || Label->text() != Tree->title());
+        for (const auto* Name : {"epubResourceAdd", "epubResourceCollapse", "epubResourceFilter"}) {
+            auto* Control = Resources->findChild<QWidget*>(Name);
+            QVERIFY2(Control && Control->isVisible(), Name);
+        }
+        Manager->expandAutoHide(nullptr);
 
         auto* SideBar = Manager->findChild<QWidget*>("fmDockSideBarBottom");
         QVERIFY(SideBar);

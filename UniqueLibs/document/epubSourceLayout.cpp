@@ -114,7 +114,7 @@ void EpubSourceEditor::setupLayout() {
 }
 void EpubSourceEditor::setupResources(QWidget* Panel) {
     auto* Layout=new QVBoxLayout(Panel);Layout->setContentsMargins(6,6,4,4);Layout->setSpacing(4);
-    auto* Header=new QHBoxLayout;Header->setSpacing(2);auto* Title=new QLabel(tr("책 구조"),Panel);auto Font=Title->font();Font.setWeight(QFont::DemiBold);Title->setFont(Font);Header->addWidget(Title,1);
+    auto* Header=new QHBoxLayout;Header->setSpacing(2);auto* Title=new QLabel(tr("책 구조"),Panel);Title->setObjectName("epubResourceTitle");auto Font=Title->font();Font.setWeight(QFont::DemiBold);Title->setFont(Font);Header->addWidget(Title);Header->addStretch();
     auto* Add=new QToolButton(Panel);Add->setObjectName("epubResourceAdd");Add->setText(QStringLiteral("+"));Add->setToolTip(tr("리소스 추가"));Add->setAccessibleName(tr("리소스 추가"));Add->setAutoRaise(true);Add->setPopupMode(QToolButton::InstantPopup);Header->addWidget(Add);
     auto* Collapse=new QToolButton(Panel);Collapse->setObjectName("epubResourceCollapse");Collapse->setText(QStringLiteral("⌃"));Collapse->setToolTip(tr("모두 접기"));Collapse->setAccessibleName(tr("모두 접기"));Collapse->setAutoRaise(true);Header->addWidget(Collapse);
     auto* Hide=new QToolButton(Panel);Hide->setObjectName("epubResourceHide");Hide->setText(QStringLiteral("‹"));Hide->setToolTip(tr("책 구조 패널 접기"));Hide->setAccessibleName(tr("책 구조 패널 접기"));Hide->setAutoRaise(true);Header->addWidget(Hide);connect(Hide,&QToolButton::clicked,this,[this]{setPanelVisible("tree",false);});Layout->addLayout(Header);
@@ -135,13 +135,14 @@ QList<DocumentToolPanelItem> EpubSourceEditor::TakeToolPanels() {
     if(panelsTaken_ || !problems_)return {};
     panelsTaken_=true;
     // 문제 칸 = 요약 줄 + 검사 결과. EPUBCheck 출력은 출력 도구 창이 따로 보인다. 부모는 작업 공간이 바꾼다
-    // (부모 없이 두면 최상위 창이 된다). 빈 탭 묶음과 책 구조의 ‘접기’ 단추는 도구 창이 맡으므로 숨긴다.
+    // (부모 없이 두면 최상위 창이 된다). 책 구조의 제목과 ‘접기’는 도구 창이 맡는다.
     auto* Problems=new QWidget(problemsPanel_);Problems->setObjectName("epubProblemsTool");
     auto* Layout=new QVBoxLayout(Problems);Layout->setContentsMargins(0,0,0,0);Layout->setSpacing(0);
     problems_->setCornerWidget(nullptr,Qt::TopRightCorner);problemsSummary_->setParent(Problems);problemsSummary_->setContentsMargins(8,4,8,4);problemsSummary_->show();Layout->addWidget(problemsSummary_);
     problems_->removeTab(problems_->indexOf(diagnostics_));problems_->removeTab(problems_->indexOf(checkerOutput_));
     diagnostics_->setParent(Problems);Layout->addWidget(diagnostics_,1);diagnostics_->show();
     problemsPanel_->hide();
+    if(auto* Title=treePanel_->findChild<QLabel*>("epubResourceTitle"))Title->hide();
     if(auto* Hide=treePanel_->findChild<QToolButton*>("epubResourceHide"))Hide->hide();
     takenPanels_<<treePanel_<<Problems<<checkerOutput_;
     // EPUB 편집이 시작되면 책 구조 · 문제를 연다(시안). 사용자가 끈 패널도 편집을 새로 시작하면 다시 연다.
