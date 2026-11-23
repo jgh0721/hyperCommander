@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <QJsonObject>
 #include <QMap>
+#include <QSet>
 #include "settings/appSettings.hpp"
 #include <QStringList>
 #include <QVector>
@@ -55,22 +56,33 @@ bool Save(hc::settings::JsonStore& Settings, Loaded& Previous, const State& Valu
 // Metadata belongs to a published snapshot. A missing revision is never reused
 // across enumerations; unchanged strong revisions can retain computed values.
 class DirectoryIndex {
+    struct Record { storage::EntrySnapshot entry_; QMap<QString, QString> values_; int row_ = -1; };
 public:
+    using Prepared = QMap<QString, Record>;
+    static Prepared Prepare(const std::vector<storage::EntrySnapshot>& Entries);
+    void PublishPrepared(Prepared Entries);
     void Publish(const std::vector<storage::EntrySnapshot>& Entries);
     void Append(const std::vector<storage::EntrySnapshot>& Entries);
     bool Put(const storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation);
     QMap<QString, QString> Metadata(const storage::EntrySnapshot& Entry) const;
     QMap<QString, QMap<QString, QString>> SearchMetadata() const {
         QMap<QString, QMap<QString, QString>> Result;
-        for (const auto& Record : records_)
-            if (!Record.values_.isEmpty()) Result.insert(QString::fromStdString(storage::Serialize(Record.entry_.id_)), Record.values_);
+        for (const auto& Key : valued_) {
+            const auto Record = records_.constFind(Key);
+            Result.insert(QString::fromStdString(storage::Serialize(Record->entry_.id_)), Record->values_);
+        }
         return Result;
+    }
+    qsizetype Count() const { return records_.size(); }
+    int Row(const QString& Key) const {
+        const auto Found = records_.constFind(Key);
+        return Found == records_.cend() ? -1 : Found->row_;
     }
     bool Matches(const storage::EntrySnapshot& Entry, const QString& Query) const;
     quint64 Generation() const { return generation_; }
 private:
-    struct Record { storage::EntrySnapshot entry_; QMap<QString, QString> values_; };
-    QMap<QString, Record> records_;
+    Prepared records_;
+    QSet<QString> valued_;
     quint64 generation_ = 0;
 };
 }

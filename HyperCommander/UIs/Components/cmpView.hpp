@@ -329,6 +329,8 @@ private:
     QtitanColumnAdapter*            columnAdapter_ = nullptr;
     QMetaObject::Connection         selectionReset_;
     QMetaObject::Connection         selectionRestore_;
+    QMetaObject::Connection         automaticInsertScroll_, automaticRemoveScroll_;
+    QJsonObject                     automaticScroll_;
     QStringList                    resetSelection_, resetFocusFallback_;
     QString                        resetFocus_, resetPath_;
     // Keep only recent positions; a long-lived tab may visit many paths.

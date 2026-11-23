@@ -108,21 +108,40 @@ QString SelectionKey(const storage::EntrySnapshot& Entry) {
         return QString::fromUtf8(QJsonDocument(QJsonArray{QString::fromStdString(Entry.id_.providerId_.value_), QString::fromStdString(Entry.id_.key_)}).toJson(QJsonDocument::Compact));
     return LocationKey(Entry.locator_);
 }
-void DirectoryIndex::Publish(const std::vector<storage::EntrySnapshot>& Entries) {
-    QMap<QString, Record> Next;
+DirectoryIndex::Prepared DirectoryIndex::Prepare(const std::vector<storage::EntrySnapshot>& Entries) {
+    Prepared Next;
+    int Row = 0;
     for (const auto& Entry : Entries) {
         const auto Key = SelectionKey(Entry);
-        auto Previous = records_.constFind(Key);
-        Record Value{Entry, {}};
-        if (Previous != records_.cend() && Entry.id_.revision_ && Previous->entry_.id_ == Entry.id_
-            && Previous->entry_.locator_ == Entry.locator_ && Previous->entry_.size_ == Entry.size_
-            && Previous->entry_.modifiedUtcMs_ == Entry.modifiedUtcMs_) Value.values_ = Previous->values_;
-        Next.insert(Key, std::move(Value));
+        Next.insert(Key, Record{Entry, {}, Row++});
+    }
+    return Next;
+}
+void DirectoryIndex::PublishPrepared(Prepared Next) {
+    // Keep values that arrived while the worker was preparing the new index.
+    for (auto It = valued_.begin(); It != valued_.end();) {
+        const auto Previous = records_.constFind(*It);
+        auto Current = Next.find(*It);
+        if (Current == Next.end() || !Current->entry_.id_.revision_ || Previous->entry_.id_ != Current->entry_.id_
+            || Previous->entry_.locator_ != Current->entry_.locator_ || Previous->entry_.size_ != Current->entry_.size_
+            || Previous->entry_.modifiedUtcMs_ != Current->entry_.modifiedUtcMs_) {
+            It = valued_.erase(It);
+            continue;
+        }
+        Current->values_ = Previous->values_;
+        ++It;
     }
     records_ = std::move(Next); ++generation_;
 }
+void DirectoryIndex::Publish(const std::vector<storage::EntrySnapshot>& Entries) {
+    PublishPrepared(Prepare(Entries));
+}
 void DirectoryIndex::Append(const std::vector<storage::EntrySnapshot>& Entries) {
-    for (const auto& Entry : Entries) records_.insert(SelectionKey(Entry), Record{Entry, {}});
+    for (const auto& Entry : Entries) {
+        const auto Key = SelectionKey(Entry);
+        valued_.remove(Key);
+        records_.insert(Key, Record{Entry, {}});
+    }
 }
 bool DirectoryIndex::Put(const storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation) {
     // A refresh may finish while metadata is being queried. An unchanged
@@ -134,6 +153,7 @@ bool DirectoryIndex::Put(const storage::EntrySnapshot& Entry, const QMap<QString
         || Found->entry_.size_ != Entry.size_ || Found->entry_.modifiedUtcMs_ != Entry.modifiedUtcMs_
         || Found->entry_.attributes_ != Entry.attributes_) return false;
     for (auto It = Values.begin(); It != Values.end(); ++It) Found->values_.insert(It.key(), It.value());
+    if (!Found->values_.isEmpty()) valued_.insert(Found.key());
     return true;
 }
 QMap<QString, QString> DirectoryIndex::Metadata(const storage::EntrySnapshot& Entry) const {

@@ -57,7 +57,7 @@ namespace hc::ui
                     const auto Key = Native->wParam;
                     if ((Native->lParam & (LPARAM(1) << 30)) || Key == VK_UP || Key == VK_DOWN
                         || Key == VK_LEFT || Key == VK_RIGHT || Key == VK_PRIOR || Key == VK_NEXT
-                        || Key == VK_HOME || Key == VK_END) {
+                        || Key == VK_HOME || Key == VK_END || Key == VK_TAB) {
                         last_.start(); nativeWaiting_.start(); awaitingQt_ = true;
                     }
                 }
@@ -71,7 +71,8 @@ namespace hc::ui
                     const auto* Key = static_cast<QKeyEvent*>(Event);
                     Navigation = Key->isAutoRepeat() || Key->key() == Qt::Key_Up || Key->key() == Qt::Key_Down
                         || Key->key() == Qt::Key_Left || Key->key() == Qt::Key_Right || Key->key() == Qt::Key_PageUp
-                        || Key->key() == Qt::Key_PageDown || Key->key() == Qt::Key_Home || Key->key() == Qt::Key_End;
+                        || Key->key() == Qt::Key_PageDown || Key->key() == Qt::Key_Home || Key->key() == Qt::Key_End
+                        || Key->key() == Qt::Key_Tab || Key->key() == Qt::Key_Backtab;
                 }
                 if (Navigation || Event->type() == QEvent::Wheel) last_.start();
                 if (Event->type() == QEvent::KeyPress) releasePaints();

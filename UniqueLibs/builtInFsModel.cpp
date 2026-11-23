@@ -872,6 +872,20 @@ void CFSModel::DismissNavigationError()
     emit sigRefreshCompleted();
 }
 
+void CFSModel::applyListingWhenIdle(std::function<void()> Apply, std::uint64_t Generation)
+{
+    auto* Timer = new QTimer(this);
+    Timer->setInterval(16);
+    QElapsedTimer Wait; Wait.start();
+    connect(Timer, &QTimer::timeout, this, [this, Timer, Apply = std::move(Apply), Generation, Wait] {
+        if (Generation == generation_ && Wait.elapsed() < hc::columns::QueryEngine::MaxDeferMs && hc::ui::InputGate::Busy()) return;
+        Timer->stop(); Timer->deleteLater();
+        if (Generation == generation_) Apply();
+    });
+    // A nonzero timer lets Windows drain native input ahead of a listing completion.
+    Timer->start();
+}
+
 void CFSModel::refreshProvider()
 {
     hc::startup::Span Trace("listing.dispatch");
@@ -879,6 +893,7 @@ void CFSModel::refreshProvider()
     const bool Elevated = std::exchange(elevatedDirectoryRequest_, false);
     failedNavigationRetry_ = {};
     directorySizeStop_.request_stop(); directorySizeStop_ = std::stop_source{}; directorySizePending_.clear();
+    const bool PageWasBusy = pageBusy_;
     pageStop_.request_stop(); ++pageGeneration_; pageBusy_ = false;
     requestOnlyValues_ = false; columnQueries_->SetLoader(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(), columnView_.profile_));
     using namespace hc::storage;
@@ -909,7 +924,7 @@ void CFSModel::refreshProvider()
     Context.stopToken_ = navigationStop_.get_token();
     Context.freshEnumerationMetadata_ = true;
     Context.allowUnavailableChildMetadata_ = true;
-    struct Listing { std::shared_ptr<PagedEntryIndex> source_, view_; EntryPage page_; std::shared_ptr<hc::permissions::DirectoryElevationSession> session_; std::vector<hc::settings::FileRuleResult> styles_; std::vector<PreparedFileRow> prepared_; };
+    struct Listing { std::shared_ptr<PagedEntryIndex> source_, view_; EntryPage page_; std::shared_ptr<hc::permissions::DirectoryElevationSession> session_; std::vector<hc::settings::FileRuleResult> styles_; PreparedListing prepared_; };
     using ReadResult = Result<Listing>;
     const auto Rules = fileColorRules_; const auto RuleGeneration = fileRuleLoadGeneration_; const bool Dark = colorScheme_.IsDarkMode;
     std::optional<DirectoryColumns> Columns;
@@ -933,64 +948,84 @@ void CFSModel::refreshProvider()
         for (const auto Row : Order) PreviousRows.push_back(*vecNode_[Row]->storageEntry_);
     }
     const auto Query = pageQuery_; const auto Match = pageMatch_; const auto ShowHidden = pageShowHidden_;
+    const bool Native = Location.kind_ == LocatorKind::Local || Location.kind_ == LocatorKind::Smb;
+    const auto TextOptions = sortTextOptions();
+    const bool PrepareNameRanks = Native && hasPlainNameColumn(Columns ? Columns->view_ : columnView_);
+    const auto DeltaBase = automaticRefresh_ && !PageWasBusy && Location.kind_ == LocatorKind::Local
+        && !Root->IsRemote() && !Append && !Fallback && Query.isEmpty() && canApplyListingDelta()
+        && Sorts == pageSorts_ && property("hc.snapshotLocation").toString() == hc::workspace::LocationKey(Location)
+        ? pageView_ : std::shared_ptr<PagedEntryIndex>{};
     auto* Watcher = new QFutureWatcher<ReadResult>(this);
-    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location, Query, Match, ShowHidden, Sorts, Fallback, Display, Append, RuleGeneration, Dark, ReusedArchive, Columns = std::move(Columns)] {
+    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location, Query, Match, ShowHidden, Sorts, Fallback, Display, Append, RuleGeneration, Dark, ReusedArchive, DeltaBase, TextOptions, Columns = std::move(Columns)] {
         auto Result = Watcher->future().takeResult();
         Watcher->deleteLater();
-        if (Generation != generation_) return;
-        const auto EndAutomatic = qScopeGuard([this] { automaticRefresh_ = false; });
-        loading_ = false;
-        if (!Result.HasValue())
-        {
-            // A changed container invalidates the mounted index. Retry once
-            // with a new reader; old published entries retain their old reader.
-            if (ReusedArchive && Result.Failure().category_ == ErrorCategory::StaleRevision) {
-                vecFs_ = TargetRoots; path_ = TargetPath;
-                GetRoot()->RefreshReadProvider(); refreshProvider(); return;
+        const bool Defer = Result.HasValue() && Result.Value().page_.entries_.size() > IndexedOrderThreshold;
+        auto Apply = [this, Result = std::move(Result), Generation, TargetRoots, TargetPath, Provider, Location, Query, Match,
+            ShowHidden, Sorts, Fallback, Display, Append, RuleGeneration, Dark, ReusedArchive, DeltaBase, TextOptions, Columns]() mutable {
+            if (Generation != generation_) return;
+            const auto EndAutomatic = qScopeGuard([this] { automaticRefresh_ = false; });
+            loading_ = false;
+            if (!Result.HasValue())
+            {
+                // A changed container invalidates the mounted index. Retry once
+                // with a new reader; old published entries retain their old reader.
+                if (ReusedArchive && Result.Failure().category_ == ErrorCategory::StaleRevision) {
+                    vecFs_ = TargetRoots; path_ = TargetPath;
+                    GetRoot()->RefreshReadProvider(); refreshProvider(); return;
+                }
+                navigationError_ = Result.Failure();
+                failedNavigationRetry_ = [this, TargetRoots, TargetPath] {
+                    vecFs_ = TargetRoots;
+                    path_ = TargetPath;
+                    Refresh();
+                };
+                if (acceptedRoots_.isEmpty()) publishNavigationFallback(Location);
+                emit sigNavigationFailed(QString::fromStdString(Result.Failure().code_));
+                emit sigRefreshCompleted();
+                if (Result.Failure().category_ != ErrorCategory::Cancelled)
+                    emit DirectoryReadFailed(QString::fromStdString(Location.root_), Location.kind_ == LocatorKind::Local
+                        && !TargetRoots.isEmpty() && !TargetRoots.back()->IsRemote());
+                return;
             }
-            navigationError_ = Result.Failure();
-            failedNavigationRetry_ = [this, TargetRoots, TargetPath] {
-                vecFs_ = TargetRoots;
-                path_ = TargetPath;
-                Refresh();
-            };
-            if (acceptedRoots_.isEmpty()) publishNavigationFallback(Location);
-            emit sigNavigationFailed(QString::fromStdString(Result.Failure().code_));
+            const auto* AppliedColumns = Columns && Columns->begin_() ? &*Columns : nullptr;
+            auto& Prepared = Result.Value().prepared_;
+            if (TextOptions != sortTextOptions() || !hasPlainNameColumn(AppliedColumns ? AppliedColumns->view_ : columnView_)) Prepared.nameRanks_.clear();
+            const bool Delta = Prepared.delta_ && DeltaBase == pageView_ && !AppliedColumns && canApplyListingDelta()
+                && rowCount() == Prepared.delta_->previousCount_ + 1 && !Prepared.nameRanks_.isEmpty()
+                && Result.Value().source_->Count() > IndexedOrderThreshold && Query == pageQuery_ && Match == pageMatch_
+                && ShowHidden == pageShowHidden_ && Sorts == columnSorts_ && Display == displaySettings_;
+            recoveryLocation_.reset();
+            vecFs_ = TargetRoots;
+            path_ = TargetPath;
+            acceptedRoots_ = TargetRoots;
+            acceptedPath_ = TargetPath;
+            acceptedProvider_ = Provider;
+            // A tab retains its approved subtree session across refreshes and child
+            // navigation. Publishing a location outside it releases the helper.
+            elevatedDirectorySession_ = Result.Value().session_;
+            pageSource_ = Result.Value().source_; pageView_ = Result.Value().view_;
+            pageSorts_ = Sorts; completedSorts_ = Sorts;
+            appendOrder_ = Append;
+            const bool CancelSort = UsesIndexedOrder() && Fallback && (!Columns || AppliedColumns);
+            if (CancelSort) { columnSorts_.clear(); completedSorts_.clear(); pageSorts_.clear(); }
+            if (Delta) applyListingDelta(std::move(Result.Value().page_.entries_), std::move(Prepared));
+            else publishProvider(std::move(Result.Value().page_.entries_), fileRuleSeedsUsable(RuleGeneration, Dark) ? std::move(Result.Value().styles_) : std::vector<hc::settings::FileRuleResult>{}, std::move(Prepared), AppliedColumns, CancelSort);
+            if (CancelSort && !AppliedColumns) emit ColumnSortCancelled();
+            setProperty("hc.snapshotLocation", hc::workspace::LocationKey(Location));
+            SetWatchEnabled(watchEnabled_);
+            emit PageChanged();
             emit sigRefreshCompleted();
-            if (Result.Failure().category_ != ErrorCategory::Cancelled)
-                emit DirectoryReadFailed(QString::fromStdString(Location.root_), Location.kind_ == LocatorKind::Local
-                    && !TargetRoots.isEmpty() && !TargetRoots.back()->IsRemote());
-            return;
-        }
-        const auto* AppliedColumns = Columns && Columns->begin_() ? &*Columns : nullptr;
-        recoveryLocation_.reset();
-        vecFs_ = TargetRoots;
-        path_ = TargetPath;
-        acceptedRoots_ = TargetRoots;
-        acceptedPath_ = TargetPath;
-        acceptedProvider_ = Provider;
-        // A tab retains its approved subtree session across refreshes and child
-        // navigation. Publishing a location outside it releases the helper.
-        elevatedDirectorySession_ = Result.Value().session_;
-        pageSource_ = Result.Value().source_; pageView_ = Result.Value().view_;
-        pageSorts_ = Sorts; completedSorts_ = Sorts;
-        appendOrder_ = Append;
-        const bool CancelSort = UsesIndexedOrder() && Fallback && (!Columns || AppliedColumns);
-        if (CancelSort) { columnSorts_.clear(); completedSorts_.clear(); pageSorts_.clear(); }
-        publishProvider(std::move(Result.Value().page_.entries_), fileRuleSeedsUsable(RuleGeneration, Dark) ? std::move(Result.Value().styles_) : std::vector<hc::settings::FileRuleResult>{}, std::move(Result.Value().prepared_), AppliedColumns, CancelSort);
-        if (CancelSort && !AppliedColumns) emit ColumnSortCancelled();
-        setProperty("hc.snapshotLocation", hc::workspace::LocationKey(Location));
-        SetWatchEnabled(watchEnabled_);
-        emit PageChanged();
-        emit sigRefreshCompleted();
-        const auto Notify = IsRoot() && (GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK)
-            ? GetRoot()->GetRoot() : GetCurrentPathWithRoot();
-        emit sigChangedDirectory(QDir::toNativeSeparators(QDir::cleanPath(Notify)));
-        if (UsesIndexedOrder() && (Query != pageQuery_ || Match != pageMatch_ || ShowHidden != pageShowHidden_
-            || (!CancelSort && (Sorts != columnSorts_ || (Fallback && Columns))) || Display != displaySettings_)) requestPage(0, true);
-        else if (CancelSort) emit ColumnQueryStatus(tr("이 컬럼의 전체 목록 정렬은 아직 지원하지 않아 이름순으로 표시합니다."));
+            const auto Notify = IsRoot() && (GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK)
+                ? GetRoot()->GetRoot() : GetCurrentPathWithRoot();
+            emit sigChangedDirectory(QDir::toNativeSeparators(QDir::cleanPath(Notify)));
+            if (UsesIndexedOrder() && (Query != pageQuery_ || Match != pageMatch_ || ShowHidden != pageShowHidden_
+                || (!CancelSort && (Sorts != columnSorts_ || (Fallback && Columns))) || Display != displaySettings_)) requestPage(0, true);
+            else if (CancelSort) emit ColumnQueryStatus(tr("이 컬럼의 전체 목록 정렬은 아직 지원하지 않아 이름순으로 표시합니다."));
+        };
+        if (Defer) applyListingWhenIdle(std::move(Apply), Generation);
+        else Apply();
     });
-    Watcher->setFuture(QtConcurrent::run([Provider, Location, Context, Compare, Query, Match, ShowHidden, Elevated, Session, Append, Previous, SortPrevious, Rules, Dark, PreviousRows = std::move(PreviousRows)]() mutable -> ReadResult {
+    Watcher->setFuture(QtConcurrent::run([Provider, Location, Context, Compare, Query, Match, ShowHidden, Elevated, Session, Append, Previous, SortPrevious, Rules, Dark, DeltaBase, TextOptions, PrepareNameRanks, PreviousRows = std::move(PreviousRows)]() mutable -> ReadResult {
         // Only provider ownership and immutable values enter this worker.
         try
         {
@@ -1030,7 +1065,11 @@ void CFSModel::refreshProvider()
             if (const auto Failure = Context.Check(Provider->Id())) return *Failure;
             hc::startup::Span Trace("listing.prepare");
             auto Styles = seedFileRuleStyles(Rules, Page.Value().entries_, Dark, Context.stopToken_);
-            auto Prepared = prepareFileRows(Page.Value().entries_, Context.stopToken_);
+            auto Prepared = prepareListing(Page.Value().entries_, PrepareNameRanks, TextOptions, Context.stopToken_);
+            if (DeltaBase && !Context.stopToken_.stop_requested()) {
+                auto Before = DeltaBase->Read(0, (std::numeric_limits<std::size_t>::max)(), Context);
+                if (Before.HasValue()) Prepared.delta_ = prepareListingDelta(Before.Value().entries_, Page.Value().entries_);
+            }
             return Listing{Source.Value(), View.Value(), std::move(Page.Value()), std::move(ActiveSession), std::move(Styles), std::move(Prepared)};
         }
         catch (const std::exception&) { return Error{ErrorCategory::Internal, "provider-exception"}; }
@@ -1140,24 +1179,33 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
     const auto Query = pageQuery_; const auto Match = pageMatch_; const auto ShowHidden = pageShowHidden_; const auto Metadata = index_;
     const auto Sorts = Rebuild ? columnSorts_ : pageSorts_;
     OperationContext Context; Context.stopToken_ = pageStop_.get_token();
-    struct Listing { std::shared_ptr<PagedEntryIndex> view_; EntryPage page_; std::vector<hc::settings::FileRuleResult> styles_; std::vector<PreparedFileRow> prepared_; };
+    struct Listing { std::shared_ptr<PagedEntryIndex> view_; EntryPage page_; std::vector<hc::settings::FileRuleResult> styles_; PreparedListing prepared_; };
     using PageResult = Result<Listing>;
     const auto Rules = fileColorRules_; const auto RuleGeneration = fileRuleLoadGeneration_; const bool Dark = colorScheme_.IsDarkMode;
+    const auto Kind = WorkspaceLocation().kind_;
+    const bool PrepareNameRanks = (Kind == LocatorKind::Local || Kind == LocatorKind::Smb) && hasPlainNameColumn(columnView_);
+    const auto TextOptions = sortTextOptions();
     auto* Watcher = new QFutureWatcher<PageResult>(this);
     emit ColumnQueryStatus(tr("목록을 준비하고 있습니다…"));
-    connect(Watcher, &QFutureWatcher<PageResult>::finished, this, [this, Watcher, Generation, Navigation, Offset, Sorts, RuleGeneration, Dark] {
+    connect(Watcher, &QFutureWatcher<PageResult>::finished, this, [this, Watcher, Generation, Navigation, Sorts, RuleGeneration, Dark, TextOptions] {
         auto Result = Watcher->future().takeResult(); Watcher->deleteLater();
-        if (Generation != pageGeneration_ || Navigation != generation_) return;
-        pageBusy_ = false;
-        if (!Result.HasValue()) {
-            columnSorts_ = pageSorts_; completedSorts_ = pageSorts_; emit ColumnSortCancelled();
-            emit ColumnQueryStatus(QString::fromStdString(Result.Failure().code_)); return;
-        }
-        pageView_ = Result.Value().view_; pageSorts_ = Sorts; completedSorts_ = Sorts;
-        publishProvider(std::move(Result.Value().page_.entries_), fileRuleSeedsUsable(RuleGeneration, Dark) ? std::move(Result.Value().styles_) : std::vector<hc::settings::FileRuleResult>{}, std::move(Result.Value().prepared_));
-        emit PageChanged(); emit sigRefreshCompleted(); emit ColumnQueryStatus({});
+        const bool Defer = Result.HasValue() && Result.Value().page_.entries_.size() > IndexedOrderThreshold;
+        auto Apply = [this, Result = std::move(Result), Generation, Navigation, Sorts, RuleGeneration, Dark, TextOptions]() mutable {
+            if (Generation != pageGeneration_ || Navigation != generation_) return;
+            pageBusy_ = false;
+            if (!Result.HasValue()) {
+                columnSorts_ = pageSorts_; completedSorts_ = pageSorts_; emit ColumnSortCancelled();
+                emit ColumnQueryStatus(QString::fromStdString(Result.Failure().code_)); return;
+            }
+            if (TextOptions != sortTextOptions() || !hasPlainNameColumn(columnView_)) Result.Value().prepared_.nameRanks_.clear();
+            pageView_ = Result.Value().view_; pageSorts_ = Sorts; completedSorts_ = Sorts;
+            publishProvider(std::move(Result.Value().page_.entries_), fileRuleSeedsUsable(RuleGeneration, Dark) ? std::move(Result.Value().styles_) : std::vector<hc::settings::FileRuleResult>{}, std::move(Result.Value().prepared_));
+            emit PageChanged(); emit sigRefreshCompleted(); emit ColumnQueryStatus({});
+        };
+        if (Defer) applyListingWhenIdle(std::move(Apply), Navigation);
+        else Apply();
     });
-    Watcher->setFuture(QtConcurrent::run([Source, Current, Offset, Rebuild, Compare, Query, Match, ShowHidden, Metadata, Context, Rules, Dark]() -> PageResult {
+    Watcher->setFuture(QtConcurrent::run([Source, Current, Offset, Rebuild, Compare, Query, Match, ShowHidden, Metadata, Context, Rules, Dark, PrepareNameRanks, TextOptions]() -> PageResult {
         try {
             auto View = Rebuild ? Source->Project(Compare.Value(), [Query, Match, ShowHidden, Metadata](const EntrySnapshot& Entry) {
                 return (ShowHidden || !(Entry.attributes_ & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM))) && (Match.isEmpty() ? Metadata.Matches(Entry, Query) : hc::quickfind::Matches(QString::fromStdString(Entry.name_), Query, Match));
@@ -1166,7 +1214,7 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
             auto Page = View.Value()->Read(0, (std::numeric_limits<std::size_t>::max)(), Context); if (!Page.HasValue()) return Page.Failure();
             hc::startup::Span Trace("listing.prepare");
             auto Styles = seedFileRuleStyles(Rules, Page.Value().entries_, Dark, Context.stopToken_);
-            auto Prepared = prepareFileRows(Page.Value().entries_, Context.stopToken_);
+            auto Prepared = prepareListing(Page.Value().entries_, PrepareNameRanks, TextOptions, Context.stopToken_);
             return Listing{View.Value(), std::move(Page.Value()), std::move(Styles), std::move(Prepared)};
         } catch (const std::exception&) { return Error{ErrorCategory::Internal, "page-worker-exception"}; }
     }));
@@ -1719,19 +1767,237 @@ CFSModel::PreparedFileRow CFSModel::prepareFileRow(const hc::storage::EntrySnaps
     }
     return Row;
 }
-std::vector<CFSModel::PreparedFileRow> CFSModel::prepareFileRows(const std::vector<hc::storage::EntrySnapshot>& Entries, std::stop_token Token)
+namespace {
+int FileNameGroup(const QString& Name, const hc::storage::EntrySnapshot* Entry, bool Directory)
 {
+    return Name == ".." ? 0 : Entry && Entry->hints_.contains("virtualArchiveRoot") ? 1 : Directory ? 2 : 3;
+}
+
+QVector<int> buildNameRanks(const QVector<QString>& Names, const QVector<int>& Groups, hc::columns::SortTextOptions Options);
+}
+
+bool CFSModel::hasPlainNameColumn(const ColumnView& View) const
+{
+    if (View.VecColumns.isEmpty()) return false;
+    const auto& Name = View.VecColumns.front().definition_;
+    return Name.fieldId_ == "file.name" && Name.template_.isEmpty();
+}
+
+bool CFSModel::HasSelectionRowLookup() const
+{
+    // Provider listings may have a synthetic parent. A duplicate selection key
+    // (for example hard links) needs the view's existing full-row lookup.
+    return UsesIndexedOrder() && pageView_ && !searchResults_ && pageView_->Count() == std::uint64_t(index_.Count())
+        && (rowCount() == index_.Count() || (rowCount() == index_.Count() + 1 && vecNode_.front()->Name_ == ".."));
+}
+
+QModelIndex CFSModel::IndexForSelectionKey(const QString& Key) const
+{
+    if (HasSelectionRowLookup())
+        if (const int Row = index_.Row(Key); Row >= 0) return index(Row + rowCount() - index_.Count(), 0);
+    return {};
+}
+
+CFSModel::PreparedListing CFSModel::prepareListing(const std::vector<hc::storage::EntrySnapshot>& Entries, bool PrepareNameRanks,
+    hc::columns::SortTextOptions Options, std::stop_token Token)
+{
+    PreparedListing Prepared;
+    {
+        hc::startup::Span Trace("listing.index.prepare");
+        Prepared.index_ = hc::workspace::DirectoryIndex::Prepare(Entries);
+    }
     hc::startup::Span Trace("listing.rowValues");
-    std::vector<PreparedFileRow> Rows; Rows.reserve(Entries.size());
+    Prepared.rows_.reserve(Entries.size());
     for (const auto& Entry : Entries) {
         if (Token.stop_requested()) return {};
-        Rows.push_back(prepareFileRow(Entry));
+        Prepared.rows_.push_back(prepareFileRow(Entry));
     }
-    return Rows;
+    if (PrepareNameRanks && !Token.stop_requested()) {
+        QVector<QString> Names; QVector<int> Groups;
+        Names.reserve(Entries.size() + 1); Groups.reserve(Entries.size() + 1);
+        Names.append(QStringLiteral("..")); Groups.append(0);
+        for (std::size_t Row = 0; Row < Entries.size(); ++Row) {
+            const auto& Entry = Entries[Row];
+            const auto& Name = Prepared.rows_[Row].name_;
+            Names.append(Name);
+            Groups.append(FileNameGroup(Name, &Entry, Entry.attributes_ & FILE_ATTRIBUTE_DIRECTORY));
+        }
+        Prepared.nameRanks_ = buildNameRanks(Names, Groups, Options);
+    }
+    return Prepared;
+}
+
+std::optional<CFSModel::ListingDelta> CFSModel::prepareListingDelta(
+    const std::vector<hc::storage::EntrySnapshot>& Previous, const std::vector<hc::storage::EntrySnapshot>& Next)
+{
+    // A contiguous insertion or removal needs one structural notification.
+    // Scattered changes use the prepared reset to avoid repeatedly rebuilding the grid.
+    constexpr int MaxChangedRows = 1024, MaxChangedRanges = 8;
+    const int Before = int(Previous.size()), After = int(Next.size());
+    if (std::abs(Before - After) > MaxChangedRows) return std::nullopt;
+    ListingDelta Delta{Before};
+    while (Delta.first_ < std::min(Before, After) && Previous[Delta.first_].locator_ == Next[Delta.first_].locator_) ++Delta.first_;
+    Delta.removed_ = std::max(0, Before - After);
+    Delta.inserted_ = std::max(0, After - Before);
+    int Changed = Delta.removed_ + Delta.inserted_;
+    for (int Row = 0; Row < After; ++Row) {
+        if (Row >= Delta.first_ && Row < Delta.first_ + Delta.inserted_) continue;
+        const auto& Old = Previous[Row < Delta.first_ ? Row : Row + Delta.removed_ - Delta.inserted_];
+        const auto& New = Next[Row];
+        if (Old.locator_ != New.locator_ || Old.id_.scope_ != New.id_.scope_
+            || (Old.id_.scope_ == hc::storage::IdentityScope::Persistent
+                && (Old.id_.providerId_ != New.id_.providerId_ || Old.id_.key_ != New.id_.key_))) return std::nullopt;
+        if (Old.id_ == New.id_ && Old.name_ == New.name_ && Old.directory_ == New.directory_ && Old.size_ == New.size_
+            && Old.attributes_ == New.attributes_ && Old.createdUtcMs_ == New.createdUtcMs_ && Old.modifiedUtcMs_ == New.modifiedUtcMs_
+            && Old.hints_ == New.hints_) continue;
+        if (++Changed > MaxChangedRows) return std::nullopt;
+        if (!Delta.changed_.isEmpty() && Delta.changed_.last().second + 1 == Row) Delta.changed_.last().second = Row;
+        else Delta.changed_.append({Row, Row});
+        if (Delta.changed_.size() > MaxChangedRanges) return std::nullopt;
+    }
+    return Delta;
+}
+
+bool CFSModel::canApplyListingDelta() const
+{
+    if (!UsesIndexedOrder() || !hasPlainNameColumn(columnView_) || grouping_.enabled_ || searchResults_
+        || property("hc.selectAllEntries").toBool()) return false;
+    const auto Async = [](const QString& Field) {
+        return Field.startsWith("lua.") || !hc::columns::QueryFamily(Field).isEmpty() || hc::columns::IsVfsColumn(Field);
+    };
+    for (const auto& Binding : columnView_.VecColumns) {
+        const auto& Definition = Binding.definition_;
+        if (Async(Definition.fieldId_) || Async(Definition.sortField_)
+            || Async(hc::columns::DisplayField(columnView_.profile_, Definition))
+            || std::any_of(Binding.compiled_.dependencies_.cbegin(), Binding.compiled_.dependencies_.cend(), Async)) return false;
+    }
+    return true;
+}
+
+nsHC::TySpFileSource CFSModel::makePreparedItem(hc::storage::EntrySnapshot Entry, PreparedFileRow Row)
+{
+    nsHC::TySpFileSource Item(new nsHC::CFileSourceT, [](nsHC::CFileSourceT* Value) { if (Value->PIDL) CoTaskMemFree(Value->PIDL); delete Value; });
+    Item->Name_ = std::move(Row.name_); Item->Ext_ = std::move(Row.extension_);
+    Item->Attributes_ = Entry.attributes_; Item->Size_ = Entry.size_;
+    Item->Created_ = std::move(Row.created_); Item->Modified_ = std::move(Row.modified_);
+    Item->Flags_ = Row.flags_; Item->Reserved0_ = Row.reparseTag_;
+    if (Row.flags_ & nsHC::CFileSourceT::FS_FLAG_PIDL) {
+        Item->PIDL = static_cast<LPITEMIDLIST>(CoTaskMemAlloc(Row.pidl_.size()));
+        if (Item->PIDL) memcpy(Item->PIDL, Row.pidl_.data(), Row.pidl_.size());
+    }
+    Item->storageEntry_ = std::move(Entry);
+    return Item;
+}
+
+void CFSModel::applyListingDelta(std::vector<hc::storage::EntrySnapshot> Entries, PreparedListing Prepared)
+{
+    hc::startup::Span Trace("listing.publishDelta");
+    const auto& Delta = *Prepared.delta_;
+    const int First = Delta.first_ + 1; // The synthetic parent stays at row zero.
+    const auto NextRow = [&](int Row) {
+        if (Row < First) return Row;
+        if (Row < First + Delta.removed_) return -1;
+        return Row + Delta.inserted_ - Delta.removed_;
+    };
+    const auto Now = fileRuleDisplayClock_.elapsed();
+    QMap<int, DisplayedFileRule> RetainedStyles;
+    for (const int OldRow : displayedFileRules_.keys()) {
+        const int Row = NextRow(OldRow);
+        const auto* Style = displayedFileRules_.object(OldRow);
+        if (OldRow >= 0 && OldRow < vecNode_.size() && Row >= 0 && Row <= int(Entries.size()) && Style
+            && Style->item_ == vecNode_[OldRow] && !Style->style_.pending_ && (!Style->expiresAt_ || Style->expiresAt_ > Now))
+            RetainedStyles.insert(Row, *Style);
+    }
+    const auto VisibleRules = fileRuleVisibleRows_;
+    const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(hc::defaults::DefaultValue("general/explorerDefaultIcons").toBool());
+    const auto Folder = GenericIcon(true, iconPixels_, Explorer), File = GenericIcon(false, iconPixels_, Explorer);
+    const auto Make = [&](int Row) {
+        auto Item = makePreparedItem(std::move(Entries[Row - 1]), std::move(Prepared.rows_[Row - 1]));
+        Item->Icon = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY ? Folder : File;
+        return Item;
+    };
+    const auto UpdateTotals = [this](const nsHC::TySpFileSource& Item, int Change) {
+        if (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) directoryCount_ += Change;
+        else fileCount_ += Change;
+        const auto Size = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY ? Item->directorySize_.value_or(0) : quint64(Item->Size_);
+        if (Change > 0) totalSize_ += Size;
+        else totalSize_ -= Size;
+    };
+    const auto UpdateRanks = [&] {
+        nameSortRanks_ = std::move(Prepared.nameRanks_);
+        columnSortRanks_.resize(vecNode_.size()); std::iota(columnSortRanks_.begin(), columnSortRanks_.end(), 0);
+    };
+    carryDirectorySizes_ = false;
+    queryRefreshTimer_.stop();
+    resetFileRules();
+    columnQueries_->Reset();
+    ruleFieldRequests_.clear(); ruleFieldsStale_.clear(); ruleRecolorPaths_.clear();
+    iconVisibleRows_.clear();
+    // Qt observers need the new order during rowsInserted/rowsRemoved.
+    if (Delta.inserted_) {
+        beginInsertRows({}, First, First + Delta.inserted_ - 1);
+        vecNode_.insert(First, Delta.inserted_, nsHC::TySpFileSource{});
+        for (int Row = First; Row < First + Delta.inserted_; ++Row) {
+            vecNode_[Row] = Make(Row);
+            UpdateTotals(vecNode_[Row], 1);
+        }
+        UpdateRanks();
+        endInsertRows();
+    } else if (Delta.removed_) {
+        beginRemoveRows({}, First, First + Delta.removed_ - 1);
+        for (int Row = First; Row < First + Delta.removed_; ++Row) {
+            const auto& Item = vecNode_[Row];
+            if (!ruleFields_.isEmpty()) ruleFields_.remove(queryPath(Item));
+            if (Item->directorySize_) directorySizeStale_.remove(QString::fromStdString(hc::storage::Serialize(Item->storageEntry_->id_)));
+            UpdateTotals(Item, -1);
+        }
+        vecNode_.remove(First, Delta.removed_);
+        UpdateRanks();
+        endRemoveRows();
+    } else UpdateRanks();
+    index_.PublishPrepared(std::move(Prepared.index_));
+    for (const auto& [Begin, End] : Delta.changed_) {
+        for (int Row = Begin + 1; Row <= End + 1; ++Row) {
+            auto Item = Make(Row);
+            const auto& Previous = vecNode_[Row];
+            if (!ruleFields_.isEmpty()) ruleFields_.remove(queryPath(Previous));
+            if (Previous->directorySize_) directorySizeStale_.remove(QString::fromStdString(hc::storage::Serialize(Previous->storageEntry_->id_)));
+            if (Item->storageEntry_->directory_ && Previous->storageEntry_->directory_) {
+                Item->directorySize_ = Previous->directorySize_;
+                if (Item->directorySize_) {
+                    Item->Size_ = Previous->Size_;
+                    directorySizeStale_.insert(QString::fromStdString(hc::storage::Serialize(Item->storageEntry_->id_)));
+                }
+            }
+            UpdateTotals(Previous, -1); UpdateTotals(Item, 1);
+            vecNode_[Row] = std::move(Item);
+        }
+    }
+    // A stream write may leave list metadata intact. Keep the displayed value
+    // while rechecking visible entries; offscreen entries recheck on paint.
+    for (auto It = ruleFields_.cbegin(); It != ruleFields_.cend(); ++It) ruleFieldsStale_.insert(It.key());
+    qint64 DisplayDeadline = 0;
+    for (auto It = RetainedStyles.begin(); It != RetainedStyles.end(); ++It) {
+        const auto& Item = vecNode_[It.key()];
+        if (It->item_ != Item) {
+            It->item_ = Item;
+            if (!It->expiresAt_) It->expiresAt_ = Now + 500;
+        }
+        if (It->expiresAt_ && (!DisplayDeadline || It->expiresAt_ < DisplayDeadline)) DisplayDeadline = It->expiresAt_;
+        displayedFileRules_.insert(It.key(), new DisplayedFileRule{std::move(It.value())});
+    }
+    if (DisplayDeadline) fileRuleDisplayTimer_.start(int(qMax(qint64(1), DisplayDeadline - fileRuleDisplayClock_.elapsed())));
+    if (!ruleFieldsStale_.isEmpty())
+        for (const int OldRow : VisibleRules)
+            if (const int Row = NextRow(OldRow); Row >= 0 && Row < rowCount()) revalidateRuleFields(vecNode_[Row]);
+    for (const auto& [Begin, End] : Delta.changed_)
+        if (columnCount()) emit dataChanged(index(Begin + 1, 0), index(End + 1, columnCount() - 1));
+    refreshColumnStatus();
+    RequestDirectorySizes({}, true);
 }
 
 void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles,
-    std::vector<PreparedFileRow> Prepared, const DirectoryColumns* Columns, bool CancelSort)
+    PreparedListing Prepared, const DirectoryColumns* Columns, bool CancelSort)
 {
     hc::startup::Span Trace("listing.publish");
     const auto IconIdentity = [](const hc::storage::EntrySnapshot& Entry) {
@@ -1769,7 +2035,7 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
         for (const auto& Old : vecNode_)
             if (Old->storageEntry_ && Old->directorySize_) KnownSizes.insert(QString::fromStdString(hc::storage::Serialize(Old->storageEntry_->id_)), *Old->directorySize_);
     directorySizeStale_.clear();
-    { hc::startup::Span Phase("listing.index"); index_.Publish(Entries); }
+    { hc::startup::Span Phase("listing.index"); index_.PublishPrepared(std::move(Prepared.index_)); }
     // The whole listing fits beside the previous folder, up to the budget the
     // background pass may style.
     fileColorCache_.setMaxCost(int(qBound<qsizetype>(8192, qsizetype(Entries.size()) + 8192, qsizetype(FileRuleCompleteRows) + 8192)));
@@ -1790,19 +2056,11 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
     for (auto& Entry : Entries)
     {
         const auto Seed = Seeded++;
-        nsHC::TySpFileSource Item(new nsHC::CFileSourceT, [](nsHC::CFileSourceT* Value) { if (Value->PIDL) CoTaskMemFree(Value->PIDL); delete Value; });
-        auto Row = Seed < Prepared.size() ? std::move(Prepared[Seed]) : prepareFileRow(Entry);
-        Item->Name_ = std::move(Row.name_); Item->Ext_ = std::move(Row.extension_);
-        Item->Attributes_ = Entry.attributes_; Item->Size_ = Entry.size_;
-        Item->Created_ = std::move(Row.created_); Item->Modified_ = std::move(Row.modified_);
-        Item->Flags_ = Row.flags_; Item->Reserved0_ = Row.reparseTag_;
-        if (Row.flags_ & nsHC::CFileSourceT::FS_FLAG_PIDL) {
-            Item->PIDL = static_cast<LPITEMIDLIST>(CoTaskMemAlloc(Row.pidl_.size()));
-            if (Item->PIDL) memcpy(Item->PIDL, Row.pidl_.data(), Row.pidl_.size());
-        }
+        auto Row = Seed < Prepared.rows_.size() ? std::move(Prepared.rows_[Seed]) : prepareFileRow(Entry);
+        const auto PreviousIcon = PreviousIcons.isEmpty() ? QPixmap{} : PreviousIcons.value(IconIdentity(Entry));
+        auto Item = makePreparedItem(std::move(Entry), std::move(Row));
         // Generic icons avoid filesystem/network calls on the GUI thread.
-        Item->Icon = PreviousIcons.value(IconIdentity(Entry), Entry.directory_ ? FolderIcon : FileIcon);
-        Item->storageEntry_ = std::move(Entry);
+        Item->Icon = PreviousIcon.isNull() ? (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY ? FolderIcon : FileIcon) : PreviousIcon;
         if (Item->storageEntry_->directory_) {
             const auto Key = QString::fromStdString(hc::storage::Serialize(Item->storageEntry_->id_));
             if (const auto Known = KnownSizes.constFind(Key); Known != KnownSizes.cend()) {
@@ -1859,7 +2117,8 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
     fileCount_ = Files;
     directoryCount_ = Directories;
     totalSize_ = Size;
-    refreshNameSortRanks();
+    if (Prepared.nameRanks_.size() == vecNode_.size()) nameSortRanks_ = std::move(Prepared.nameRanks_);
+    else refreshNameSortRanks();
     // Reset observers query sort roles synchronously. Publish snapshot ranks
     // before endResetModel so descending grid order keeps the worker's order.
     if (UsesIndexedOrder() || appendOrder_) {
@@ -1934,7 +2193,7 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
         if (Automatic && Mode != "all" && IsNetwork(Item->storageEntry_->locator_)) continue;
         const auto Key = QString::fromStdString(Serialize(Item->storageEntry_->id_));
         // Automatic passes re-measure only carried-over sizes, and keep showing them meanwhile.
-        const bool Refresh = Automatic && directorySizeStale_.contains(Key);
+        const bool Refresh = Automatic && (automaticRefresh_ || directorySizeStale_.contains(Key));
         if ((Automatic && Item->directorySize_ && !Refresh) || directorySizePending_.contains(Key)) continue;
         if (Item->directorySize_ && !Refresh) {
             totalSize_ -= *Item->directorySize_; Item->directorySize_.reset(); Item->Size_ = 0;
@@ -2043,20 +2302,14 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
     Apply->start();
 }
 
-void CFSModel::refreshNameSortRanks(int First)
+namespace {
+QVector<int> buildNameRanks(const QVector<QString>& Names, const QVector<int>& Groups, hc::columns::SortTextOptions Options)
 {
     hc::startup::Span Trace("listing.nameRanks");
-    // 검색 · 평면 결과는 열 정렬 순위(작업 스레드)만 쓴다. 수십만 행을 UI 스레드에서 다시 정렬하지 않는다.
-    if (searchResults_) { nameSortRanks_.clear(); return; }
-    // Supply numeric ranks to the grid so locale and natural-number options
-    // remain independent, without relying on its locale-only numeric comparator.
-    const bool Locale = displaySettings_["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool());
-    const bool Numeric = displaySettings_["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool());
-    const auto Case = displaySettings_["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool()) ? Qt::CaseSensitive : Qt::CaseInsensitive;
-    QCollator Collator; Collator.setCaseSensitivity(Case); Collator.setNumericMode(Numeric);
+    QCollator Collator; Collator.setCaseSensitivity(Options.case_); Collator.setNumericMode(Options.numeric_);
     const auto Compare = [&](const QString& Left, const QString& Right) -> int {
-        if (Locale) return Collator.compare(Left, Right);
-        if (!Numeric) return QString::compare(Left, Right, Case);
+        if (Options.locale_) return Collator.compare(Left, Right);
+        if (!Options.numeric_) return QString::compare(Left, Right, Options.case_);
         const auto Digit = [](QChar Char) { return Char >= QChar('0') && Char <= QChar('9'); };
         qsizetype L = 0, R = 0;
         while (L < Left.size() && R < Right.size()) {
@@ -2076,43 +2329,40 @@ void CFSModel::refreshNameSortRanks(int First)
                     while (LE < Left.size() && !Digit(Left[LE])) ++LE;
                     while (RE < Right.size() && !Digit(Right[RE])) ++RE;
                 }
-                const auto Compared = QString::compare(Left.mid(L, LE - L), Right.mid(R, RE - R), Case);
+                const auto Compared = QString::compare(Left.mid(L, LE - L), Right.mid(R, RE - R), Options.case_);
                 if (Compared) return Compared;
             }
             L = LE; R = RE;
         }
         return L < Left.size() ? 1 : R < Right.size() ? -1 : 0;
     };
-    const bool Merge = searchResults_ && First > 0 && nameSortRanks_.size() == First;
-    QVector<int> Order(vecNode_.size());
-    if (Merge) for (int Row = 0; Row < First; ++Row) Order[nameSortRanks_[Row]] = Row;
-    else First = 0;
-    std::iota(Order.begin() + First, Order.end(), First);
+    QVector<int> Order(Names.size());
+    std::iota(Order.begin(), Order.end(), 0);
+    std::stable_sort(Order.begin(), Order.end(), [&](int Left, int Right) {
+        if (Groups[Left] != Groups[Right]) return Groups[Left] < Groups[Right];
+        return Compare(Names[Left], Names[Right]) < 0;
+    });
+    QVector<int> Ranks(Order.size());
+    for (int Rank = 0; Rank < Order.size(); ++Rank) Ranks[Order[Rank]] = Rank;
+    return Ranks;
+}
+}
+
+void CFSModel::refreshNameSortRanks()
+{
+    // Search and flat results use their background sort worker's ranks.
+    if (searchResults_) { nameSortRanks_.clear(); return; }
     const bool DriveList = hc::ui::IsDriveList(WorkspaceLocation());
-    const auto Less = [&](int Left, int Right) {
-        if (DriveList) {
-            const bool LeftParent = vecNode_[Left]->Name_ == "..", RightParent = vecNode_[Right]->Name_ == "..";
-            if (LeftParent != RightParent) return LeftParent;
-            const auto DriveKey = [&](int Row) {
-                const auto& Entry = vecNode_[Row]->storageEntry_;
-                return Entry ? hc::ui::DriveLetterSortKey(*Entry) : 26;
-            };
-            const int LeftKey = DriveKey(Left), RightKey = DriveKey(Right);
-            if (LeftKey != RightKey) return LeftKey < RightKey;
-        }
-        const auto Group = [&](int Row) { const auto& Item = vecNode_[Row];
-            return Item->Name_ == ".." ? 0 : Item->storageEntry_ && Item->storageEntry_->hints_.contains("virtualArchiveRoot") ? 1 : (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 3; };
-        if (Group(Left) != Group(Right)) return Group(Left) < Group(Right);
-        const auto Name = [&](int Row) { const auto& Item = vecNode_[Row];
-            return Item->columnValues_.isEmpty() ? Item->Name_ : Item->columnValues_.front().Raw().toString(); };
-        const auto Compared = Compare(Name(Left), Name(Right));
-        if (Compared || !searchResults_) return Compared < 0;
-        return hc::workspace::SelectionKey(*vecNode_[Left]->storageEntry_) < hc::workspace::SelectionKey(*vecNode_[Right]->storageEntry_);
-    };
-    std::stable_sort(Order.begin() + First, Order.end(), Less);
-    if (Merge) std::inplace_merge(Order.begin(), Order.begin() + First, Order.end(), Less);
-    nameSortRanks_.resize(Order.size());
-    for (int Rank = 0; Rank < Order.size(); ++Rank) nameSortRanks_[Order[Rank]] = Rank;
+    QVector<QString> Names; QVector<int> Groups;
+    Names.reserve(vecNode_.size()); Groups.reserve(vecNode_.size());
+    for (const auto& Item : vecNode_) {
+        Names.append(Item->columnValues_.isEmpty() ? Item->Name_ : Item->columnValues_.front().Raw().toString());
+        const auto* Entry = Item->storageEntry_ ? &*Item->storageEntry_ : nullptr;
+        int Group = FileNameGroup(Item->Name_, Entry, Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY);
+        if (DriveList && Group != 0) Group += 4 * (1 + (Entry ? hc::ui::DriveLetterSortKey(*Entry) : 26));
+        Groups.append(Group);
+    }
+    nameSortRanks_ = buildNameRanks(Names, Groups, sortTextOptions());
 }
 
 void CFSModel::SetIconPixels(int Pixels)
@@ -2627,7 +2877,7 @@ void CFSModel::createBuiltFsValues(const nsHC::TySpFileSource& Item, int Column)
 {
     if (!Item || Column > 0) return;
     Item->VecContent.clear(); Item->columnValues_.clear();
-    if (!columnView_.VecColumns.isEmpty())
+    if (!columnView_.VecColumns.isEmpty() && (!hasPlainNameColumn(columnView_) || (Item->Flags_ & nsHC::CFileSourceT::FS_FLAG_DRIVE)))
         Item->columnValues_.append(evaluateColumn(Item, columnView_.VecColumns.front(), false));
 }
 

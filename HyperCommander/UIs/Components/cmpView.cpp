@@ -1051,8 +1051,11 @@ void CGridView::captureListingReset(bool ChangingColumns)
     resetRenameClicks(); groupingReset_ = true;
     resetSelection_ = CaptureSelection(); resetFocus_ = CaptureFocus();
     resetFocusFallback_.clear();
+    resetPath_ = model_->property("hc.snapshotLocation").toString();
+    const auto* Native = qobject_cast<const CFSModel*>(model_);
+    const bool SameLocation = !Native || resetPath_ == hc::workspace::LocationKey(Native->WorkspaceLocation());
     // Only a refresh of the same listing can restore a neighboring entry.
-    if (!ChangingColumns && !resetFocus_.isEmpty() && !resetFocus_.startsWith("@group:")) {
+    if (!ChangingColumns && SameLocation && !resetFocus_.isEmpty() && !resetFocus_.startsWith("@group:")) {
         const auto Remember = [this](int At) {
             const auto Row = view_->getRow(At);
             if (Row.type() != Qtitan::GridRow::DataRow) return;
@@ -1063,7 +1066,6 @@ void CGridView::captureListingReset(bool ChangingColumns)
         for (int At = FocusRow + 1; At < view_->getRowCount(); ++At) Remember(At);
         for (int At = FocusRow - 1; At >= 0; --At) Remember(At);
     }
-    resetPath_ = model_->property("hc.snapshotLocation").toString();
     if (!resetPath_.isEmpty()) navigationScroll_.insert(resetPath_, new QJsonObject(CaptureScrollState()));
     model_->setProperty("hc.selectAllEntries", false);
     QScopedValueRollback GroupGuard(groupingProjection_, true); view_->deselectAll();
@@ -1113,9 +1115,19 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     // an invalid GridRow, and old row positions must not target different files.
     disconnect(selectionReset_);
     selectionReset_ = connect(Source, &QAbstractItemModel::modelAboutToBeReset,
-        this, [this] { if (!publishingDirectoryColumns_) captureListingReset(); }, Qt::DirectConnection);
+        this, [this] { automaticScroll_ = {}; if (!publishingDirectoryColumns_) captureListingReset(); }, Qt::DirectConnection);
+    disconnect(automaticInsertScroll_); disconnect(automaticRemoveScroll_);
+    automaticScroll_ = {};
+    const auto CaptureAutomaticScroll = [this, Source] {
+        const auto* Native = qobject_cast<const CFSModel*>(Source);
+        if (Native && Native->IsAutomaticRefresh() && Native->UsesIndexedOrder() && isVisible())
+            automaticScroll_ = CaptureScrollState();
+    };
+    automaticInsertScroll_ = connect(Source, &QAbstractItemModel::rowsAboutToBeInserted, this, CaptureAutomaticScroll);
+    automaticRemoveScroll_ = connect(Source, &QAbstractItemModel::rowsAboutToBeRemoved, this, CaptureAutomaticScroll);
     disconnect(selectionRestore_);
     selectionRestore_ = connect(Source, &CFsModelT::sigRefreshCompleted, this, [this] {
+        if (!automaticScroll_.isEmpty()) RestoreScrollState(std::exchange(automaticScroll_, {}));
         const auto Path = model_->property("hc.snapshotLocation").toString();
         const bool ChangedDirectory = !resetPath_.isEmpty() && resetPath_ != Path;
         // Native reset initially targets row zero, which can be a group header.
@@ -1129,25 +1141,40 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         const auto RestoreScroll = qScopeGuard([this, ReturnScroll, &ParentFocused] { if (ParentFocused) RestoreScrollState(ReturnScroll); });
         if (!resetPath_.isEmpty() && resetPath_ == model_->property("hc.snapshotLocation").toString()) {
             auto Focus = resetFocus_;
+            const auto* Native = qobject_cast<const CFSModel*>(model_);
+            const bool Indexed = Native && Native->HasSelectionRowLookup();
+            const auto FindVisible = [this, Native](const QString& Key) {
+                const auto Source = Native->IndexForSelectionKey(Key);
+                return proxy_ ? proxy_->mapFromSource(Source) : Source;
+            };
             if (!Focus.isEmpty() && !Focus.startsWith("@group:")) {
-                QSet<QString> Present;
-                for (const auto& Index : SelectionCandidates()) Present.insert(sourceSelectionKey(Index));
-                if (!Present.contains(Focus)) {
-                    Focus.clear();
-                    for (const auto& Key : resetFocusFallback_) if (Present.contains(Key)) { Focus = Key; break; }
+                if (Indexed) {
+                    if (!FindVisible(Focus).isValid()) {
+                        Focus.clear();
+                        for (const auto& Key : resetFocusFallback_) if (FindVisible(Key).isValid()) { Focus = Key; break; }
+                    }
+                } else {
+                    QSet<QString> Present;
+                    for (const auto& Index : SelectionCandidates()) Present.insert(sourceSelectionKey(Index));
+                    if (!Present.contains(Focus)) {
+                        Focus.clear();
+                        for (const auto& Key : resetFocusFallback_) if (Present.contains(Key)) { Focus = Key; break; }
+                    }
                 }
             }
             RestoreSelection(resetSelection_, Focus);
             // A refresh restores a saved entry after the new native grouping
             // settles. Explicit group-collapse commands retain their header.
             if (!Focus.isEmpty() && !Focus.startsWith("@group:")) {
-                for (const auto& Source : SelectionCandidates()) {
-                    if (sourceSelectionKey(Source) != Focus) continue;
-                    const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
+                QModelIndex Visible;
+                if (Indexed) Visible = FindVisible(Focus);
+                else for (const auto& Source : SelectionCandidates()) {
+                    if (sourceSelectionKey(Source) == Focus) { Visible = proxy_ ? proxy_->mapFromSource(Source) : Source; break; }
+                }
+                if (Visible.isValid()) {
                     QScopedValueRollback Guard(groupingProjection_, true);
                     const auto Position = view_->modelController()->ensureVisible(Visible);
                     if (Position >= 0) view_->setFocusedRowIndex(Position, Qt::ControlModifier);
-                    break;
                 }
             }
             if (!Focus.isEmpty() && Focus != resetFocus_) {
@@ -1904,11 +1931,15 @@ void CGridView::RestoreScrollState(const QJsonObject& State)
     const auto Anchor = State["anchor"].toString();
     if (State["kind"] == QJsonValue("group")) {
         for (const auto& Group : view_->modelController()->groupRows()) if (hc::columns::NativeGroupKey(view_->modelController(), &Group) == Anchor) { Position = Group.rowIndex; break; }
-    } else if (!Anchor.isEmpty()) for (const auto& Index : SelectionCandidates()) {
-        if (sourceSelectionKey(Index) != Anchor) continue;
-        const auto Visible = proxy_ ? proxy_->mapFromSource(Index) : Index;
+    } else if (!Anchor.isEmpty()) {
+        QModelIndex Source;
+        if (const auto* Native = qobject_cast<const CFSModel*>(model_); Native && Native->HasSelectionRowLookup())
+            Source = Native->IndexForSelectionKey(Anchor);
+        else for (const auto& Index : SelectionCandidates()) {
+            if (sourceSelectionKey(Index) == Anchor) { Source = Index; break; }
+        }
+        const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
         const auto Row = view_->getRow(Visible); if (Row.isValid()) Position = Row.rowIndex();
-        break;
     }
     int Scroll = State["y"].toInt();
     if (Position >= 0 && Position < view_->getRowCount()) {
@@ -1938,7 +1969,16 @@ void CGridView::RestoreSelection(const QStringList& Selection, const QString& Fo
     if (GroupingActive()) groupedSelection_.clear();
     int FocusRow = -1; QModelIndex FocusIndex;
     QVector<int> SelectedRows;
-    for (const auto& Source : SelectionCandidates()) {
+    QModelIndexList Candidates;
+    if (const auto* Native = qobject_cast<const CFSModel*>(model_); Native && Native->HasSelectionRowLookup()) {
+        auto Wanted = Keys;
+        if (!Focus.isEmpty() && !Focus.startsWith("@group:")) Wanted.insert(Focus);
+        for (const auto& Key : Wanted) {
+            const auto Source = Native->IndexForSelectionKey(Key);
+            if (Source.isValid() && (!proxy_ || proxy_->mapFromSource(Source).isValid())) Candidates.append(Source);
+        }
+    } else Candidates = SelectionCandidates();
+    for (const auto& Source : Candidates) {
         const auto Key = sourceSelectionKey(Source);
         const bool Selected = !Key.isEmpty() && Keys.contains(Key);
         if (!Selected && Key != Focus) continue;

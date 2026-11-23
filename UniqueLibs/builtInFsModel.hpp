@@ -165,6 +165,8 @@ public:
     // Large directories use a disk-backed sort snapshot, but expose every row.
     static constexpr std::uint64_t IndexedOrderThreshold = 4096;
     bool UsesIndexedOrder() const { return pageSource_ && pageSource_->Count() > IndexedOrderThreshold; }
+    bool HasSelectionRowLookup() const;
+    QModelIndex IndexForSelectionKey(const QString& Key) const;
     std::uint64_t EntryCount() const { return searchResults_ ? vecNode_.size() : pageView_ ? pageView_->Count() : 0; }
     bool IsPageLoading() const { return pageBusy_; }
     void SetPageFilter(const QString& Query, bool ShowHidden, const QString& Match = {});
@@ -268,14 +270,32 @@ private:
         QByteArray pidl_;
         quint32 flags_ = 0, reparseTag_ = 0;
     };
+    struct ListingDelta {
+        int previousCount_ = 0, first_ = 0, removed_ = 0, inserted_ = 0;
+        QVector<QPair<int, int>> changed_;
+    };
+    struct PreparedListing {
+        hc::workspace::DirectoryIndex::Prepared index_;
+        std::vector<PreparedFileRow> rows_;
+        QVector<int> nameRanks_;
+        std::optional<ListingDelta> delta_;
+    };
     static PreparedFileRow prepareFileRow(const hc::storage::EntrySnapshot& Entry);
-    static std::vector<PreparedFileRow> prepareFileRows(const std::vector<hc::storage::EntrySnapshot>& Entries, std::stop_token Token);
+    static PreparedListing prepareListing(const std::vector<hc::storage::EntrySnapshot>& Entries, bool PrepareNameRanks,
+        hc::columns::SortTextOptions Options, std::stop_token Token);
+    static std::optional<ListingDelta> prepareListingDelta(const std::vector<hc::storage::EntrySnapshot>& Previous,
+        const std::vector<hc::storage::EntrySnapshot>& Next);
+    bool hasPlainNameColumn(const ColumnView& View) const;
+    bool canApplyListingDelta() const;
+    static nsHC::TySpFileSource makePreparedItem(hc::storage::EntrySnapshot Entry, PreparedFileRow Row);
+    void applyListingDelta(std::vector<hc::storage::EntrySnapshot> Entries, PreparedListing Prepared);
     void publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles = {},
-        std::vector<PreparedFileRow> Prepared = {}, const DirectoryColumns* Columns = nullptr, bool CancelSort = false);
+        PreparedListing Prepared = {}, const DirectoryColumns* Columns = nullptr, bool CancelSort = false);
+    void applyListingWhenIdle(std::function<void()> Apply, std::uint64_t Generation);
     void                            refreshDisplayIcons(int First = 0);
     void applyRequestedIcons();
     void invalidateDisplayIcons(bool All, int SettleMs = 0);
-    void                            refreshNameSortRanks(int First = 0);
+    void                            refreshNameSortRanks();
     void appendSearchResults(std::vector<hc::storage::EntrySnapshot> Entries);
     nsHC::TySpFileSource makeDisplayItem(hc::storage::EntrySnapshot Entry, const QPixmap& FolderIcon, const QPixmap& FileIcon) const;
     bool searchResults_ = false;
