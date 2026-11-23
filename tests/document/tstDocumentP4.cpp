@@ -40,10 +40,13 @@ class Content final : public IContentSource {
 public:
     QByteArray bytes_ = "lease test";
     EntrySnapshot entry_; std::atomic<int> verifies_{0}; std::atomic<bool> release_{true}; bool changed_ = false;
+    std::atomic<int> opens_{0}; bool probeTimesOut_ = false;
     EntrySnapshot Describe() const override { return entry_; }
-    Task<std::shared_ptr<IReadStream>> OpenRead(OperationContext) override { auto Result = std::make_shared<Stream>(); Result->bytes_ = bytes_; return Ready<std::shared_ptr<IReadStream>>(std::shared_ptr<IReadStream>(Result)); }
+    Task<std::shared_ptr<IReadStream>> OpenRead(OperationContext) override { ++opens_; auto Result = std::make_shared<Stream>(); Result->bytes_ = bytes_; return Ready<std::shared_ptr<IReadStream>>(std::shared_ptr<IReadStream>(Result)); }
     Task<Unit> Verify(OperationContext Context) override {
-        ++verifies_; while (!release_) { if (auto Stop = Context.Check({"test"})) return Ready<Unit>(*Stop); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+        const auto Attempt = ++verifies_;
+        if (probeTimesOut_ && Attempt == 1) return Ready<Unit>(Error{ErrorCategory::Unavailable, "deadline-exceeded"});
+        while (!release_) { if (auto Stop = Context.Check({"test"})) return Ready<Unit>(*Stop); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
         return Ready<Unit>(changed_ ? Result<Unit>(Error{ErrorCategory::StaleRevision, "test-source-changed"}) : Result<Unit>(Unit{}));
     }
 };
@@ -105,6 +108,103 @@ private slots:
         QVERIFY(Probed.Value().handlerMatches_.at(Accept.descriptor_.stableId_)[0]);
         QVERIFY(!Probed.Value().handlerMatches_.at(Reject.descriptor_.stableId_)[0]);
         QCOMPARE(DocumentHandlerResolver::Resolve(Candidates.registry_, DocumentIntent::View, Probed.Value()).candidates_.size(), size_t(2));
+    }
+    void smbComicSkipsUnrestrictedWlxLoad() {
+        QTemporaryDir Temp;
+        hc::settings::Repository Settings(Temp.path());
+        DocumentHandlerTarget Generic, Explicit, Declared;
+        QVERIFY(wlxTarget(Temp.filePath("generic"), {}, Generic));
+        QVERIFY(wlxTarget(Temp.filePath("explicit"), {}, Explicit));
+        QVERIFY(wlxTarget(Temp.filePath("declared"), "EXT=\"CBZ\"", Declared));
+        Explicit.descriptor_.extensions_ = {"zip"};
+        auto Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {Generic, Explicit, Declared});
+        QVERIFY(Candidates.registry_.Find("builtin.hyperviewer")->available_);
+        auto Input = Source("sample.ZIP");
+        Input->entry_.locator_.kind_ = LocatorKind::Smb;
+        Input->entry_.size_ = Input->bytes_.size();
+        DocumentOpenRequest Request{DocumentIntent::View, {{Input, {}}}, [] { return true; }};
+        QWidget Parent;
+        const auto HiddenParent = QString::number(Parent.winId(), 16);
+        const auto Probe = [&] {
+            HandlerSelection Selection;
+            Selection.names_ = {Input->entry_.name_};
+            auto Future = std::async(std::launch::async, [&] {
+                return ProbeDocumentHandlers(Candidates, Request, Selection, {}, HiddenParent);
+            });
+            while (Future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) QTest::qWait(5);
+            return Future.get();
+        };
+        auto Probed = Probe();
+        QVERIFY(Probed.HasValue());
+        QVERIFY(!Probed.Value().handlerMatches_.at(Generic.descriptor_.stableId_)[0]);
+        QVERIFY(Probed.Value().handlerMatches_.at(Explicit.descriptor_.stableId_)[0]);
+        QVERIFY(!Probed.Value().handlerMatches_.at(Declared.descriptor_.stableId_)[0]);
+        QCOMPARE(Input->opens_.load(), 1);
+
+        Input->entry_.name_ = "sample.cbz";
+        Input->opens_ = 0;
+        Probed = Probe();
+        QVERIFY(Probed.HasValue());
+        QVERIFY(!Probed.Value().handlerMatches_.at(Generic.descriptor_.stableId_)[0]);
+        QVERIFY(!Probed.Value().handlerMatches_.at(Explicit.descriptor_.stableId_)[0]);
+        QVERIFY(Probed.Value().handlerMatches_.at(Declared.descriptor_.stableId_)[0]);
+        QCOMPARE(Input->opens_.load(), 0);
+    }
+    void smbComicUsesBuiltinAfterProbeTimeout() {
+        QTemporaryDir Temp;
+        hc::settings::Repository Settings(Temp.path());
+        DocumentHandlerTarget Generic;
+        QVERIFY(wlxTarget(Temp.filePath("generic"), {}, Generic));
+        const auto Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {Generic});
+        auto Input = Source("sample.cbz");
+        Input->entry_.locator_.kind_ = LocatorKind::Smb;
+        Input->entry_.size_ = Input->bytes_.size();
+        Input->probeTimesOut_ = true;
+        QWidget Window;
+        std::string Selected;
+        DocumentOpenController Controller(&Window, [&] { return Candidates; }, [&](const auto& Target, auto, auto Completion) {
+            Selected = Target.descriptor_.stableId_;
+            Completion(true, {});
+            return true;
+        });
+        QSignalSpy Finished(&Controller, &DocumentOpenController::Finished);
+        QTimer Guard;
+        connect(&Guard, &QTimer::timeout, &Window, [] {
+            if (Menu()) { QTest::qFail("unexpected handler menu after timeout", __FILE__, __LINE__); Menu()->close(); }
+        });
+        Guard.start(20);
+        QVERIFY(Controller.Open(Controller.Capture({DocumentIntent::View, {{Input, {}}}, [] { return true; }})));
+        QTRY_VERIFY_WITH_TIMEOUT(!Finished.isEmpty(), 10000);
+        QVERIFY2(Finished.back()[1].toString() == "ready", qPrintable(Finished.back()[2].toString()));
+        QCOMPARE(Selected, std::string("builtin.hyperviewer"));
+        QCOMPARE(Input->verifies_.load(), 2);
+        QCOMPARE(Input->opens_.load(), 0);
+    }
+    void knownSmbComicEditSkipsViewOnlyWlx() {
+        QTemporaryDir Temp;
+        hc::settings::Repository Settings(Temp.path());
+        DocumentHandlerTarget Generic;
+        QVERIFY(wlxTarget(Temp.filePath("generic"), {}, Generic));
+        auto Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {Generic});
+        auto& Editor = Candidates.targets_.at("builtin.hypereditor");
+        Editor.productEditor_ = false;
+        Editor.executable_ = QCoreApplication::applicationFilePath();
+        Editor.arguments_ = "--p4-child \"" + Temp.filePath("argv.json") + "\" %FILE%";
+        auto Input = Source("sample.zip");
+        Input->entry_.locator_ = {LocatorKind::Smb, R"(\\server\share\sample.zip)"};
+        Input->entry_.size_ = Input->bytes_.size();
+        QWidget Window;
+        DocumentOpenController Controller(&Window, [&] { return Candidates; }, {});
+        QSignalSpy Finished(&Controller, &DocumentOpenController::Finished);
+        QVERIFY(Controller.Open(Controller.Capture({DocumentIntent::Edit, {{Input, {}}}, [] { return true; }})));
+        QTRY_VERIFY(!Finished.isEmpty());
+        QVERIFY2(Finished.back()[1].toString() == "started", qPrintable(Finished.back()[2].toString()));
+        QTRY_VERIFY(Controller.findChild<QProcess*>() == nullptr);
+        QFile ChildArgs(Temp.filePath("argv.json"));
+        QVERIFY(ChildArgs.open(QIODevice::ReadOnly));
+        QCOMPARE(QJsonDocument::fromJson(ChildArgs.readAll()).array().last().toString(), QString::fromStdString(Input->entry_.locator_.root_));
+        QCOMPARE(Input->verifies_.load(), 1);
+        QCOMPARE(Input->opens_.load(), 0);
     }
     void wlxNativeDetectionBeforeSelection() {
         QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path());
@@ -611,6 +711,83 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!Surface->Details().documentState_["documents"].toArray()[0].toObject()["view"].toObject()["rendering"].toBool(),30000);
         QVERIFY(Surface->Details().documentState_["documents"].toArray()[0].toObject()["view"].toObject()["renderError"].toString().isEmpty());
         Opened->close();
+    }
+    void realSmbComicUsesOriginalPath() {
+        const auto Root = qEnvironmentVariable("HC_TEST_COMIC_SHARE");
+        if (Root.isEmpty()) QSKIP("An SMB share with book.zip and book.cbz is required");
+        QVERIFY(Root.startsWith("\\\\"));
+        auto Reader = MakeNativeReadProvider(LocatorKind::Smb);
+        OperationContext Context;
+        Context.freshEnumerationMetadata_ = true;
+        Context.allowUnavailableChildMetadata_ = true;
+        auto Cursor = Reader->Enumerate({LocatorKind::Smb, Root.toStdString()}, Context).get();
+        QVERIFY2(Cursor.HasValue(), Cursor.HasValue() ? "" : Cursor.Failure().code_.c_str());
+        const auto Page = Cursor.Value()->Next(256, Context).get();
+        QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str());
+
+        QTemporaryDir Temp;
+        hc::settings::Repository Settings(Temp.path());
+        DocumentHandlerTarget Generic;
+        QVERIFY(wlxTarget(Temp.filePath("generic"), {}, Generic));
+        const auto Catalog = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {Generic});
+        QWidget Window;
+        Window.show();
+        QtViewerHost Host(&Window, [] { return MakeNativeMaterializer(QDir::tempPath().toStdString()); });
+        DocumentOpenController Controller(&Window, [&] { return Catalog; }, [&](const auto& Target, auto Documents, auto Completion) {
+            return Host.OpenPlugin(Target.plugin_, std::move(Documents), "HyperViewer", Completion) != nullptr;
+        });
+        QSignalSpy Finished(&Controller, &DocumentOpenController::Finished);
+        QTimer Guard;
+        connect(&Guard, &QTimer::timeout, &Window, [] {
+            if (Menu()) { QTest::qFail("unexpected SMB comic handler menu", __FILE__, __LINE__); Menu()->close(); }
+        });
+        Guard.start(20);
+        const auto TracePath = qEnvironmentVariable("HC_DOCUMENT_TRACE");
+        QVERIFY(!TracePath.isEmpty());
+        const auto Painted = [&](const QString& Path, qsizetype Offset) {
+            QFile File(TracePath);
+            if (!File.open(QIODevice::ReadOnly) || !File.seek(Offset)) return false;
+            while (!File.atEnd()) {
+                const auto Record = QJsonDocument::fromJson(File.readLine()).object();
+                if (Record["stage"] == "comic.first-paint"
+                    && QDir::fromNativeSeparators(Record["source"].toString()) == QDir::fromNativeSeparators(Path)) return true;
+            }
+            return false;
+        };
+        for (const auto* Name : {"book.zip", "book.cbz"}) {
+            const auto& Entries = Page.Value().entries_;
+            const auto Entry = std::find_if(Entries.begin(), Entries.end(), [&](const auto& Item) { return Item.name_ == Name; });
+            QVERIFY(Entry != Entries.end());
+            auto Input = std::make_shared<ProviderContentSource>(Reader, *Entry);
+            const auto Path = QString::fromUtf8(Entry->locator_.root_);
+            const auto ViewStart = QFileInfo(TracePath).size();
+            Finished.clear();
+            QVERIFY(Controller.Open(Controller.Capture({DocumentIntent::View, {{Input, {}}}, [] { return true; }})));
+            QTRY_VERIFY_WITH_TIMEOUT(!Finished.isEmpty() && Finished.back()[1].toString() != "preparing", 30000);
+            QVERIFY2(Finished.back()[1].toString() == "ready", qPrintable(Finished.back()[2].toString()));
+            QTRY_VERIFY_WITH_TIMEOUT(Painted(Path, ViewStart), 15000);
+            Host.CloseAll();
+            QTRY_VERIFY_WITH_TIMEOUT(Host.IsIdle(), 15000);
+
+            const auto EditStart = QFileInfo(TracePath).size();
+            Finished.clear();
+            QVERIFY(Controller.Open(Controller.Capture({DocumentIntent::Edit, {{Input, {}}}, [] { return true; }})));
+            const auto Cleanup = qScopeGuard([&] {
+                if (auto* Editor = Controller.findChild<QProcess*>(); Editor && Editor->state() != QProcess::NotRunning) {
+                    Editor->kill();
+                    Editor->waitForFinished();
+                }
+            });
+            QTRY_VERIFY_WITH_TIMEOUT(!Finished.isEmpty(), 15000);
+            QVERIFY2(Finished.back()[1].toString() == "started", qPrintable(Finished.back()[2].toString()));
+            auto* Editor = Controller.findChild<QProcess*>();
+            QVERIFY(Editor);
+            QCOMPARE(Editor->arguments().back(), QDir::toNativeSeparators(Path));
+            QTRY_VERIFY_WITH_TIMEOUT(Painted(Path, EditStart), 15000);
+            Editor->kill();
+            Editor->waitForFinished();
+            QTRY_VERIFY(Controller.findChild<QProcess*>() == nullptr);
+        }
     }
     void realProductOpensMixedDocuments() {
         QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path()); const auto TextPath = Temp.filePath("한글 소스.go");

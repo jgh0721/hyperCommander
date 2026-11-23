@@ -29,6 +29,13 @@ struct PreparedOpen {
     std::vector<std::shared_ptr<IMaterializedFileLease>> leases_;
     std::shared_ptr<IMaterializer> materializer_;
 };
+bool HasStreamingSmbComicHandler(const DocumentHandlerCatalog& Catalog, DocumentIntent Intent, const EntrySnapshot& Entry) {
+    if (Entry.locator_.kind_ != LocatorKind::Smb || Entry.directory_) return false;
+    const auto Extension = QFileInfo(QString::fromUtf8(Entry.name_)).suffix().toLower();
+    if (Extension != "zip" && Extension != "cbz") return false;
+    const auto* Builtin = Catalog.registry_.Find(Intent == DocumentIntent::View ? "builtin.hyperviewer" : "builtin.hypereditor");
+    return Builtin && DocumentHandlerResolver::Supports(*Builtin, Intent, {Entry.name_});
+}
 Result<bool> TryUndeclaredWlx(const hc::plugins::PluginViewerOptions& Options,
     const std::shared_ptr<IContentSource>& Source, const QString& HiddenParent, OperationContext Context) {
     if (HiddenParent.isEmpty()) return false;
@@ -99,6 +106,9 @@ Result<HandlerSelection> ProbeDocumentHandlers(const DocumentHandlerCatalog& Cat
         auto& Matches = Selection.handlerMatches_[Id]; Matches.assign(Selection.names_.size(), false);
         const auto Application = PluginApplicationRule::Parse(Target.plugin_.applicationRule_);
         if (!Application.HasValue() || !Application.Value().Enabled()) continue;
+        const auto Mode = Target.plugin_.applicationRule_.toObject().value("mode").toString();
+        const bool GenericScope = Target.descriptor_.extensions_ == std::vector<std::string>{"*"}
+            && (Mode.isEmpty() || Mode == "all" || Mode == "excludeExtensions");
         std::optional<PluginApplicationRule> Detection;
         bool Inspected = false, Usable = true, NeedsLoad = false;
         for (std::size_t Index = 0; Index < Selection.names_.size(); ++Index) {
@@ -130,6 +140,9 @@ Result<HandlerSelection> ProbeDocumentHandlers(const DocumentHandlerCatalog& Cat
                 if (!Detected.HasValue() || !Detected.Value()) continue;
             }
             if (NeedsLoad) {
+                // An unrestricted ListLoad needs a full private copy. Keep
+                // the built-in range-read path for recognized SMB comics.
+                if (GenericScope && HasStreamingSmbComicHandler(Catalog, Request.intent_, Source.Describe())) continue;
                 auto Loaded = TryUndeclaredWlx(Target.plugin_, Request.documents_[Index].source_, HiddenParent, Context);
                 if (!Loaded.HasValue() || !Loaded.Value()) continue;
             }
@@ -177,15 +190,19 @@ bool DocumentOpenController::Open(const QString& Token) {
         const auto Ext = QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower().toStdString();
         NeedProbe |= std::find(DocumentExtensions.begin(), DocumentExtensions.end(), Ext) == DocumentExtensions.end();
     }
-    for (const auto& [Id, Target] : Catalog.targets_)
-        NeedProbe |= Target.descriptor_.kind_ == HandlerKind::Plugin && !Id.starts_with("builtin.") && Target.descriptor_.available_;
+    for (const auto& [Id, Target] : Catalog.targets_) {
+        if (Target.descriptor_.kind_ != HandlerKind::Plugin || Id.starts_with("builtin.")) continue;
+        NeedProbe |= std::any_of(Selection.names_.begin(), Selection.names_.end(), [&](const auto& Name) {
+            return DocumentHandlerResolver::Supports(Target.descriptor_, Request.intent_, {Name});
+        });
+    }
     if (!NeedProbe) return selectHandler(Token, std::move(Request), std::move(Selection), std::move(Catalog));
     if (!probeAnchor_) {
         probeAnchor_ = new QWidget(main_); probeAnchor_->setObjectName("hc.document.detectAnchor");
         probeAnchor_->resize(640, 480); probeAnchor_->hide();
     }
     const auto HiddenParent = QString::number(probeAnchor_->winId(), 16);
-    // Read only a bounded prefix on a worker. A slow share must not block the panel.
+    // Run text and plugin detection on a worker so a slow share cannot block the panel.
     const auto Stop = std::make_shared<std::stop_source>(); pending_.insert(Token, Stop);
     auto* Watcher = new QFutureWatcher<Result<HandlerSelection>>(this);
     connect(Watcher, &QFutureWatcher<Result<HandlerSelection>>::finished, this, [this, Watcher, Token, Request, Catalog] {
@@ -207,7 +224,19 @@ bool DocumentOpenController::Open(const QString& Token) {
             if (std::find(DocumentExtensions.begin(), DocumentExtensions.end(), Ext) != DocumentExtensions.end()) continue;
             Selection.textContent_[Index] = ProbeDocumentText(*Source, Context);
         }
-        return ProbeDocumentHandlers(Catalog, Request, std::move(Selection), Context, HiddenParent);
+        auto Probed = ProbeDocumentHandlers(Catalog, Request, Selection, Context, HiddenParent);
+        if (Probed.HasValue() || Probed.Failure().code_ != "deadline-exceeded" || Context.stopToken_.stop_requested())
+            return Probed;
+        if (!std::all_of(Request.documents_.begin(), Request.documents_.end(), [&](const auto& Input) {
+            return HasStreamingSmbComicHandler(Catalog, Request.intent_, Input.source_->Describe());
+        })) return Probed;
+        // Optional detection has timed out. Preparation still verifies the
+        // original before handing it to the selected handler.
+        for (const auto& [Id, Target] : Catalog.targets_) {
+            if (Target.descriptor_.kind_ == HandlerKind::Plugin && !Id.starts_with("builtin."))
+                Selection.handlerMatches_[Id].assign(Selection.names_.size(), false);
+        }
+        return Selection;
     }));
     return true;
 }

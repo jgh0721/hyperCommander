@@ -411,7 +411,10 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     });
     connect(documents_, &hc::document::DocumentOpenController::Finished, this, [this](const QString&, const QString& Status, const QString& Reason) {
         if (auto* Window = qobject_cast<QMainWindow*>(main_.data())) {
-            if (Status == "failed" || Status == "rejected") Window->statusBar()->showMessage(tr("문서를 열 수 없습니다: %1").arg(hc::ui::DescribeError(Reason).Summary()), 8000);
+            if (Status == "failed" || Status == "rejected") {
+                const auto Error = hc::ui::DescribeError(Reason);
+                Window->statusBar()->showMessage(tr("문서를 열 수 없습니다. %1 [%2]").arg(Error.description_, Error.code_), 8000);
+            }
             else if (Status == "cancelled") Window->statusBar()->showMessage(tr("문서 열기를 취소했습니다."), 3000);
             else Window->statusBar()->showMessage(Status == "ready" ? tr("문서를 열었습니다.") : Status == "started" ? tr("편집기를 실행했습니다.") : tr("문서를 준비하고 있습니다…"), 3000);
         }
