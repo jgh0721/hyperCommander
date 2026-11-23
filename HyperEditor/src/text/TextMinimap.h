@@ -114,7 +114,7 @@ private:
     void viewportChanged();
     void layoutCheck();
     void reloadPalette();
-    void restartOutline();
+    void restartOutline(bool KeepPrevious = false);
     void restartHeadings();
     void restartChanges(bool FullScan);
     void scheduleWork();

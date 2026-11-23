@@ -106,6 +106,13 @@ void TextMinimapRenderer::Clear()
     tiles_.clear();
     recent_.clear();
     bytes_ = 0;
+    previouslyStyled_ = 0;
+}
+
+void TextMinimapRenderer::TextEdited(qint64 Position, qint64 Removed, qint64 Inserted)
+{
+    if (Position < previouslyStyled_)
+        previouslyStyled_ += Inserted - qMin(Removed, previouslyStyled_ - Position);
 }
 
 void TextMinimapRenderer::InvalidateLines(int First, int Last)
@@ -178,12 +185,14 @@ TextMinimapRenderer::Tile TextMinimapRenderer::render(int Index, const TextMinim
             continue; // folded away
         const qint64 Start = Source.LineStart(Line);
         const qint64 Bytes = qMin(Source.LineEnd(Line) - Start, qMin<qint64>(MaxLineBytes, qint64(MaxColumns) * LineRows * 4));
-        const bool Unstyled = Start + Bytes > Styled;
+        const bool Unstyled = Start + Bytes > previouslyStyled_;
+        Result.pending_ |= Start + Bytes > Styled;
         if (Unstyled) {
             Text = Source.Text(Start, Start + Bytes);
             Styles = QByteArray(Text.size(), '\0');
-            Result.pending_ = true;
         } else {
+            // Editing moves EndStyled back, but Scintilla keeps the style
+            // bytes of existing characters until the lexer updates them.
             Source.StyledText(Start, Start + Bytes, Text, Styles);
         }
         int Columns = 0;
@@ -243,6 +252,7 @@ void TextMinimapRenderer::PaintDocument(QPainter& Painter, const TextMinimapSour
     const int FirstLine = qBound(0, Source.LineOfRow(TopRow), Lines - 1);
     const int LastLine = qBound(FirstLine, Source.LineOfRow(BottomRow), Lines - 1);
     const qint64 Styled = Source.EndStyled();
+    previouslyStyled_ = qMax(previouslyStyled_, Styled);
     for (int Index = FirstLine / TileLines; Index <= LastLine / TileLines; ++Index) {
         const int TileFirst = Index * TileLines;
         const int Row = Source.RowOfLine(TileFirst);

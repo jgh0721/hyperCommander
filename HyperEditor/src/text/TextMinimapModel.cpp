@@ -195,9 +195,17 @@ TextMinimapFitGeometry TextMinimapFitGeometryFor(int DisplayRows, int FirstRow, 
 
 // ── 윤곽 구간 ──────────────────────────────────────────────────────────
 
-void TextMinimapOutline::Reset(int BinCount, int DisplayRows)
+void TextMinimapOutline::Reset(int BinCount, int DisplayRows, bool KeepPrevious)
 {
-    bins_ = QVector<Bin>(qBound(0, BinCount, 4096));
+    const int Count = qBound(0, BinCount, 4096);
+    if (KeepPrevious && Count > 0 && !bins_.isEmpty()) {
+        // A line or wrap change moves the bin boundaries. Publish the new
+        // outline as a whole so the previous outline stays visible meanwhile.
+        pending_ = QVector<Bin>(Count);
+    } else {
+        bins_ = QVector<Bin>(Count);
+        pending_.clear();
+    }
     dirty_.clear();
     rows_ = qMax(1, DisplayRows);
     next_ = 0;
@@ -205,22 +213,21 @@ void TextMinimapOutline::Reset(int BinCount, int DisplayRows)
 
 void TextMinimapOutline::Invalidate(int FirstRow, int LastRow)
 {
-    if (bins_.isEmpty())
+    const int Count = int(pending_.isEmpty() ? bins_.size() : pending_.size());
+    if (!Count)
         return;
-    const int Count = int(bins_.size());
     const int First = qBound(0, int(qint64(qMax(0, FirstRow)) * Count / rows_), Count - 1);
     const int Last = qBound(First, int(qint64(qMax(0, LastRow)) * Count / rows_), Count - 1);
     for (int Index = First; Index <= Last; ++Index) {
         if (Index >= next_ || dirty_.contains(Index))
             continue;
-        bins_[Index].done_ = false;
         dirty_.append(Index);
     }
 }
 
-void TextMinimapOutline::build(const TextMinimapSource& Source, int Index)
+void TextMinimapOutline::build(const TextMinimapSource& Source, QVector<Bin>& Bins, int Index)
 {
-    const int Count = int(bins_.size());
+    const int Count = int(Bins.size());
     const int FirstRow = int(qint64(Index) * rows_ / Count);
     const int LastRow = qMax(FirstRow, int(qint64(Index + 1) * rows_ / Count) - 1);
     const int FirstLine = Source.LineOfRow(FirstRow);
@@ -237,16 +244,21 @@ void TextMinimapOutline::build(const TextMinimapSource& Source, int Index)
         Indent = qMin(Indent, int(Stroke.indent_));
         End = qMax(End, int(Stroke.end_));
     }
-    bins_[Index] = {End > 0 ? TextMinimapStroke{quint8(qMin(Indent, End)), quint8(End)} : TextMinimapStroke{}, true};
+    Bins[Index] = {End > 0 ? TextMinimapStroke{quint8(qMin(Indent, End)), quint8(End)} : TextMinimapStroke{}, true};
 }
 
 bool TextMinimapOutline::Step(const TextMinimapSource& Source, const QElapsedTimer& Clock, qint64 BudgetMs)
 {
-    while (!dirty_.isEmpty() || next_ < bins_.size()) {
+    auto& Work = pending_.isEmpty() ? bins_ : pending_;
+    while (!dirty_.isEmpty() || next_ < Work.size()) {
         if (Clock.elapsed() >= BudgetMs)
             return false;
         const int Index = !dirty_.isEmpty() ? dirty_.takeFirst() : next_++;
-        build(Source, Index);
+        build(Source, Work, Index);
+    }
+    if (!pending_.isEmpty()) {
+        bins_.swap(pending_);
+        pending_.clear();
     }
     return true;
 }

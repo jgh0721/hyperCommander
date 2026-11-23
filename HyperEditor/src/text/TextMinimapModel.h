@@ -123,19 +123,20 @@ public:
     };
     static constexpr int SamplesPerBin = 48;
 
-    void Reset(int BinCount, int DisplayRows);
+    void Reset(int BinCount, int DisplayRows, bool KeepPrevious = false);
     // Works until Budget runs out; returns true when every bin is done.
     bool Step(const TextMinimapSource& Source, const QElapsedTimer& Clock, qint64 BudgetMs);
     // Marks the bins covering [FirstRow, LastRow] for rebuilding.
     void Invalidate(int FirstRow, int LastRow);
-    bool Complete() const { return next_ >= bins_.size() && dirty_.isEmpty(); }
+    bool Complete() const { return next_ >= (pending_.isEmpty() ? bins_.size() : pending_.size()) && dirty_.isEmpty(); }
     int BinCount() const { return int(bins_.size()); }
     int DisplayRows() const { return rows_; }
     const QVector<Bin>& Bins() const { return bins_; }
 
 private:
-    void build(const TextMinimapSource& Source, int Index);
+    void build(const TextMinimapSource& Source, QVector<Bin>& Bins, int Index);
     QVector<Bin> bins_;
+    QVector<Bin> pending_;
     QVector<int> dirty_;
     int rows_ = 0;
     int next_ = 0;

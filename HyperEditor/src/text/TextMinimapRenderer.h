@@ -26,8 +26,8 @@ class TextMinimapSource;
 class QPainter;
 
 // Draws the document thumbnail from tiles of TileLines document lines. A tile is keyed by its first document line,
-// so a wrap change in one line only redraws that tile; the tiles below just move. Lines past SCI_GETENDSTYLED are
-// drawn in the outline colour and the tile is redrawn once styling reaches it.
+// so a wrap change in one line only redraws that tile; the tiles below just move. The renderer keeps stored
+// styles during re-lexing and uses the outline colour for text that has not been styled yet.
 class TextMinimapRenderer
 {
 public:
@@ -46,6 +46,7 @@ public:
     using StyleColor = std::function<QColor(int Style)>;
 
     void Clear();
+    void TextEdited(qint64 Position, qint64 Removed, qint64 Inserted);
     void InvalidateLines(int First, int Last);
     void InvalidateFrom(int Line);
     // Draws the rows visible under Geometry into a widget of Height logical pixels.
@@ -72,4 +73,5 @@ private:
     QHash<int, Tile> tiles_;
     QList<int> recent_;
     qint64 bytes_ = 0;
+    qint64 previouslyStyled_ = 0;
 };

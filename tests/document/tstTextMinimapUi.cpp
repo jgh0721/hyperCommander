@@ -30,6 +30,7 @@
 #include <QScrollBar>
 #include <QTemporaryDir>
 #include <QtTest>
+#include <algorithm>
 #include <memory>
 
 namespace
@@ -108,6 +109,79 @@ private slots:
         QCOMPARE(E.column_->focusPolicy(), Qt::NoFocus);
         storeDefaults([](TextMinimapSettings& S) { S.side_ = TextMinimapSettings::Side::Left; });
         QTRY_COMPARE(E.column_->geometry().right() + 1, E.Viewport()->geometry().left());
+    }
+
+    void sourceEditKeepsMinimapColours_data()
+    {
+        QTest::addColumn<QString>("Name");
+        QTest::addColumn<QString>("Line");
+        QTest::newRow("epub-xhtml") << QStringLiteral("chapter.xhtml") << QStringLiteral("<p class=\"main\">Paragraph %1</p>");
+        QTest::newRow("markdown") << QStringLiteral("readme.md") << QStringLiteral("## Heading %1 with **bold** text");
+        QTest::newRow("restructuredtext") << QStringLiteral("index.rst") << QStringLiteral("Paragraph %1 with **strong** text.");
+        QTest::newRow("plain-text") << QStringLiteral("notes.txt") << QStringLiteral("Paragraph %1 in a plain text file.");
+        QTest::newRow("cpp") << QStringLiteral("source.cpp") << QStringLiteral("int value%1 = 42; // a comment");
+        QTest::newRow("python") << QStringLiteral("source.py") << QStringLiteral("value%1 = \"string\"  # Comment");
+        QTest::newRow("css") << QStringLiteral("book.css") << QStringLiteral(".rule%1 { color: #4488ff; }");
+        QTest::newRow("javascript") << QStringLiteral("source.js") << QStringLiteral("const value%1 = 'hello';");
+        QTest::newRow("json") << QStringLiteral("data.json") << QStringLiteral("\"field%1\": true,");
+    }
+
+    void sourceEditKeepsMinimapColours()
+    {
+        QFETCH(QString, Name);
+        QFETCH(QString, Line);
+        storeDefaults([](TextMinimapSettings& Settings) {
+            Settings.labels_ = false;
+            Settings.caret_ = false;
+            Settings.changes_ = false;
+        });
+        QStringList Source;
+        for (int Index = 0; Index < 120; ++Index) Source << Line.arg(Index);
+        auto E = open(Source.join('\n'), {900, 600}, Name);
+        QVERIFY(E.column_ && E.column_->isVisible() && E.column_->Mapping().document_);
+        E.Send(SCI_COLOURISE, 0, -1);
+        QCoreApplication::processEvents();
+        const auto PreviouslyStyled = E.Send(SCI_GETENDSTYLED);
+        const auto Position = E.Send(SCI_POSITIONFROMLINE, 1);
+        if (Name.endsWith(".xhtml") || Name.endsWith(".md") || Name.endsWith(".cpp"))
+            QVERIFY(PreviouslyStyled > Position);
+        const auto Before = E.column_->grab().toImage();
+
+        const QByteArray Indent(" ");
+        E.Send(SCI_INSERTTEXT, Position, reinterpret_cast<qintptr>(Indent.constData()));
+        if (PreviouslyStyled > Position) QVERIFY(E.Send(SCI_GETENDSTYLED) < PreviouslyStyled);
+        const auto During = E.column_->grab().toImage();
+        // The edited line can change. The other lines in the same tile
+        // must keep their colours until the lexer has caught up.
+        const int Top = qRound(12 * Before.devicePixelRatio());
+        const int Height = qRound(80 * Before.devicePixelRatio());
+        QCOMPARE(During.copy(0, Top, Before.width(), Height), Before.copy(0, Top, Before.width(), Height));
+    }
+
+    void outlineEditKeepsLastFrameUntilRebuilt()
+    {
+        storeDefaults([](TextMinimapSettings& Settings) {
+            Settings.kind_ = TextMinimapSettings::Kind::Outline;
+            Settings.labels_ = false;
+            Settings.caret_ = false;
+            Settings.changes_ = false;
+        });
+        auto E = open(lines(500, QStringLiteral("## Heading")), {900, 600}, QStringLiteral("readme.md"));
+        QVERIFY(E.column_ && E.column_->isVisible() && !E.column_->Mapping().document_);
+        const auto& Outline = E.minimap_->Outline();
+        QTRY_VERIFY(Outline.Complete() && Outline.BinCount() > 0);
+        const auto Before = E.column_->grab().toImage();
+        E.Send(SCI_INSERTTEXT, 0, qintptr(" "));
+        QVERIFY(!Outline.Complete());
+        QCOMPARE(E.column_->grab().toImage(), Before);
+
+        E.Send(SCI_INSERTTEXT, 0, qintptr("\n"));
+        QVERIFY(!Outline.Complete());
+        QVERIFY(std::all_of(Outline.Bins().cbegin(), Outline.Bins().cend(), [](const auto& Bin) {
+            return Bin.done_ && !Bin.stroke_.Empty();
+        }));
+        QTRY_VERIFY(Outline.Complete());
+        QVERIFY(Outline.DisplayRows() >= 501);
     }
 
     void clickKeepsCaretSelectionUndo()

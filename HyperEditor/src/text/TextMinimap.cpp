@@ -227,7 +227,7 @@ void TextMinimap::placeWidgets()
         const bool HeightChanged = column_->height() != Target.height();
         column_->setGeometry(Target);
         if (HeightChanged && mode_.column_ == TextMinimapMode::Column::Outline)
-            restartOutline();
+            restartOutline(true);
     }
     column_->raise();
 }
@@ -286,8 +286,8 @@ void TextMinimap::documentReset()
 
 void TextMinimap::textEdited(qint64 Position, qint64 Removed, qint64 Inserted)
 {
-    Q_UNUSED(Removed);
     ++revision_;
+    renderer_.TextEdited(Position, Removed, Inserted);
     const int First = source_->LineFromPosition(Position);
     const int Last = source_->LineFromPosition(Position + Inserted);
     candidates().Add(First, Last);
@@ -315,7 +315,7 @@ void TextMinimap::linesShifted(int Line, int Delta)
     if (CrossesLimit)
         updateMode();
     if (mode_.column_ == TextMinimapMode::Column::Outline)
-        restartOutline();
+        restartOutline(true);
 }
 
 void TextMinimap::stylesChanged(qint64 Position, qint64 Length)
@@ -339,7 +339,7 @@ void TextMinimap::layoutCheck()
     if (Rows != displayRows_) {
         displayRows_ = Rows;
         if (mode_.column_ == TextMinimapMode::Column::Outline)
-            restartOutline();
+            restartOutline(true);
         repaint();
     }
     const qint64 Styled = source_->EndStyled();
@@ -358,7 +358,7 @@ void TextMinimap::repaint()
 
 // ── 문서 전체 작업 ─────────────────────────────────────────────────────
 
-void TextMinimap::restartOutline()
+void TextMinimap::restartOutline(bool KeepPrevious)
 {
     if (mode_.column_ != TextMinimapMode::Column::Outline) {
         outline_.Reset(0, 1);
@@ -367,7 +367,7 @@ void TextMinimap::restartOutline()
     const int Rows = source_->DisplayRows();
     displayRows_ = Rows;
     const int Bins = qBound(1, qMin(Rows, qMax(1, column_->height() / 2)), 4096);
-    outline_.Reset(Bins, Rows);
+    outline_.Reset(Bins, Rows, KeepPrevious);
     scheduleWork();
 }
 

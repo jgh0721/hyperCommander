@@ -254,6 +254,7 @@ private slots:
         Source.textCalls_ = 0;
         Outline.Invalidate(500, 509);
         QVERIFY(!Outline.Complete());
+        QVERIFY(Outline.Bins()[50].done_ && !Outline.Bins()[50].stroke_.Empty());
         Clock = started();
         QVERIFY(Outline.Step(Source, Clock, 1000));
         QVERIFY(Source.textCalls_ > 0 && Source.textCalls_ <= 10);
@@ -395,6 +396,67 @@ private slots:
         QCOMPARE(Headings.Headings().size(), 2);
         QCOMPARE(Headings.Headings()[1].text_, QStringLiteral("void F()"));
         QCOMPARE(Headings.Headings()[1].level_, 2);
+    }
+
+    void outlineKeepsPublishedBinsDuringReflow()
+    {
+        FakeSource Source(numbered(300, "original text "));
+        TextMinimapOutline Outline;
+        Outline.Reset(100, Source.DisplayRows());
+        QVERIFY(Outline.Step(Source, started(), 1000));
+        const auto Stroke = Outline.Bins().front().stroke_;
+        Source.SetLines(numbered(400, "x"));
+        Outline.Reset(120, Source.DisplayRows(), true);
+        QVERIFY(!Outline.Complete());
+        QVERIFY(!Outline.Step(Source, started(), 0));
+        QCOMPARE(Outline.BinCount(), 100);
+        QCOMPARE(Outline.Bins().front().stroke_.end_, Stroke.end_);
+
+        QVERIFY(Outline.Step(Source, started(), 1000));
+        QVERIFY(Outline.Complete());
+        QCOMPARE(Outline.BinCount(), 120);
+        QVERIFY(Outline.Bins().front().stroke_.end_ < Stroke.end_);
+        Outline.Reset(120, Source.DisplayRows());
+        QVERIFY(!Outline.Bins().front().done_);
+    }
+
+    void rendererKeepsStyleWhenLexingRestarts()
+    {
+        auto Lines = numbered(160, "source ");
+        FakeSource Source(Lines);
+        TextMinimapRenderer Renderer;
+        const auto Paint = [&] {
+            QImage Canvas(100, 340, QImage::Format_ARGB32_Premultiplied);
+            Canvas.fill(Qt::white);
+            QPainter Painter(&Canvas);
+            const auto Geometry = TextMinimapDocumentGeometryFor(Source.DisplayRows(), 0, 30, Canvas.height(), 2);
+            Renderer.PaintDocument(Painter, Source, Geometry, Canvas.height(), {}, [](int) { return QColor(Qt::black); }, QColor(Qt::gray));
+            Painter.end();
+            return Canvas;
+        };
+        const auto Before = Paint();
+        QCOMPARE(Before.pixelColor(4, 2 * 12 + 1), QColor(Qt::black));
+        QCOMPARE(Before.pixelColor(4, 2 * 159 + 1), QColor(Qt::black));
+
+        // Typing and adding a line resets Scintilla's styling progress to the
+        // edit position. The old style bytes still follow the surviving text.
+        const QByteArray NewLine("inserted");
+        Lines.prepend(NewLine);
+        Source.SetLines(Lines);
+        Source.endStyled_ = 0;
+        Renderer.TextEdited(0, 0, NewLine.size() + 1);
+        Renderer.InvalidateFrom(0);
+        const auto During = Paint();
+        QCOMPARE(During.pixelColor(4, 2 * 13 + 1), QColor(Qt::black));
+        QCOMPARE(During.pixelColor(4, 2 * 160 + 1), QColor(Qt::black));
+
+        Lines.removeFirst();
+        Source.SetLines(Lines);
+        Renderer.TextEdited(0, NewLine.size() + 1, 0);
+        Renderer.InvalidateFrom(0);
+        QCOMPARE(Paint(), Before);
+        Renderer.Clear();
+        QCOMPARE(Paint().pixelColor(4, 2 * 12 + 1), QColor(Qt::gray));
     }
 
     void rendererTiles()
