@@ -1478,10 +1478,12 @@ bool CGridView::BeginRename(const QModelIndex& Index, bool SelectExtension, Rena
     const auto Visible = proxy_ ? proxy_->mapFromSource(renameIndex_) : QModelIndex(renameIndex_);
     const auto Row = view_->getRow(Visible);
     if (!Row.isValid()) { CancelRename(); return false; }
-    view_->setFocusedRowIndex(Row.rowIndex());
-    // scrollToIndex(false) bottom-aligns even an already visible file.
-    // Reveal the name only when it is clipped or outside the current viewport.
-    const auto RowsRect = BaseView()->layout()->rowsPanel()->boundedRect();
+    if (view_->focusedRowIndex() != Row.rowIndex()) view_->setFocusedRowIndex(Row.rowIndex());
+    // Hit rectangles use viewport coordinates, whereas the rows mask is local to the rows panel.
+    // Only scroll to a clipped name, since scrollToIndex(false) bottom-aligns the row.
+    auto* RowsPanel = BaseView()->layout()->rowsPanel();
+    const auto Mask = RowsPanel->mask().rect();
+    const QRect RowsRect(RowsPanel->mapToSite(Mask.topLeft()), Mask.size());
     bool NameVisible = false;
     for (const auto& Hit : grid_->hitInfoAll()) {
         if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.row().rowIndex() == Row.rowIndex() && Hit.modelIndex().column() == 0
@@ -1493,6 +1495,9 @@ bool CGridView::BeginRename(const QModelIndex& Index, bool SelectExtension, Rena
     renameEditor_->setAccessibleName(tr("파일 이름 변경"));
     renameEditor_->setToolTip(tr("이름 변경 단축키: 선택 전환 · 위/아래: 완료 후 이전/다음 항목 · Esc: 취소"));
     renameEditor_->setFont(grid_->font());
+    renameEditor_->setFrame(false);
+    // Cancel QLineEdit's 2 px text inset so the name starts where the cell painted it.
+    renameEditor_->setTextMargins(-2, 0, 0, 0);
     renameEditor_->installEventFilter(this);
     positionRenameEditor();
     if (!renameEditor_) return false;

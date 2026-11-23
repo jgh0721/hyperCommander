@@ -50,6 +50,7 @@ protected:
     void accept() override;
     void reject() override;
     void closeEvent(QCloseEvent* Event) override;
+    void showEvent(QShowEvent* Event) override;
 private:
     void preview();
     void showPage();

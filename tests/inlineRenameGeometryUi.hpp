@@ -71,15 +71,26 @@ inline void InlineRenameGeometryUi(QMainUI* Main, CmpPanel* Panel)
                 if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.row().rowIndex() == Row.rowIndex() && Hit.modelIndex().column() == 0) return Hit.rect();
             return QRect{};
         };
-        const auto Before = NameCell(); QVERIFY(Before.isValid());
-        QVERIFY(Before.top() > Grid->viewport()->height() / 4);
-        QVERIFY(Before.bottom() < Grid->viewport()->height() - 10);
+        QTRY_VERIFY(NameCell().isValid());
+        // Align using the actual cell coordinates because the group header
+        // and row layout can shift the initial scroll position at higher DPR.
+        Scroll->setValue(Scroll->value() + NameCell().center().y() - Grid->viewport()->rect().center().y());
+        QTRY_VERIFY(NameCell().top() > Grid->viewport()->height() / 4
+            && NameCell().bottom() < Grid->viewport()->height() - 10);
+        const auto Before = NameCell();
         const auto Position = Scroll->value(); const auto Focus = View->CaptureFocus();
         QTest::keyClick(Grid, Qt::Key_F2);
         QLineEdit* Input = nullptr;
         QTRY_VERIFY((Input = View->findChild<QLineEdit*>("hc.file.renameEditor")) && Input->isVisible());
         const auto Label = QString("%1-%2").arg(Grouped ? "grouped" : "flat").arg(static_cast<int>(Layout));
         QVERIFY(Grid->grab().save(Evidence.filePath(Label + ".png")));
+        QVERIFY(!Input->hasFrame());
+        const auto Rendered = Input->grab().toImage();
+        const auto Highlight = Input->palette().color(QPalette::Highlight);
+        bool SelectionStartsAtEdge = false;
+        for (int Y = 0; Y < Rendered.height() && !SelectionStartsAtEdge; ++Y)
+            SelectionStartsAtEdge = Rendered.pixelColor(0, Y) == Highlight;
+        QVERIFY2(SelectionStartsAtEdge, "The selected filename must start at the painted name position");
         QCOMPARE(Scroll->value(), Position); QCOMPARE(NameCell(), Before); QCOMPARE(View->CaptureFocus(), Focus);
         const auto IconRight = Before.left() + 8 + View->RecordGeometry().sideMargin + View->ListIconSize() - 1;
         QVERIFY2(Input->geometry().left() > IconRight, "Rename editor must leave the full icon slot visible");
