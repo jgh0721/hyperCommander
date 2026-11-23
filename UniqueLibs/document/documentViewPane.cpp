@@ -1106,7 +1106,7 @@ namespace hc::document
             if(State["split"].toBool())Add("split",tr("분할 %1").arg(State["part"].toInt()+1),false);
             if(State["private"].toBool())Add("private",tr("읽기 기록 저장 안 함"));
             Add("pageName",QDir::toNativeSeparators(State[Presented?"presentedName":"pageName"].toString()),false);
-            const auto Direction=State["rtl"].toBool()?tr("오른쪽 → 왼쪽"):tr("왼쪽 → 오른쪽");
+            const auto Direction=State["rtl"].toBool()?tr("왼쪽←오른쪽"):tr("왼쪽→오른쪽");
             if(Webtoon)Pick("webtoon",tr("세로 연속 · 간격 %1 px").arg(State["gap"].toInt()),true,true,tr("세로 연속"));
             else Pick("spread",(State["mode"].toInt()==ImageReadingView::Comic?tr("두 쪽"):tr("한 쪽"))+" · "+Direction,true,true,State["rtl"].toBool()?tr("← 읽기"):tr("→ 읽기"));
             const QStringList Fits{tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤")};

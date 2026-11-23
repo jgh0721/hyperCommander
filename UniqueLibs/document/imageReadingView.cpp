@@ -461,14 +461,29 @@ QSizeF ImageReadingView::webtoonPageSize(const QSize &SourceSize) const
         Scale = WidthScale;
     return QSizeF(SourceSize) * (Scale * zoom_);
 }
-QList<ImageReadingView::Placement> ImageReadingView::placements(int Index) const
+std::optional<int> ImageReadingView::InitialComicHeightDelta() const
+{
+    // A manual zoom overrides the selected fit, even when its menu is still checked.
+    if (mode_ != Comic || (fit_ != 1 && fit_ != 2) || !qFuzzyCompare(zoom_, 1.) || pageErrors_.contains(index_)) return 0;
+    const auto View = maximumViewportSize();
+    if (View.isEmpty() || !layoutReady(index_)) return std::nullopt;
+
+    const auto Pages = placements(index_, true);
+    int Height = static_cast<int>(std::ceil(Pages.front().rect_.height()));
+    // Keep the initial spread in the landscape viewport that selected it.
+    if (Pages.size() == 2) Height = qMin(Height, viewport()->width());
+    // Fit to window already fills the height when the page is height-limited.
+    if (fit_ == 1) Height = qMin(Height, View.height());
+    return Height - View.height();
+}
+QList<ImageReadingView::Placement> ImageReadingView::placements(int Index, bool FullWidth) const
 {
     if (Index < 0) Index = index_;
     QList<Placement> Out;
     if (!book_ || sizes_.isEmpty())
         return Out;
-    const qreal W = viewport()->width(), H = viewport()->height(), YScroll = scrollPosition(),
-                XScroll = horizontalScrollBar()->value();
+    const qreal W = FullWidth ? maximumViewportSize().width() : viewport()->width();
+    const qreal H = viewport()->height(), YScroll = scrollPosition(), XScroll = horizontalScrollBar()->value();
     if (mode_ == Webtoon)
     {
         const auto First = std::lower_bound(webtoonTops_.cbegin(), webtoonTops_.cend(), YScroll - H);
@@ -503,8 +518,8 @@ QList<ImageReadingView::Placement> ImageReadingView::placements(int Index) const
         TotalWidth += (split_ && Wide ? qMax(1, Sz.width()/2) : Sz.width())
             * (Count == 2 ? MaxHeight / Sz.height() : 1.);
     }
-    qreal Scale = fit_ == 0   ? 1.
-                  : fit_ == 2 ? W / TotalWidth
+    qreal Scale = FullWidth || fit_ == 2 ? W / TotalWidth
+                  : fit_ == 0 ? 1.
                   : fit_ == 3 ? H / MaxHeight
                               : qMin(W / TotalWidth, H / MaxHeight);
     Scale *= zoom_;
@@ -1353,14 +1368,14 @@ QMenu *ImageReadingView::CreateContextMenu(QWidget *Parent)
     {
         // 두 쪽 보기 switches between the comic spread and single pages, as the toolbar toggle does.
         Check(Menu, "spread", tr("두 쪽 보기"), mode_ == Comic, [this](bool On) { SetMode(On ? Comic : Single); });
-        Check(Menu, "rightToLeft", tr("오른쪽 → 왼쪽"), rtl_, [this](bool On) { SetRightToLeft(On); });
+        Check(Menu, "rightToLeft", tr("왼쪽←오른쪽"), rtl_, [this](bool On) { SetRightToLeft(On); });
     }
     auto *Fit = Sub("fit", tr("맞춤"));
     auto *Fits = new QActionGroup(Fit);
     const QStringList FitNames{tr("원본 크기"), tr("창에 맞춤"), tr("너비 맞춤"), tr("높이 맞춤")};
     const char *FitIds[] = {"fitOriginal", "fitWindow", "fitWidth", "fitHeight"};
     const int CurrentFit = Strip ? webtoonFit_ : fit_;
-    for (const int Value : Strip ? QList<int>{1, 2, 0} : QList<int>{1, 2, 3})
+    for (const int Value : Strip ? QList<int>{1, 2, 0} : QList<int>{1, 2, 3, 0})
         Fits->addAction(Check(Fit, FitIds[Value], FitNames[Value], CurrentFit == Value, [this, Value](bool) { SetFit(Value); }));
     if (Strip)
     {

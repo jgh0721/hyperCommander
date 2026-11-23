@@ -86,12 +86,12 @@ QImage Picture(QColor Color = Qt::red, QSize Size = {80, 120})
     I.fill(Color);
     return I;
 }
-QByteArray Png(QColor Color = Qt::red)
+QByteArray Png(QColor Color = Qt::red, QSize Size = {80, 120})
 {
     QByteArray Bytes;
     QBuffer B(&Bytes);
     B.open(QIODevice::WriteOnly);
-    Picture(Color).save(&B, "PNG");
+    Picture(Color, Size).save(&B, "PNG");
     return Bytes;
 }
 QByteArray TwoPageTiff()
@@ -1309,6 +1309,115 @@ class ImageReadingTests : public QObject
         }
         View.Cancel();
     }
+    void initialComicWindowFit_data()
+    {
+        QTest::addColumn<bool>("Hosted");
+        QTest::addColumn<bool>("QuickPreview");
+        QTest::addColumn<int>("Mode");
+        QTest::addColumn<int>("Fit");
+        QTest::addColumn<bool>("Spread");
+        QTest::addColumn<bool>("Adjust");
+        QTest::newRow("viewer-window-spread") << true << false << int(ImageReadingView::Comic) << 1 << true << true;
+        QTest::newRow("viewer-width-spread") << true << false << int(ImageReadingView::Comic) << 2 << true << true;
+        QTest::newRow("editor-window-single") << false << false << int(ImageReadingView::Comic) << 1 << false << true;
+        QTest::newRow("editor-width-single") << false << false << int(ImageReadingView::Comic) << 2 << false << true;
+        QTest::newRow("viewer-height") << true << false << int(ImageReadingView::Comic) << 3 << true << false;
+        QTest::newRow("viewer-webtoon") << true << false << int(ImageReadingView::Webtoon) << 2 << true << false;
+        QTest::newRow("quick-preview") << true << true << int(ImageReadingView::Comic) << 1 << true << false;
+    }
+    void initialComicWindowFit()
+    {
+        QFETCH(bool, Hosted);
+        QFETCH(bool, QuickPreview);
+        QFETCH(int, Mode);
+        QFETCH(int, Fit);
+        QFETCH(bool, Spread);
+        QFETCH(bool, Adjust);
+        QTemporaryDir Root;
+        QVERIFY(Root.isValid());
+        const auto OldConfig = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Root.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", OldConfig); });
+        const auto Path = Root.filePath("comic.cbz");
+        const QSize PageSize = Spread ? QSize(310, 320) : QSize(450, 275);
+        {
+            QZipWriter Zip(Path);
+            Zip.addFile("1.png", Png(Qt::red, PageSize));
+            Zip.addFile("2.png", Png(Qt::blue, PageSize));
+            Zip.addFile("3.png", Png(Qt::green, QSize(420, 160)));
+            Zip.close();
+            QCOMPARE(Zip.status(), QZipWriter::NoError);
+        }
+        const auto Book = OpenImageBook(Path);
+        QVERIFY(Book.HasValue());
+        const auto Put = [](const QString& FileName, const QJsonObject& Object) {
+            QFile File(FileName);
+            const auto Bytes = QJsonDocument(Object).toJson();
+            return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size();
+        };
+        const QJsonObject Reading{{"revision", Book.Value()->revision_}, {"pageId", Book.Value()->pages_.front().id_},
+            {"mode", Mode}, {"modeOrigin", "user"}, {"fit", Fit}, {"webtoonFit", Fit}};
+        QVERIFY(Put(hc::defaults::edit::ImageReadingFile(Root.path()), {{Book.Value()->path_, Reading}}));
+        const auto Screen = qApp->primaryScreen()->availableGeometry();
+        const auto Initial = QSize(850, 650).boundedTo(Screen.size() - QSize(32, 32));
+        const auto Preferences = Hosted ? Root.filePath(hc::defaults::edit::ViewerConfigFileName) : hc::defaults::edit::SettingsFile(Root.path());
+        auto Settings = hc::defaults::edit::DefaultDocument();
+        Settings["window"] = QJsonObject{{"width", Initial.width()}, {"height", Initial.height()}};
+        QVERIFY(Put(Preferences, Settings));
+
+        DocumentWorkspaceWidget Window(Root.filePath("recovery"), Hosted);
+        Window.setProperty("hc.quickPreview", QuickPreview);
+        if (!Hosted || QuickPreview) Window.show();
+        const auto Open = Window.Handle({{"action", "open"}, {"path", Path}});
+        QVERIFY(!Open.contains("error"));
+        QTRY_COMPARE_WITH_TIMEOUT(Document(Window)["lifecycle"].toString(), QString("ready"), 15000);
+        if (Hosted && !QuickPreview) {
+            Window.RestoreWindowSize();
+            Window.show();
+        }
+        auto* Reader = Window.findChild<ImageReadingView*>();
+        QVERIFY(Reader);
+        QCOMPARE(Reader->State()["mode"].toInt(), Mode);
+        QCOMPARE(Reader->State()["fit"].toInt(), Fit);
+        const auto Margin = [&] {
+            const auto View = Reader->viewport()->size();
+            const auto Expected = qreal(View.width()) * PageSize.height() / (PageSize.width() * (Spread ? 2 : 1));
+            return qAbs(View.height() - Expected);
+        };
+        if (Adjust) {
+            const auto Geometry = [&] {
+                const auto View = Reader->viewport()->size();
+                return QString("initial %1x%2, window %3x%4, viewport %5x%6, margin difference %7, last page %8")
+                    .arg(Initial.width()).arg(Initial.height()).arg(Window.width()).arg(Window.height())
+                    .arg(View.width()).arg(View.height()).arg(Margin()).arg(Reader->State()["lastPage"].toInt());
+            };
+            QTRY_VERIFY2_WITH_TIMEOUT(Window.height() != Initial.height() && Margin() <= 2, qPrintable(Geometry()), 5000);
+            QCOMPARE(Window.width(), Initial.width());
+            QTRY_COMPARE_WITH_TIMEOUT(Reader->State()["presentedLastPage"].toInt(), Spread ? 1 : 0, 10000);
+            const auto HasNoGaps = [&] {
+                const auto Frame = Reader->viewport()->grab().toImage();
+                const auto IsRed = [](const QColor& Color) {
+                    return Color.red() > 220 && Color.green() < 35 && Color.blue() < 35;
+                };
+                return Frame.height() > 4 && IsRed(Frame.pixelColor(Frame.width() / 4, 2))
+                    && IsRed(Frame.pixelColor(Frame.width() / 4, Frame.height() - 3));
+            };
+            QTRY_VERIFY_WITH_TIMEOUT(HasNoGaps(), 10000);
+        } else {
+            QTRY_VERIFY_WITH_TIMEOUT(Reader->HasPresentationImage(), 10000);
+            QCOMPARE(Window.size(), Initial);
+        }
+        const auto Settled = Window.size();
+        Reader->GoTo(2);
+        QTRY_COMPARE_WITH_TIMEOUT(Reader->State()["presentedPage"].toInt(), 2, 10000);
+        QCOMPARE(Window.size(), Settled);
+
+        Window.hide();
+        QFile Saved(Preferences);
+        QVERIFY(Saved.open(QIODevice::ReadOnly));
+        const auto SavedWindow = QJsonDocument::fromJson(Saved.readAll()).object()["window"].toObject();
+        QCOMPARE(SavedWindow["height"].toInt(), Initial.height());
+    }
     void comicVolumeUpdatesTabAndPersistsCover_data()
     {
         QTest::addColumn<bool>("Hosted");QTest::newRow("editor")<<false;QTest::newRow("viewer")<<true;
@@ -1666,6 +1775,20 @@ class ImageReadingTests : public QObject
         auto *Reader = Pane->findChild<ImageReadingView *>(); QVERIFY(Reader);
         auto *Nav = Reader->findChild<ImageReadingNavigator *>(); QVERIFY(Nav); QTRY_VERIFY(Nav->isVisible());
         Nav->findChild<QToolButton *>("imageNavigatorPin")->setChecked(true);
+        Reader->SetRightToLeft(false);
+        auto* Direction = Pane->findChild<QAction*>("readingDirectionButton");
+        QVERIFY(Direction && Direction->icon().isNull());
+        auto* DirectionButton = qobject_cast<QToolButton*>(Pane->PrimaryToolbar()->widgetForAction(Direction));
+        QVERIFY(DirectionButton);
+        QCOMPARE(DirectionButton->toolButtonStyle(), Qt::ToolButtonTextOnly);
+        QCOMPARE(DirectionButton->text(), QStringLiteral("왼쪽→오른쪽"));
+        DirectionButton->click();
+        QVERIFY(Reader->State()["rtl"].toBool());
+        QCOMPARE(DirectionButton->text(), QStringLiteral("왼쪽←오른쪽"));
+        DirectionButton->click();
+        QVERIFY(!Reader->State()["rtl"].toBool());
+        QCOMPARE(DirectionButton->text(), QStringLiteral("왼쪽→오른쪽"));
+
         auto *Modes = Nav->findChild<QComboBox *>("imageNavigatorMode");
         Modes->setCurrentIndex(1); emit Modes->activated(1);
         QCOMPARE(Reader->State()["mode"].toInt(), int(ImageReadingView::Webtoon));
@@ -1974,7 +2097,7 @@ class ImageReadingTests : public QObject
                           QStringLiteral("맞춤"), QStringLiteral("이미지 간격"), "|", QStringLiteral("책갈피 저장"), QStringLiteral("책갈피로 이동…"), "|",
                           QStringLiteral("이 이미지 다시 읽기"), QStringLiteral("화질 보정"), QStringLiteral("전체 화면")}
             : QStringList{QStringLiteral("다음 쪽"), QStringLiteral("이전 쪽"), "|", QStringLiteral("쪽으로 이동…"), QStringLiteral("페이지 목록…"), "|",
-                          QStringLiteral("두 쪽 보기"), QStringLiteral("오른쪽 → 왼쪽"), QStringLiteral("맞춤"), "|",
+                          QStringLiteral("두 쪽 보기"), QStringLiteral("왼쪽←오른쪽"), QStringLiteral("맞춤"), "|",
                           QStringLiteral("책갈피 저장"), QStringLiteral("책갈피로 이동…"), "|",
                           QStringLiteral("이 쪽 다시 읽기"), QStringLiteral("화질 보정"), QStringLiteral("전체 화면")};
         std::unique_ptr<QMenu> Menu(View.CreateContextMenu());
@@ -1990,7 +2113,7 @@ class ImageReadingTests : public QObject
             auto *Action = Of->findChild<QAction *>(QString::fromLatin1(Name)); return Action && Action->menu() ? Items(Action->menu()) : QStringList{"missing"};
         };
         const QStringList Fits = Webtoon ? QStringList{QStringLiteral("창에 맞춤"), QStringLiteral("너비 맞춤"), QStringLiteral("원본 크기")}
-                                         : QStringList{QStringLiteral("창에 맞춤"), QStringLiteral("너비 맞춤"), QStringLiteral("높이 맞춤")};
+                                         : QStringList{QStringLiteral("창에 맞춤"), QStringLiteral("너비 맞춤"), QStringLiteral("높이 맞춤"), QStringLiteral("원본 크기")};
         const QStringList Corrections = Webtoon ? QStringList{QStringLiteral("회색조"), QStringLiteral("색 반전")}
                                                 : QStringList{QStringLiteral("회색조"), QStringLiteral("색 반전"), QStringLiteral("밝기…")};
         QCOMPARE(Sub(Menu.get(), "readingContext.fit"), Fits);
@@ -2008,6 +2131,8 @@ class ImageReadingTests : public QObject
             QCOMPARE(View.State()["rtl"].toBool(), !Rtl);
             Menu->findChild<QAction *>("readingContext.fitHeight")->trigger();
             QCOMPARE(View.State()["fit"].toInt(), 3);
+            Menu->findChild<QAction *>("readingContext.fitOriginal")->trigger();
+            QCOMPARE(View.State()["fit"].toInt(), 0);
         }
         Menu->findChild<QAction *>("readingContext.grayscale")->trigger();
         QVERIFY(View.State()["grayscale"].toBool());

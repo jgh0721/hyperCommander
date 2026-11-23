@@ -8,6 +8,7 @@
 #include <QSet>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <optional>
 #include <stop_token>
 
 class QAction;
@@ -54,6 +55,8 @@ class ImageReadingView final : public QAbstractScrollArea
     void Cancel();
     void RetryPage();
     QJsonObject State() const;
+    // No value until the initial comic page or spread has known dimensions.
+    std::optional<int> InitialComicHeightDelta() const;
     QImage CurrentImage() const;
     bool HasPresentationImage() const { return !CurrentImage().isNull() || !previews_.value(index_).isNull(); }
     QString CurrentName() const;
@@ -94,7 +97,7 @@ class ImageReadingView final : public QAbstractScrollArea
         QRect crop_;
     };
     QSizeF webtoonPageSize(const QSize &SourceSize) const;
-    QList<Placement> placements(int Index = -1) const;
+    QList<Placement> placements(int Index = -1, bool FullWidth = false) const;
     int groupCount(int Index) const;
     bool layoutReady(int Index) const;
     void rememberSize(int Page, QSize Size);

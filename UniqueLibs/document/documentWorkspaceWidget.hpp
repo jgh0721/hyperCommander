@@ -102,6 +102,7 @@ namespace hc::document
         bool eventFilter(QObject* Watched, QEvent* Event) override;
         // Surfaces own their context menus; anything else ends here instead of falling through to every action.
         void contextMenuEvent(QContextMenuEvent* Event) override;
+        void showEvent(QShowEvent* Event) override;
         void resizeEvent(QResizeEvent* Event) override;
         void dragEnterEvent(QDragEnterEvent* Event) override;
         void dropEvent(QDropEvent* Event) override;
@@ -179,6 +180,8 @@ namespace hc::document
         bool triggerCommand(const QString& Id);
         bool focusReleased_ = false;
         std::unique_ptr<DocumentWindowSize> windowSize_;
+        bool initialComicFitPending_ = true;
+        void fitInitialComicWindow();
         // Synchronous: startup, a saved settings dialog and Escape need the result at once.
         void refreshPreferences();
         // Reads and parses on a worker, then applies here; for the folder watcher and activation.

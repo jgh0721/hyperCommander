@@ -32,6 +32,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QResizeEvent>
+#include <QShowEvent>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -944,6 +945,26 @@ namespace hc::document
     void DocumentWorkspaceWidget::RestoreWindowSize()
     {
         windowSize_->Restore();
+        // A hidden HyperViewer can be reused for the next F3 open.
+        initialComicFitPending_ = true;
+    }
+    void DocumentWorkspaceWidget::fitInitialComicWindow()
+    {
+        if (!initialComicFitPending_ || !isVisible()) return;
+        if (!isWindow() || property("hc.quickPreview").toBool() || isMaximized() || isMinimized() || isFullScreen()
+            || documents_.size() > 1) {
+            initialComicFitPending_ = false;
+            return;
+        }
+        const auto Tab = active();
+        if (!Tab || Tab->loading_) return;
+        const auto* Reader = qobject_cast<ImageReadingView*>(Tab->pane_->InputWidget());
+        if (Reader && Reader->window() == this && !Reader->isVisible()) return;
+        const auto Delta = Reader && Reader->window() == this && Tab->error_.isEmpty()
+            ? Reader->InitialComicHeightDelta() : std::optional<int>{0};
+        if (!Delta) return;
+        initialComicFitPending_ = false;
+        windowSize_->FitInitialHeight(*Delta);
     }
     void DocumentWorkspaceWidget::showPreferences()
     {
@@ -2908,6 +2929,7 @@ namespace hc::document
             Beside->setEnabled(Tab && !Tab->loading_ && tabbed_ && (Tab->pane_->CanTakePreview() || Tab->previewDock_));
         findChild<ImageFullscreen*>("imageFullscreen")->UpdateStatus();
         refreshExplorer();
+        fitInitialComicWindow();
         emit StateChanged();
     }
     void DocumentWorkspaceWidget::refreshRecentMenu()
@@ -3159,6 +3181,13 @@ namespace hc::document
         // 시작 페이지는 중앙 영역의 빈 자리 위젯이다(DockManager::setCentralPlaceholderWidget): 중앙 영역이
         // 비면 저절로 보인다. 여기서는 최근 항목만 새로 읽힌 것으로 맞춘다.
         if (!startPage_) return;
+    }
+    void DocumentWorkspaceWidget::showEvent(QShowEvent* Event)
+    {
+        QWidget::showEvent(Event);
+        // The hidden viewer's dock and scroll area finish sizing after show.
+        if (initialComicFitPending_)
+            QMetaObject::invokeMethod(this, &DocumentWorkspaceWidget::fitInitialComicWindow, Qt::QueuedConnection);
     }
     void DocumentWorkspaceWidget::resizeEvent(QResizeEvent* Event)
     {

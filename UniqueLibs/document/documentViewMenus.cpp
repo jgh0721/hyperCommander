@@ -529,9 +529,9 @@ namespace hc::document
         View << Scoped(RadioMenu(modeMenu_, tr("읽기 방향"), [Reading](QMenu* Menu) {
             const bool Rtl = Reading->State()["rtl"].toBool();
             auto* Group = new QActionGroup(Menu);
-            auto* Ltr = Check(Menu, tr("왼쪽 → 오른쪽"), !Rtl); Group->addAction(Ltr);
+            auto* Ltr = Check(Menu, tr("왼쪽→오른쪽"), !Rtl); Group->addAction(Ltr);
             QObject::connect(Ltr, &QAction::triggered, Reading, [Reading] { Reading->SetRightToLeft(false); });
-            auto* RtlRow = Check(Menu, tr("오른쪽 → 왼쪽"), Rtl); Group->addAction(RtlRow);
+            auto* RtlRow = Check(Menu, tr("왼쪽←오른쪽"), Rtl); Group->addAction(RtlRow);
             QObject::connect(RtlRow, &QAction::triggered, Reading, [Reading] { Reading->SetRightToLeft(true); });
         })->menuAction(), Comic);
         View << Scoped(chromeAction(tr("쪽 간격…"), "comicView.gap", [this, Reading] {
@@ -602,8 +602,12 @@ namespace hc::document
         connect(Slideshow, &QAction::triggered, this, [this](bool On) { SetSlideshow(On); });
         auto* Spread = Tool("spread", tr("두 쪽 보기"), Comic, {}, tr("두 쪽")); Spread->setCheckable(true); Spread->setObjectName("readingSpreadButton");
         connect(Spread, &QAction::triggered, Reading, [Reading](bool On) { Reading->SetMode(On ? ImageReadingView::Comic : ImageReadingView::Single); });
-        auto* Direction = Tool("reading-direction", tr("읽기 방향"), Comic, [Reading] { Reading->SetRightToLeft(!Reading->State()["rtl"].toBool()); }, tr("왼쪽→오른쪽"));
+        auto* Direction = Scoped(new QAction(tr("왼쪽→오른쪽"), chromeOwner_), Comic);
         Direction->setObjectName("readingDirectionButton");
+        Direction->setToolTip(tr("읽기 방향"));
+        connect(Direction, &QAction::triggered, Reading, [Reading] { Reading->SetRightToLeft(!Reading->State()["rtl"].toBool()); });
+        toolbar_->addAction(Direction);
+        if (auto* Button = qobject_cast<QToolButton*>(toolbar_->widgetForAction(Direction))) Button->setToolButtonStyle(Qt::ToolButtonTextOnly);
         Line(Comic);
         auto* CorrectButton = Tool("adjust", tr("화질 보정"), Books, {}, tr("화질 보정")); CorrectButton->setMenu(Correct); CorrectButton->setObjectName("readingCorrectButton");
         if (auto* Button = qobject_cast<QToolButton*>(toolbar_->widgetForAction(CorrectButton))) Button->setPopupMode(QToolButton::InstantPopup);
@@ -641,7 +645,7 @@ namespace hc::document
         for (auto* Action : toolbar_->actions()) {
             const QSignalBlocker Block(Action);
             if (Action->objectName() == QLatin1String("readingSpreadButton")) Action->setChecked(State["mode"].toInt() == ImageReadingView::Comic);
-            else if (Action->objectName() == QLatin1String("readingDirectionButton")) Action->setText(State["rtl"].toBool() ? tr("오른쪽→왼쪽") : tr("왼쪽→오른쪽"));
+            else if (Action->objectName() == QLatin1String("readingDirectionButton")) Action->setText(State["rtl"].toBool() ? tr("왼쪽←오른쪽") : tr("왼쪽→오른쪽"));
             else if (Action->objectName() == QLatin1String("readingFitButton")) {
                 const QStringList Fits{tr("원본 크기"), tr("창에 맞춤"), tr("너비 맞춤"), tr("높이 맞춤")};
                 Action->setText(Fits.value(State["fit"].toInt(), tr("창에 맞춤")));

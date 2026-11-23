@@ -477,7 +477,7 @@ namespace hc::document
                     Reading->SetCover(On); AppSettings().setValue("imageView/comic/coverAlone", On); Done();
                 });
                 Popup->AddCheck(Popup->Root(), tr("펼침면 분할"), State["split"].toBool(), [Reading, Done](bool On) { Reading->SetSplit(On); Done(); });
-                Popup->AddChips(Popup->Root(), {tr("왼쪽 → 오른쪽"), tr("오른쪽 → 왼쪽")}, State["rtl"].toBool() ? 1 : 0, [Reading, Done](int Index) {
+                Popup->AddChips(Popup->Root(), {tr("왼쪽→오른쪽"), tr("왼쪽←오른쪽")}, State["rtl"].toBool() ? 1 : 0, [Reading, Done](int Index) {
                     Reading->SetRightToLeft(Index == 1); Done();
                 });
                 Popup->AddNote(Popup->Root(), tr("보기 방식"));

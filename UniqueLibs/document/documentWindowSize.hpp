@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "UniqueLibs/settings/appSettings.hpp"
 #include <QEvent>
+#include <QScopedValueRollback>
 #include <QScreen>
 #include <QTimer>
 #include <QWidget>
@@ -38,6 +39,21 @@ namespace hc::document
             window_->resize(Size); remembered_ = stored_ = window_->size();
             if (!Store.Error().isEmpty()) errorHandler_(tr("창 크기를 읽지 못했습니다: %1").arg(Store.Error()));
         }
+        void FitInitialHeight(int Delta)
+        {
+            if (!Delta || !window_->screen()) return;
+            const auto Available = window_->screen()->availableGeometry();
+            const int FrameHeight = qMax(0, window_->frameGeometry().height() - window_->height());
+            const int Minimum = qMax(window_->minimumHeight(), window_->minimumSizeHint().height());
+            const int Maximum = qMax(Minimum, Available.height() - FrameHeight);
+            const int Height = qBound(Minimum, window_->height() + Delta, Maximum);
+            const QScopedValueRollback SuppressSave(fitting_, true);
+            window_->resize(window_->width(), Height);
+
+            const auto Frame = window_->frameGeometry();
+            const int Top = qBound(Available.top(), Frame.top(), qMax(Available.top(), Available.bottom() - Frame.height() + 1));
+            if (Top != Frame.top()) window_->move(window_->pos() + QPoint(0, Top - Frame.top()));
+        }
         void Save(bool ReportErrors = true)
         {
             saveTimer_.stop();
@@ -56,7 +72,7 @@ namespace hc::document
         bool eventFilter(QObject* Watched, QEvent* Event) override
         {
             if (Watched == window_ && window_->isWindow()) {
-                if (Event->type() == QEvent::Resize && window_->isVisible()
+                if (Event->type() == QEvent::Resize && !fitting_ && window_->isVisible()
                     && !window_->isMinimized() && !window_->isMaximized() && !window_->isFullScreen()) {
                     remembered_ = window_->size();
                     if (remembered_ != stored_) saveTimer_.start(); else saveTimer_.stop();
@@ -69,6 +85,7 @@ namespace hc::document
         { return viewer_ ? settings::JsonStore::Scope::Standalone : settings::JsonStore::Scope::Product; }
         QWidget* window_;
         bool viewer_;
+        bool fitting_ = false;
         QString path_;
         QSize remembered_, stored_;
         QTimer saveTimer_;
