@@ -23,7 +23,8 @@ class QtViewerHost;
 class QtViewerSurface;
 class ThumbnailModel;
 namespace fm::filelist { class ThumbnailView; }
-namespace hc::storage { class IContentSource; class IWritableStorage; }
+namespace hc::audio { class AudioSession; }
+namespace hc::storage { struct EntrySnapshot; class IContentSource; class IWritableStorage; }
 namespace hc::document { struct DocumentHandlerCatalog; }
 
 class CViewT : public QWidget
@@ -450,6 +451,7 @@ public:
     void                            SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IContentSource> Source,
                                         std::shared_ptr<hc::storage::IWritableStorage> Writer = {});
     void                            SetInformation(const QString& Information);
+    void                            SetAudioInformation(hc::audio::AudioSession& Session, const hc::storage::EntrySnapshot& Entry, const QString& Path);
     bool                            RequestClose();
     bool                            IsPinned() const;
     void                            CloseView() override;
@@ -481,6 +483,7 @@ private:
     void                            releaseForeignReturnKey();
     QString                         filePath_;
     QWidget*                        information_ = nullptr;
+    QObject*                        audioInformation_ = nullptr;
     QString                         informationText_;
     QAction*                        returnAction_ = nullptr;
     std::stop_source                probeStop_;

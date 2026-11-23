@@ -42,6 +42,7 @@
 #include "UniqueLibs/fileDragMime.hpp"
 #include <QUrl>
 #include <QLabel>
+#include <QLocale>
 #include <limits>
 #include <fmfilelist/ListPresentation.h>
 #include <fmfilelist/ThumbnailView.h>
@@ -3184,6 +3185,7 @@ void CQuickView::SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::ICo
     std::shared_ptr<hc::storage::IWritableStorage> Writer)
 {
     if (IsPinned() || !Source) return;
+    delete std::exchange(audioInformation_, nullptr);
     cancelProbe(); entered_ = false;
     const auto Entry = Source->Describe();
     const auto Extension = QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower().toStdString();
@@ -3323,10 +3325,12 @@ void CQuickView::openContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IC
 void CQuickView::SetInformation(const QString& Information)
 {
     if (IsPinned()) return;
+    delete std::exchange(audioInformation_, nullptr);
     cancelProbe();
     if (surface_) { surface_->Close(); surface_->hide(); }
     if (!information_) {
         auto* Label = new QLabel(this);
+        Label->setObjectName("hc.quickInformation");
         Label->setTextFormat(Qt::PlainText);
         Label->setWordWrap(true);
         Label->setAlignment(Qt::AlignTop | Qt::AlignLeft);
@@ -3338,9 +3342,48 @@ void CQuickView::SetInformation(const QString& Information)
     static_cast<QLabel*>(information_)->setText(Information);
     information_->show(); setFocusProxy(information_);
 }
+void CQuickView::SetAudioInformation(hc::audio::AudioSession& Session, const hc::storage::EntrySnapshot& Entry, const QString& Path)
+{
+    if (IsPinned()) return;
+    const auto File = tr("오디오 파일\n\n이름: %1\n위치: %2\n크기: %3")
+        .arg(QString::fromUtf8(Entry.name_), Path, QLocale().formattedDataSize(qint64(Entry.size_)));
+    SetInformation(File);
+    audioInformation_ = new QObject(this);
+    const auto Refresh = [this, &Session, File, Path, Key = hc::workspace::SelectionKey(Entry)] {
+        const auto* Track = Session.Current();
+        if (!Track || Track->key_ != Key || Track->path_ != Path) return;
+
+        const auto& Metadata = Session.Metadata();
+        QStringList Fields;
+        if (!Metadata.title_.isEmpty()) Fields << tr("제목: %1").arg(Metadata.title_);
+        if (!Metadata.artist_.isEmpty()) Fields << tr("아티스트: %1").arg(Metadata.artist_);
+        if (!Metadata.album_.isEmpty()) Fields << tr("앨범: %1").arg(Metadata.album_);
+        if (Session.Duration() >= 0) Fields << tr("재생 시간: %1").arg(hc::audio::FormatDuration(Session.Duration()));
+        if (!Metadata.codec_.isEmpty()) Fields << tr("코덱: %1").arg(Metadata.codec_);
+        if (Metadata.bitRate_ > 0) Fields << tr("비트레이트: %1 kbps").arg(Metadata.bitRate_ / 1000);
+        if (!Session.ErrorText().isEmpty()) Fields << Session.ErrorText();
+        auto* Label = static_cast<QLabel*>(information_);
+        const auto Text = Fields.isEmpty() ? File : File + "\n\n" + Fields.join('\n');
+        if (Label->text() != Text) Label->setText(Text);
+    };
+    connect(&Session, &hc::audio::AudioSession::sigTrackChanged, audioInformation_, Refresh);
+    connect(&Session, &hc::audio::AudioSession::sigStateChanged, audioInformation_, Refresh);
+    connect(&Session, &hc::audio::AudioSession::sigPositionChanged, audioInformation_,
+        [&Session, Refresh, Duration = Session.Duration()](qint64) mutable {
+            const auto Current = Session.Duration();
+            if (std::exchange(Duration, Current) != Current) Refresh();
+        });
+    Refresh();
+}
 bool CQuickView::RequestClose() { return !surface_ || surface_->RequestClose(); }
 bool CQuickView::IsPinned() const { return surface_ && surface_->IsPinned(); }
-void CQuickView::CloseView() { cancelProbe(); if (surface_) surface_->Close(); if (information_) information_->hide(); }
+void CQuickView::CloseView()
+{
+    delete std::exchange(audioInformation_, nullptr);
+    cancelProbe();
+    if (surface_) surface_->Close();
+    if (information_) information_->hide();
+}
 void CQuickView::EnsureKeyboardFocusOnView() const
 { entered_ = true; if (surface_ && surface_->isVisible()) surface_->Pin(); if (focusProxy()) focusProxy()->setFocus(); }
 

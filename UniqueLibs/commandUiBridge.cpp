@@ -2615,11 +2615,13 @@ Result<CommandOutcome> CommandUiBridge::executeViewer(const CommandInvocation& I
     if (!Model->ProviderEnabled() || !Reader) return Error{ErrorCategory::Unsupported, "provider-snapshot-required"};
     if (Invocation.context_.selection_.size() != 1) return Error{ErrorCategory::InvalidRequest, "single-selection-required"};
     std::optional<EntrySnapshot> Selected;
+    QModelIndex SelectedIndex;
     for (int Row = 0; Row < Model->rowCount(); ++Row)
     {
-        const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
+        const auto Index = Model->index(Row, 0);
+        const auto Entry = Model->GetFileInfo(Index);
         if (Entry && Entry->storageEntry_ && Entry->storageEntry_->id_ == Invocation.context_.selection_.front())
-        { Selected = *Entry->storageEntry_; break; }
+        { Selected = *Entry->storageEntry_; SelectedIndex = Index; break; }
     }
     if (!Selected) return Error{ErrorCategory::StaleRevision, "selection-changed"};
     if (Selected->directory_ && Invocation.id_ == "hc.viewer.open") return Error{ErrorCategory::Unsupported, "viewer-directory"};
@@ -2683,7 +2685,18 @@ Result<CommandOutcome> CommandUiBridge::executeViewer(const CommandInvocation& I
     if (Selected->directory_)
         quick_->SetInformation(tr("디렉터리 정보\n\n이름: %1\n위치: %2\n\n하위 항목 수와 전체 크기: 미계산")
             .arg(QString::fromStdString(Selected->name_), QString::fromStdString(Selected->locator_.root_)));
-    else quick_->SetContent(*viewers_, std::move(Content), std::move(Writer));
+    else if (audio_ && hc::audio::IsPlayable(QString::fromUtf8(Selected->name_), audio_->Extensions())) {
+        const auto Path = Model->GetFileFullPath(SelectedIndex);
+        quick_->SetAudioInformation(*audio_, *Selected, Path);
+        if (Invocation.id_ == "hc.viewer.quick") {
+            using hc::audio::SessionState;
+            const auto* Track = audio_->Current();
+            if (!Track || Track->key_ != hc::workspace::SelectionKey(*Selected) || Track->path_ != Path)
+                StartAudioPreview(SourcePanel, SelectedIndex);
+            else if (audio_->State() == SessionState::Paused || audio_->State() == SessionState::Failed)
+                audio_->PlayPause();
+        }
+    } else quick_->SetContent(*viewers_, std::move(Content), std::move(Writer));
     if (Invocation.id_ == "hc.viewer.quick")
         if (auto* Grid = qobject_cast<CGridView*>(SourcePanel->GetFocusView(SourcePanel->CurrentTabIndex()))) Grid->EnsureKeyboardFocusOnView();
     return CommandOutcome{};

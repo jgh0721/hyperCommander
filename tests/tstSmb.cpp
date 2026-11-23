@@ -1138,17 +1138,29 @@ private slots:
             Bridge->CancelClipboard(); QApplication::clipboard()->setMimeData(SavedClipboard.release());
             main_->RestoreWorkspace(Workspace);
         });
-        const auto Wave = [](int Ms) {
+        const auto Wave = [](int Ms, const QByteArray& Title = {}) {
             const quint32 Rate = 44100, Bytes = Rate * 4 * quint32(Ms) / 1000;
+            QByteArray Info;
+            if (!Title.isEmpty()) {
+                QDataStream Tags(&Info, QIODevice::WriteOnly); Tags.setByteOrder(QDataStream::LittleEndian);
+                const auto Length = quint32(Title.size() + 1);
+                Tags.writeRawData("INFOINAM", 8); Tags << Length;
+                Tags.writeRawData(Title.constData(), Title.size());
+                Tags.writeRawData("\0\0", 1 + int(Length & 1));
+            }
             QByteArray Data; QDataStream Out(&Data, QIODevice::WriteOnly); Out.setByteOrder(QDataStream::LittleEndian);
-            Out.writeRawData("RIFF", 4); Out << quint32(36 + Bytes); Out.writeRawData("WAVEfmt ", 8);
+            Out.writeRawData("RIFF", 4); Out << quint32(36 + Bytes + (Info.isEmpty() ? 0 : 8 + Info.size())); Out.writeRawData("WAVEfmt ", 8);
             Out << quint32(16) << quint16(1) << quint16(2) << Rate << quint32(Rate * 4) << quint16(4) << quint16(16);
+            if (!Info.isEmpty()) { Out.writeRawData("LIST", 4); Out << quint32(Info.size()); Out.writeRawData(Info.constData(), Info.size()); }
             Out.writeRawData("data", 4); Out << Bytes;
             Data.append(QByteArray(int(Bytes), '\0')); return Data;
         };
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         const QStringList Names{"01 first.wav", "02 second.wav", "03 third.wav"};
-        for (const auto& Name : Names) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(Wave(4000)); }
+        for (const auto& Name : Names) {
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly));
+            File.write(Wave(4000, Name == Names[1] ? QByteArray("Tagged second track") : QByteArray{}));
+        }
         { QFile Text(Directory.filePath("notes.txt")); QVERIFY(Text.open(QIODevice::WriteOnly)); Text.write("not audio"); }
         const auto Probe = Directory.filePath("00 probe.wav");
         { QFile File(Probe); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(Wave(500)); }
@@ -1174,6 +1186,26 @@ private slots:
             return QModelIndex{};
         };
         QVERIFY(!Audio->OpenInternally());
+        {
+            const auto Item = Model->GetFileInfo(IndexOf(Names[1]));
+            QVERIFY(Item && Item->storageEntry_);
+            View->RestoreSelection({}, hc::workspace::SelectionKey(*Item->storageEntry_));
+            main_->activateWindow(); QApplication::setActiveWindow(main_); View->EnsureKeyboardFocusOnView();
+            QVERIFY(QApplication::focusWidget());
+            QTest::keyClick(QApplication::focusWidget(), Qt::Key_Q, Qt::ControlModifier);
+            QTRY_VERIFY(main_->findChild<CQuickView*>());
+            QPointer<CQuickView> Quick = main_->findChild<CQuickView*>();
+            auto* Label = Quick->findChild<QLabel*>("hc.quickInformation");
+            QVERIFY(Label && Label->text().contains(Names[1]));
+            QTRY_VERIFY(Audio->State() == SessionState::Playing);
+            QCOMPARE(Audio->Queue().CurrentIndex(), qsizetype(1));
+            QTRY_VERIFY(Label->text().contains("Tagged second track"));
+            QTRY_VERIFY(Label->text().contains(QStringLiteral("0:04")));
+            QTest::keyClick(QApplication::focusWidget(), Qt::Key_Q, Qt::ControlModifier);
+            QTRY_VERIFY(!Quick || !Quick->isVisible());
+            QVERIFY(Audio->IsActive());
+            Audio->Stop();
+        }
         // Ctrl+Enter·도구 메뉴·탐색기 메뉴가 쓰는 시작 경로. 같은 폴더의 오디오만 화면 순서로 모은다.
         QVERIFY(Bridge->StartAudioPreview(Panel, IndexOf(Names[1])));
         QCOMPARE(Audio->Queue().Size(), qsizetype(3));
