@@ -140,7 +140,11 @@ private slots:
         View.NavigateDifference(1);QTRY_VERIFY(!View.Busy());View.ShowFind();QVERIFY(View.findChild<QLineEdit*>("hexFind")->hasFocus());
         Overview->setFocus();View.SetOverviewVisible(false);QVERIFY(!Overview->isVisible());QVERIFY(View.findChild<QWidget*>("hexPane0")->hasFocus());
         auto* ReadOnly=View.findChild<QCheckBox*>("hexReadOnly");ReadOnly->setChecked(false);
+        View.SetOverviewVisible(true);
+        const auto OverviewBeforeEdit = Overview->grab().toImage();
         for(auto* A:View.findChildren<QAction*>())if(A->text()==QStringLiteral("복사 →")){A->trigger();break;}
+        QVERIFY(View.Busy());
+        QCOMPARE(Overview->grab().toImage(), OverviewBeforeEdit);
         QTRY_VERIFY(!View.Busy());QVERIFY(View.Dirty());QVERIFY(View.CanUndo(false));View.Undo(false);QTRY_VERIFY(!View.Busy());QVERIFY(!View.Dirty());View.Undo(true);QTRY_VERIFY(!View.Busy());QVERIFY(View.Dirty());View.Undo(false);QTRY_VERIFY(!View.Busy());
         auto* Pane=View.findChild<QWidget*>("hexPane0");Pane->setFocus();QTest::keyClick(Pane,Qt::Key_Home);QTRY_VERIFY(!View.Busy());QTest::keyClicks(Pane,"ff");QTRY_VERIFY(!View.Busy());QCOMPARE(ReadBinary(View.Comparison()->documents_[0],0,1),QByteArray(1,char(255)));View.Undo(false);QTRY_VERIFY(!View.Busy());QVERIFY(!View.Dirty());
         auto* Ascii=View.findChild<QCheckBox*>("hexAsciiInput"); QVERIFY(Ascii);

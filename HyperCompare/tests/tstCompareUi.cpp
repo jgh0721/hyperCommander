@@ -2483,7 +2483,10 @@ private slots:
         QTest::keyClick(Bar, Qt::Key_Escape); QTRY_VERIFY(Left->hasFocus());
         Left->send(SCI_SETSEL, 0, Left->send(SCI_GETLENGTH));
         Left->send(SCI_REPLACESEL, 0, reinterpret_cast<sptr_t>("short\r\n"));
+        QVERIFY(!Bar->isEnabled());
+        QCOMPARE(Bar->grab().toImage().copy(Interior), Before);
         QTRY_COMPARE_WITH_TIMEOUT(Window.findChild<QTreeWidget*>("compareChanges")->topLevelItemCount(), 1, 10000);
+        QTRY_VERIFY(Bar->isEnabled());
         Bar->setFocus(); QTest::keyClick(Bar, Qt::Key_Home);
         QVERIFY(Bar->grab().toImage().copy(Interior) != Before);
         QCOMPARE(contents(Left), QByteArray("short\r\n")); QVERIFY(Left->send(SCI_CANUNDO));

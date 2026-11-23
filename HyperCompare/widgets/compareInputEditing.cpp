@@ -109,7 +109,8 @@ namespace hc::compare
         ++bufferGeneration_; if (bufferCanceled_) bufferCanceled_->store(true);
         sourcePending_ = true; inputError_.clear(); inputSaveError_.clear();
         if (scroll_) { scroll_->SetEnabled(false); scroll_->ClearPadding(); }
-        overview_->SetSession(nullptr, nullptr, {});
+        // Keep the previous raster while the edited buffers are being compared.
+        overview_->setEnabled(false);
         for (auto* editor : editors_)
         {
             ClearCompareMarks(editor);

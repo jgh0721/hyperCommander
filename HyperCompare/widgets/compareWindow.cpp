@@ -1099,7 +1099,8 @@ namespace hc::compare
         alignAll_->setEnabled(currentPair() && editors_.size() >= 3 && !busy());
         showOverview_->setEnabled(scroll_ != nullptr || (extensionView_ && extensionView_->HasOverview()));
         if (extensionView_) extensionView_->SetOverviewVisible(showOverview_->isChecked());
-        overview_->setVisible(scroll_ && showOverview_->isChecked()); overview_->setEnabled(scroll_ && !busy());
+        overview_->setVisible(scroll_ && showOverview_->isChecked());
+        overview_->setEnabled(scroll_ && !busy() && (!sourceEditing_ || (!sourcePending_ && sourceValid_)));
         if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy() && !multi_ && currentPair());
         if (multi_) multi_->SetEnabled(syncScroll_->isChecked() && !busy());
         if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) {

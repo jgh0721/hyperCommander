@@ -122,18 +122,17 @@ namespace hc::compare
     {
         QWidget::changeEvent(Event);
         if (Event->type() == QEvent::FontChange) { updateGeometry(); rebuild(); }
-        else if (Event->type() == QEvent::PaletteChange || Event->type() == QEvent::EnabledChange || Event->type() == QEvent::DevicePixelRatioChange) rebuild();
+        else if (Event->type() == QEvent::PaletteChange || Event->type() == QEvent::DevicePixelRatioChange) rebuild();
     }
     void OverviewBar::renderMap()
     {
         const auto Dpr = devicePixelRatioF(); cachedTop_ = headerHeight();
-        image_ = QPixmap((QSizeF(size()) * Dpr).toSize()); image_.setDevicePixelRatio(Dpr); image_.fill(palette().window().color());
+        image_ = QPixmap((QSizeF(size()) * Dpr).toSize()); image_.setDevicePixelRatio(Dpr); image_.fill(palette().color(QPalette::Active, QPalette::Window));
         raster_ = map_ ? BuildOverviewRaster(*map_, std::size_t(std::ceil(track(0).height() * Dpr)), aligned_) : OverviewRaster{};
         QPainter painter(&image_);
         if (!map_ || !editors_[0] || !editors_[1]) return;
         // Changed · added · removed · alignment gap follow the status tokens, so they track the product theme and accent.
         const std::array<QColor, 4> colors{CompareColor("barModified", dark_), CompareColor("barAdded", dark_), CompareColor("barRemoved", dark_), CompareColor("barGap", dark_)};
-        painter.setOpacity(isEnabled() ? 1.0 : 0.45);
         for (unsigned side = 0; side < 2; ++side)
         {
             const auto area = track(side); const auto& bands = raster_.bands_[side];
@@ -176,7 +175,7 @@ namespace hc::compare
                 Previous = Line;
                 const auto Stroke = documents_[side].At(*Line);
                 if (Stroke.end_ <= Stroke.indent_) continue;
-                auto Color = palette().windowText().color(); Color.setAlpha(85);
+                auto Color = palette().color(QPalette::Active, QPalette::WindowText); Color.setAlpha(85);
                 for (unsigned Kind = 0; Kind < 3; ++Kind) if (bands[Pixel] & (1 << Kind)) { Color = colors[Kind]; break; }
                 const auto Space = std::max(1, area.width() - 7);
                 const auto X = area.left() + 3 + double(Stroke.indent_) * Space / 128;
@@ -191,11 +190,10 @@ namespace hc::compare
             image_.devicePixelRatio() != devicePixelRatioF() || cachedTop_ != headerHeight()) renderMap();
         QPainter painter(this); painter.drawPixmap(0, 0, image_);
         if (!map_ || !editors_[0] || !editors_[1]) return;
-        painter.setOpacity(isEnabled() ? 1.0 : 0.45);
         for (unsigned side = 0; side < 2; ++side)
         {
             const auto area = track(side);
-            painter.setPen(side == active_ ? CompareColor("barFocus", dark_) : palette().windowText().color());
+            painter.setPen(side == active_ ? CompareColor("barFocus", dark_) : palette().color(QPalette::Active, QPalette::WindowText));
             painter.drawText(QRect(area.left(), 0, area.width(), area.top()), Qt::AlignCenter, QString::number(numbers_[side]));
             const auto rows = double(raster_.rows_[side]);
             const auto top = std::clamp(double(editors_[side]->send(SCI_GETFIRSTVISIBLELINE)) / rows, 0.0, 1.0);
