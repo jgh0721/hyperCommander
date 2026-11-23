@@ -11,6 +11,9 @@
 #include <QTemporaryDir>
 #include <QToolBar>
 #include <QToolButton>
+#include <QUuid>
+#include "commonLibs/document/epub/epubTemplate.hpp"
+#include "UniqueLibs/document/documentRecoveryStore.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/documentStatusBar.hpp"
@@ -18,6 +21,8 @@
 #include "UniqueLibs/document/documentProgressOverlay.hpp"
 #include "UniqueLibs/document/documentTextCodec.hpp"
 #include "UniqueLibs/document/documentSettingsDialog.hpp"
+#include "UniqueLibs/document/epubSourceEditor.hpp"
+#include "UniqueLibs/document/recentDocuments.hpp"
 #include <QClipboard>
 #include <QImage>
 #include <QPushButton>
@@ -144,6 +149,109 @@ private slots:
         bool Separator = false; for (auto* Action : Row->actions()) Separator |= Action->objectName() == "documentCommonSeparator";
         QVERIFY(Separator);
         for (auto* Action : Common->actions()) if (!Action->isSeparator()) { QVERIFY(Row->actions().contains(Action)); break; }
+    }
+    void epubStatusStaysPutWhenEdited()
+    {
+        QTemporaryDir BookFolder;
+        QVERIFY(BookFolder.isValid());
+        epub::NewBook Book;
+        Book.title_ = "Status test";
+        Book.language_ = "en";
+        Book.chapterTitle_ = "Chapter";
+        const auto Epub = epub::CreateBook(Book);
+        QVERIFY2(Epub, qPrintable(Epub.error_));
+        const auto Path = BookFolder.filePath("status.epub");
+        QVERIFY(Put(Path, Epub.bytes_));
+
+        DocumentWorkspaceWidget Workspace(BookFolder.filePath("recovery"));
+        Workspace.ConfigureEpub(MakeProductEpubRuntime(QCoreApplication::applicationDirPath(), {}));
+        Workspace.SetClosePrompt([](const QString&) { return int(QMessageBox::Discard); });
+        Workspace.resize(1440, 740);
+        Workspace.show();
+        const auto Id = Workspace.OpenForEpubEdit(Path)["documentId"].toString();
+        QVERIFY(!Id.isEmpty());
+        auto* Pane = Workspace.findChild<DocumentViewPane*>();
+        QTRY_VERIFY_WITH_TIMEOUT(Pane && Pane->IsEpubEditing() && Pane->CanEditEpub(), 15000);
+        auto* Editor = Pane->EpubEditor();
+        auto* Bar = static_cast<DocumentStatusBar*>(Workspace.findChild<QWidget*>("documentStatusBar"));
+        QVERIFY(Editor && Bar);
+        Editor->SetRecoveryEnabled(true);
+        auto* State = Bar->findChild<QLabel*>("status.state");
+        QVERIFY(State);
+        QVERIFY(State->text().isEmpty());
+        // EPUB's trailing group starts at the language field. The left-side caret label
+        // can grow when the line or column gains a digit.
+        const auto Layout = [Bar] {
+            QMap<QString, QRect> Result;
+            bool Trailing = false;
+            for (const auto& Field : Bar->Fields()) {
+                Trailing |= Field.trailing_;
+                if (!Trailing) continue;
+                if (auto* Item = Bar->findChild<QWidget*>("status." + Field.id_); Item && Item->isVisible())
+                    Result.insert(Field.id_, Item->geometry());
+            }
+            return Result;
+        };
+        const auto Clean = Layout();
+        QVERIFY(Clean.contains("mode") && Clean.contains("draft") && Clean.contains("state"));
+        const auto Source = Editor->Execute({{"action", "epub.edit.source-state"}})["text"].toString();
+        const int Chapter = int(Source.indexOf(">Chapter<"));
+        QVERIFY(Chapter >= 0);
+        QVERIFY(Editor->Execute({{"action", "epub.edit.cursor"}, {"position", Chapter + 2}})["accepted"].toBool());
+        QVERIFY(Editor->Execute({{"action", "epub.edit.insert"}, {"text", "X"}})["accepted"].toBool());
+        QTRY_COMPARE(FieldText(Bar, "state"), QStringLiteral("● 미저장"));
+        QCOMPARE(Layout(), Clean);
+
+        Editor->Checkpoint();
+        QTRY_VERIFY(FieldText(Bar, "draft").startsWith(QStringLiteral("초안 자동 보관 ")));
+        QCOMPARE(Layout(), Clean);
+
+        Editor->Undo();
+        QTRY_VERIFY(FieldText(Bar, "state").isEmpty());
+        QCOMPARE(Layout(), Clean);
+        QTRY_VERIFY_WITH_TIMEOUT(Workspace.RequestClose(), 15000);
+    }
+    void recentFileDoesNotInheritRecoveryWorkspace()
+    {
+        QTemporaryDir Folder;
+        QVERIFY(Folder.isValid());
+        const auto RecoveryRoot = Folder.filePath("recovery");
+        const auto RestoredPath = Folder.filePath("restored-workspace-test.txt");
+        const auto RecentPath = Folder.filePath("recent-workspace-test.txt");
+        QVERIFY(Put(RestoredPath, "file from a previous session"));
+        QVERIFY(Put(RecentPath, "recent file"));
+
+        RecentDocumentStore Recent(qApp->property("documentViewsConfigDir").toString());
+        Recent.Record({RecentPath, "text", "text", QDateTime::currentDateTime()});
+        QVERIFY(Recent.WaitForIdle(5000));
+
+        const auto SessionId = QUuid::createUuid().toString(QUuid::Id128);
+        const auto DocumentId = QUuid::createUuid().toString(QUuid::Id128);
+        DocumentRecoveryStore Store(RecoveryRoot);
+        const QJsonArray Documents{QJsonObject{{"documentId", DocumentId}, {"kind", "text"}, {"path", RestoredPath}}};
+        QVERIFY(Store.StoreSession(SessionId, {{"workspaceRoot", RecoveryRoot}, {"documents", Documents}}).HasValue());
+
+        DocumentWorkspaceWidget Workspace(RecoveryRoot);
+        Workspace.resize(1100, 700);
+        Workspace.show();
+        QVERIFY(Workspace.RestoreHotExit(SessionId));
+        QTRY_COMPARE(Workspace.windowTitle(), QStringLiteral("restored-workspace-test.txt — HyperEditor"));
+        QVERIFY(Workspace.WorkspaceRoot().isEmpty());
+        auto* File = TopMenu(Workspace, QStringLiteral("파일(&F)"));
+        QVERIFY(File);
+        const auto RecentAction = [File] {
+            emit File->aboutToShow();
+            for (auto* Action : File->actions())
+                if (Action->objectName().startsWith("recentItem") && Action->toolTip().endsWith("recent-workspace-test.txt"))
+                    return Action;
+            return static_cast<QAction*>(nullptr);
+        };
+        QTRY_VERIFY(RecentAction());
+        RecentAction()->trigger();
+        QTRY_COMPARE(Workspace.windowTitle(), QStringLiteral("recent-workspace-test.txt — HyperEditor"));
+        QTRY_COMPARE(Workspace.Snapshot()["documents"].toArray().size(), 2);
+        QVERIFY(Workspace.WorkspaceRoot().isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(Workspace.RequestClose(), 15000);
     }
     void reinterpretKeepsBytes()
     {

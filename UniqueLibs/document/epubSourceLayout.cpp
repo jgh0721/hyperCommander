@@ -281,7 +281,9 @@ QList<DocumentStatusField> EpubSourceEditor::StatusFields()const {
     }
     Pick("validation",statusValidation_->text(),true,!Source);
     Fields.append(DocumentStatusField{"problems",statusProblems_->text(),{},{},"epub.status.problems"});
-    Fields.append(DocumentStatusField{"draft",statusDraft_->text(),{},draftMessage_,{},false});
+    DocumentStatusField Draft{"draft", statusDraft_->text(), {}, draftMessage_, {}, false};
+    Draft.widthSamples_ = {tr("자동 복구 켜짐"), tr("자동 복구 꺼짐"), tr("초안 자동 보관 %1").arg(QStringLiteral("88:88"))};
+    Fields.append(std::move(Draft));
     if(!statusMessage_->toolTip().isEmpty()) {
         const bool Failure=!error_.isEmpty()||!previewError_.isEmpty();
         Fields.append(DocumentStatusField{"epubMessage",Failure?tr("⚠ EPUB 작업 오류"):statusMessage_->toolTip(),{},statusMessage_->toolTip(),{},Failure});

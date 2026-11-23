@@ -2887,8 +2887,15 @@ namespace hc::document
             else if(Tab->composingSave_)MessageText=tr("한글 조합 완료 후 저장…");
             else if(Tab->saving_||!Tab->pendingToken_.isEmpty())MessageText=Tab->queuedSave_?tr("저장 중 · 다음 저장 예약됨…"):Overlaid?QString():tr("저장 중…");
             else if(Tab->pane_->IsBusy())MessageText=tr("처리 중…");
-            if(Tab->Dirty())MessageText+=MessageText.isEmpty()?tr("● 미저장"):tr(" · 미저장");
-            if(!MessageText.isEmpty())Fields.append(DocumentStatusField{"state",MessageText,{},Detail,{},true,true});
+            const auto Unsaved = tr("● 미저장");
+            const bool EpubEditing = Tab->pane_->IsEpubEditing();
+            if (Tab->Dirty()) MessageText += MessageText.isEmpty() ? Unsaved : tr(" · 미저장");
+            if (EpubEditing || !MessageText.isEmpty()) {
+                DocumentStatusField Status{"state", MessageText, {}, Detail, {}, true, true};
+                // Keep the right-hand fields in place on the first edit and when undo makes the book clean again.
+                if (EpubEditing) Status.widthSamples_.append(Unsaved);
+                Fields.append(std::move(Status));
+            }
         } else Fields.append(DocumentStatusField{"empty",shellError_.isEmpty()?tr("파일을 열거나 최근 항목을 선택하십시오."):shellError_});
         statusFieldNames_.clear();for(const auto& Field:Fields)statusFieldNames_.append({Field.id_,Field.text_});
         if(Tab){
@@ -4436,6 +4443,12 @@ bool DocumentWorkspaceWidget::OpenWorkspace(const QString& Path, WorkspaceOrigin
 {
     if (hosted_ || Path.isEmpty()) return false;
     const auto Root = workspace::NormalizeRoot(QFileInfo(Path).absoluteFilePath());
+    // Older profiles may have recorded the private recovery store as a workspace.
+    // HotExit can still reopen its documents without binding the window to that folder.
+    if (workspace::IsInside(Root, recoveryRoot_, false)) {
+        if (Origin == WorkspaceOrigin::User) ShowShellError(tr("자동 복구 폴더는 작업공간으로 열 수 없습니다."));
+        return false;
+    }
     if (!QFileInfo(Root).isDir()) { ShowShellError(tr("폴더를 찾을 수 없습니다: %1").arg(QDir::toNativeSeparators(Root))); return false; }
     if (workspace::SamePath(Root, workspaceRoot_)) {
         if (explorerTool_) { explorerTool_->toggleView(true); explorerTool_->bringToFront(); }
@@ -4681,6 +4694,7 @@ QJsonObject DocumentWorkspaceWidget::openByUser(const QString& Path, const QStri
 void DocumentWorkspaceWidget::considerAncestors(const QString& Path, const QString& Mode)
 {
     if (hosted_ || Mode == QLatin1String("off") || !workspaceRoot_.isEmpty() || Path.isEmpty() || !QFileInfo(Path).isAbsolute()) return;
+    if (workspace::IsInside(Path, recoveryRoot_, false)) return;
     if (PreferenceValue(appliedPreferences_, QStringLiteral("workspace/ancestorDetection")).toString() == QLatin1String("off")) return;
     // 열린 워크스페이스 창 안의 파일이면 찾지 않는다(그 창이 더 깊은 후보보다 이긴다).
     if (workspace::Registry::Instance().WindowContaining(Path)) return;
@@ -4746,7 +4760,7 @@ void DocumentWorkspaceWidget::applyAncestorResult(const QString& Path, const QSt
 }
 void DocumentWorkspaceWidget::openAncestor(const QString& Root, const QString& Path, const QString& Mode)
 {
-    if (!workspaceRoot_.isEmpty()) return;
+    if (!workspaceRoot_.isEmpty() || workspace::IsInside(Root, recoveryRoot_, false)) return;
     {
         const QScopedValueRollback Guard(bindOnly_, Mode == QLatin1String("bind"));
         if (!bindWorkspace(workspace::NormalizeRoot(Root), WorkspaceOrigin::Ancestor)) return;

@@ -26,6 +26,8 @@ namespace hc::document
         bool picker_ = false;
         // 주의 색(주황, 테마의 Warn). SQLite 의 ‘커밋 대기’ · ‘트랜잭션 열림’.
         bool warning_ = false;
+        // Alternate labels can reserve their width before the field changes state.
+        QStringList widthSamples_;
         bool operator==(const DocumentStatusField&) const = default;
     };
     // A status field that runs a command or opens a picker. A picker keeps room for its '⌄' cue in
@@ -131,7 +133,11 @@ namespace hc::document
                     Item->setProperty("statusWarning", Field.warning_);
                 }
             }
-            QStringList Details; for (const auto& Field : Fields) Details << (Field.detail_.isEmpty() ? Field.text_ : Field.detail_);
+            QStringList Details;
+            for (const auto& Field : Fields) {
+                const auto& Detail = Field.detail_.isEmpty() ? Field.text_ : Field.detail_;
+                if (!Detail.isEmpty()) Details << Detail;
+            }
             setToolTip(Details.join("\n")); arrange();
         }
         QList<DocumentStatusField> Fields() const { return fields_; }
@@ -182,9 +188,15 @@ namespace hc::document
                 Widths.clear(); Texts.clear(); Visible.clear(); int Total = 0;
                 for (const auto& Field : fields_) {
                     auto Text = Compact && !Field.compact_.isEmpty() ? Field.compact_ : Field.text_;
-                    if (LimitNames && !Field.essential_) Text = Metrics.elidedText(Text, Qt::ElideMiddle, 160);
+                    const auto Fit = [&](const QString& Label) {
+                        return LimitNames && !Field.essential_ ? Metrics.elidedText(Label, Qt::ElideMiddle, 160) : Label;
+                    };
+                    Text = Fit(Text);
+                    int TextWidth = Metrics.horizontalAdvance(Text);
+                    for (const auto& Sample : Field.widthSamples_)
+                        TextWidth = qMax(TextWidth, Metrics.horizontalAdvance(Fit(Sample)));
                     // A picker always reserves its cue, shown or not, so hover and focus keep the layout.
-                    const int Width = Metrics.horizontalAdvance(Text) + 2 * DocumentStatusButton::Padding + (Field.picker_ ? Reserve : 0);
+                    const int Width = TextWidth + 2 * DocumentStatusButton::Padding + (Field.picker_ ? Reserve : 0);
                     Texts << Text; Widths << Width; Visible << true; Total += Width;
                 }
                 return Total;
