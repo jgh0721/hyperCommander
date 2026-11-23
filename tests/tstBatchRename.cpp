@@ -45,6 +45,45 @@ private:
 class BatchRenameTests : public QObject {
     Q_OBJECT
 private slots:
+    void preservesVisibilityThroughRenameAndUndo() {
+        const auto Remote = qEnvironmentVariable("HC_MUTATION_ROOT");
+        QVERIFY(Remote.isEmpty() || Remote.compare("\\\\DEVTESTER-QTS\\Public", Qt::CaseInsensitive) == 0
+            || Remote.compare("\\\\DEVTESTER-QTB4\\Pubs", Qt::CaseInsensitive) == 0);
+        QTemporaryDir Data(Remote.isEmpty() ? QDir::temp().filePath("hc-rename-test-XXXXXX")
+            : QDir(Remote).filePath("hc-rename-test-XXXXXX")), Journal;
+        QVERIFY(Data.isValid() && Journal.isValid());
+        const auto Rows = Fixture(Data.path(), true);
+        QCOMPARE(Rows.size(), 3);
+        QVERIFY(SetFileAttributesW(NativePath(Rows[0].source_.path_).toStdWString().c_str(),
+            FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_HIDDEN));
+        const auto Attribute = [](const QString& Path) {
+            return GetFileAttributesW(NativePath(Path).toStdWString().c_str());
+        };
+        auto Prepared = PrepareBatchRename(Journal.path(), Rows);
+        QVERIFY(Prepared.HasValue());
+        const auto Id = IdOf(Prepared.Value());
+        const auto Record = ReadRenameRecord(Journal.path(), Id);
+        QVERIFY(Record.HasValue());
+        for (const auto& Temp : Record.Value().temporary_) QVERIFY(!QFileInfo(Temp).fileName().startsWith('.'));
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        const auto Renamed = Run(Scheduler, std::move(Prepared.Value()));
+        QVERIFY2(Renamed.snapshot_.state_ == JobState::Completed, Renamed.snapshot_.error_ ? Renamed.snapshot_.error_->code_.c_str() : "Rename failed");
+        for (int I = 0; I < Rows.size(); ++I) {
+            QVERIFY(Contents(Rows[I].target_, I));
+            const auto Attributes = Attribute(Rows[I].target_);
+            QVERIFY(Attributes != INVALID_FILE_ATTRIBUTES);
+            QCOMPARE(bool(Attributes & FILE_ATTRIBUTE_HIDDEN), I == 0);
+        }
+        auto Undo = PrepareRenameUndo(Journal.path(), Id);
+        QVERIFY(Undo.HasValue());
+        QCOMPARE(Run(Scheduler, std::move(Undo.Value())).snapshot_.state_, JobState::Completed);
+        for (int I = 0; I < Rows.size(); ++I) {
+            const auto Attributes = Attribute(Rows[I].source_.path_);
+            QVERIFY(Contents(Rows[I].source_.path_, I) && Attributes != INVALID_FILE_ATTRIBUTES);
+            QCOMPARE(bool(Attributes & FILE_ATTRIBUTE_HIDDEN), I == 0);
+        }
+        QVERIFY(Data.remove());
+    }
     void redirectedRenameCycle() {
         const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
         if (Share.isEmpty()) QSKIP("Set HC_TEST_RDP_SHARE to opt in to an owned RDP rename fixture.");
@@ -114,7 +153,7 @@ private slots:
         QVERIFY(QFileInfo::exists(Record.Value().temporary_[0])); QVERIFY(Task->Finalize(JobState::Cancelled).empty()); Task.reset();
         for (int I = 0; I < 3; ++I) QVERIFY(Contents(Rows[I].source_.path_, I));
         QCOMPARE(ReadRenameRecord(Journal.path(), Id).Value().state_, RenameState::Restored);
-        QVERIFY(QDir(Data.path()).entryList({".hc-rename-*"}, QDir::Files | QDir::Hidden).isEmpty());
+        QVERIFY(QDir(Data.path()).entryList({"hc-rename-*", ".hc-rename-*"}, QDir::Files | QDir::Hidden).isEmpty());
     }
     void crashRecovery_data() { QTest::addColumn<bool>("Restore"); QTest::addColumn<bool>("TargetPhase"); QTest::newRow("resume-temp") << false << false; QTest::newRow("restore-temp") << true << false; QTest::newRow("resume-target") << false << true; QTest::newRow("restore-target") << true << true; }
     void crashRecovery() {
@@ -130,7 +169,7 @@ private slots:
         QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "not completed");
         for (int I = 0; I < 3; ++I) QVERIFY(Contents(Restore ? Rows[I].source_.path_ : Rows[I].target_, I));
         QCOMPARE(ReadRenameRecord(Journal.path(), Id).Value().state_, Restore ? RenameState::Restored : RenameState::Completed);
-        QVERIFY(QDir(Data.path()).entryList({".hc-rename-*"}, QDir::Files | QDir::Hidden).isEmpty());
+        QVERIFY(QDir(Data.path()).entryList({"hc-rename-*", ".hc-rename-*"}, QDir::Files | QDir::Hidden).isEmpty());
     }
     void replacementAndCollisionArePreserved() {
         QTemporaryDir Data, Journal; const auto Rows = Fixture(Data.path()); auto Prepared = PrepareBatchRename(Journal.path(), Rows); QVERIFY(Prepared.HasValue()); const auto Id = IdOf(Prepared.Value());
@@ -165,8 +204,22 @@ private slots:
         QCOMPARE(ReadRenameRecord(Journal.path(), Next).Value().state_, RenameState::Completed);
         for (int I = 0; I < 3; ++I) QVERIFY(Contents(Rows[I].target_, I));
     }
+    void receiptGapAndPartialTail_data() {
+        QTest::addColumn<bool>("Legacy");
+        QTest::newRow("current") << false;
+        QTest::newRow("legacy-dot-stage") << true;
+    }
     void receiptGapAndPartialTail() {
+        QFETCH(bool, Legacy);
         QTemporaryDir Data, Journal; const auto Rows = Fixture(Data.path()); auto Prepared = PrepareBatchRename(Journal.path(), Rows); QVERIFY(Prepared.HasValue()); const auto Id = IdOf(Prepared.Value()); Prepared.Value().task_.reset();
+        if (Legacy) {
+            QFile Plan(QDir(Journal.path()).filePath(Id + ".json"));
+            QVERIFY(Plan.open(QIODevice::ReadOnly));
+            auto Bytes = Plan.readAll(); Plan.close();
+            Bytes.replace(("hc-rename-" + Id).toUtf8(), (".hc-rename-" + Id).toUtf8());
+            QVERIFY(Plan.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            QCOMPARE(Plan.write(Bytes), Bytes.size()); Plan.close();
+        }
         auto Record = ReadRenameRecord(Journal.path(), Id); QVERIFY(Record.HasValue());
         QFile Log(QDir(Journal.path()).filePath(Id + ".log")); QVERIFY(Log.open(QIODevice::WriteOnly));
         Log.write("{\"event\":\"state\",\"state\":1}\n{\"event\":\"intent\",\"index\":0,\"destination\":\"temporary\"}\n{\"event\":"); Log.close();

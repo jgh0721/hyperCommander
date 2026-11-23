@@ -2370,18 +2370,38 @@ namespace hc::storage
                 // Revision tokens deliberately omit attributes. Check these separately
                 // so a concurrent attribute editor cannot silently lose its changes.
                 if (Before.FileAttributes != Entry.attributes_) return Error{ErrorCategory::StaleRevision, "metadata-attributes-changed", id_};
-                FILE_BASIC_INFO Update{};
-                Update.FileAttributes = ((Before.FileAttributes | Patch.setMask_) & ~Patch.clearMask_) & ~FILE_ATTRIBUTE_NORMAL;
-                if (!Update.FileAttributes) Update.FileAttributes = FILE_ATTRIBUTE_NORMAL;
-                if (Patch.modifiedUtcMs_) Update.LastWriteTime.QuadPart = (*Patch.modifiedUtcMs_ + 11644473600000LL) * 10000LL;
+                DWORD Attributes = ((Before.FileAttributes | Patch.setMask_) & ~Patch.clearMask_) & ~FILE_ATTRIBUTE_NORMAL;
+                if (!Attributes) Attributes = FILE_ATTRIBUTE_NORMAL;
+                const bool SetSmbAttributes = kind_ == LocatorKind::Smb && !native::IsRedirectedPath(Path.Value().path_)
+                    && (Patch.setMask_ || Patch.clearMask_);
                 if (const auto Error = Context.Check(id_)) return *Error;
-                // One handle operation changes attributes and mtime together. Zero
-                // timestamps preserve creation/access times, including on directories.
-                if (!SetFileInformationByHandle(File.value_, FileBasicInfo, &Update, sizeof(Update))) return Failure(GetLastError(), id_);
+                // Some SMB servers acknowledge a handle-based DOS attribute update without
+                // persisting it. Use the named SET while the open file pins the path.
+                if (SetSmbAttributes) {
+                    if (!SetFileAttributesW(Path.Value().path_.c_str(), Attributes)) return Failure(GetLastError(), id_);
+                    // A second SMB query can return the old DOS bits from the redirector cache.
+                    // The named SET is the result for these bits. The time is checked separately.
+                    if (!Patch.modifiedUtcMs_) return Unit{};
+                }
+                FILE_BASIC_INFO Update{};
+                Update.FileAttributes = SetSmbAttributes ? 0 : Attributes;
+                if (Patch.modifiedUtcMs_) Update.LastWriteTime.QuadPart = (*Patch.modifiedUtcMs_ + 11644473600000LL) * 10000LL;
+                if (!SetFileInformationByHandle(File.value_, FileBasicInfo, &Update, sizeof(Update)))
+                    return Failure(GetLastError(), id_);
+
+                // Reopen the pinned name to check the result without the mutation handle's cached attributes.
+                Handle Fresh;
+                HANDLE Query = File.value_;
+                if (SetSmbAttributes) {
+                    Fresh = Handle(CreateFileW(Path.Value().path_.c_str(), FILE_READ_ATTRIBUTES,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+                    Query = Fresh.value_;
+                }
                 FILE_BASIC_INFO After{};
-                if (!GetFileInformationByHandleEx(File.value_, FileBasicInfo, &After, sizeof(After)))
+                if (Query == INVALID_HANDLE_VALUE || !GetFileInformationByHandleEx(Query, FileBasicInfo, &After, sizeof(After)))
                     return Error{ErrorCategory::Unavailable, "metadata-outcome-unknown", id_};
-                if (((After.FileAttributes ^ Update.FileAttributes) & 0x27u)
+                if ((!SetSmbAttributes && ((After.FileAttributes ^ Attributes) & 0x27u))
                     || (Patch.modifiedUtcMs_ && After.LastWriteTime.QuadPart != Update.LastWriteTime.QuadPart))
                     return Error{ErrorCategory::Unavailable, "metadata-applied-readback-differs", id_};
                 return Unit{};

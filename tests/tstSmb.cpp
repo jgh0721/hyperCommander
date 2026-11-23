@@ -16992,7 +16992,7 @@ private slots:
         QVERIFY(QFileInfo::exists(Directory.filePath("renamed_001.txt"))); QVERIFY(QFileInfo::exists(Directory.filePath("renamed_2501.txt")));
         QCOMPARE(QDir(Directory.path()).entryList({"source_*"},QDir::Files).size(),0); QCOMPARE(QDir(Directory.path()).entryList({"renamed_*"},QDir::Files).size(),2501);
         Undo->click(); QTRY_VERIFY_WITH_TIMEOUT(Dialog.findChild<QPushButton*>("hc.rename.redo")->isEnabled(),45000);
-        QCOMPARE(QDir(Directory.path()).entryList({"source_*"},QDir::Files).size(),2501); QVERIFY(QDir(Directory.path()).entryList({".hc-rename-*"},QDir::Files|QDir::Hidden).isEmpty()); Dialog.CancelButton()->click();
+        QCOMPARE(QDir(Directory.path()).entryList({"source_*"},QDir::Files).size(),2501); QVERIFY(QDir(Directory.path()).entryList({"hc-rename-*", ".hc-rename-*"},QDir::Files|QDir::Hidden).isEmpty()); Dialog.CancelButton()->click();
     }
     void r9NewFileUi()
     {

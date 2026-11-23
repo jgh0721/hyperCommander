@@ -54,7 +54,10 @@ Result<RenameRecord> Read(const QString& Directory, const QString& Id, bool Summ
         for (const auto& Path : {Row.source_.path_, Row.target_, Temp})
             if (QDir::cleanPath(Path) != Path || QFileInfo(Path).absolutePath().compare(Record.folder_, Qt::CaseInsensitive)
                 || !NameError(QFileInfo(Path).fileName()).isEmpty()) return Failure("rename-plan-path");
-        if (Temp != QDir(Record.folder_).filePath(QString(".hc-rename-%1-%2").arg(Id).arg(I)) || Row.source_.identity_.isEmpty()
+        const auto Stage = QString("hc-rename-%1-%2").arg(Id).arg(I);
+        const QDir Folder(Record.folder_);
+        // Journals can still point to the former dot-prefixed staging names.
+        if ((Temp != Folder.filePath(Stage) && Temp != Folder.filePath('.' + Stage)) || Row.source_.identity_.isEmpty()
             || !ValidSize || !ValidTime || Sources.contains(Row.source_.path_.toCaseFolded()) || Targets.contains(Row.target_.toCaseFolded())
             || Identities.contains(QString::fromLatin1(Row.source_.identity_)) || Temporary.contains(Temp.toCaseFolded())) return Failure("rename-plan-row");
         Sources.insert(Row.source_.path_.toCaseFolded()); Targets.insert(Row.target_.toCaseFolded());
@@ -300,7 +303,7 @@ Result<PreparedJob> PrepareBatchRename(const QString& Directory, QList<RenameRow
     RenameRecord Record; Record.id_ = QUuid::createUuid().toString(QUuid::Id128); Record.rows_ = std::move(Rows);
     Record.folder_ = QFileInfo(Record.rows_.first().source_.path_).absolutePath(); Record.folderIdentity_ = Inspect(Record.folder_).identity_;
     Record.createdUtcMs_ = QDateTime::currentMSecsSinceEpoch(); Record.count_ = Record.rows_.size(); Record.parentId_ = ParentId; Record.kind_ = Kind;
-    for (int I = 0; I < Record.rows_.size(); ++I) Record.temporary_.append(QDir(Record.folder_).filePath(QString(".hc-rename-%1-%2").arg(Record.id_).arg(I)));
+    for (int I = 0; I < Record.rows_.size(); ++I) Record.temporary_.append(QDir(Record.folder_).filePath(QString("hc-rename-%1-%2").arg(Record.id_).arg(I)));
     for (const auto& Row : Record.rows_) if (!Row.error_.isEmpty()) return Failure("rename-plan-error");
     auto Saved = SavePlan(Directory, Record); if (!Saved.HasValue()) return Saved.Failure();
     auto Validated = Read(Directory, Record.id_, false);

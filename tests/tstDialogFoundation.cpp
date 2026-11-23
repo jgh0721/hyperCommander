@@ -608,7 +608,7 @@ private slots:
         auto Interrupted = Execute(Swap, [](int Step) { return Step == 3; }); QVERIFY(!Interrupted.complete_);
         QCOMPARE(Interrupted.current_[0].path_, Entries[0].path_); QCOMPARE(Interrupted.current_[1].path_, Entries[1].path_);
         QCOMPARE(Read("a.txt"), QByteArray("AAA")); QCOMPARE(Read("b.txt"), QByteArray("BBB"));
-        QVERIFY(QDir(Temp.path()).entryList({".hc-rename-*"}, QDir::Files | QDir::Hidden).isEmpty());
+        QVERIFY(QDir(Temp.path()).entryList({"hc-rename-*", ".hc-rename-*"}, QDir::Files | QDir::Hidden).isEmpty());
         QList<RenameRow> Case{{Inspect(Temp.filePath("a.txt")), Temp.filePath("A.TXT"), {}}};
         auto C = Execute(Case); QVERIFY2(C.complete_, qPrintable(C.error_)); QVERIFY(QDir(Temp.path()).entryList().contains("A.TXT"));
         Write("outside.txt", "OUTSIDE"); QList<RenameRow> Collision{{C.current_[0], Temp.filePath("outside.txt"), {}}};

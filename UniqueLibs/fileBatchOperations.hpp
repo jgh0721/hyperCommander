@@ -424,7 +424,7 @@ inline BatchResult Execute(const QList<RenameRow>& Rows, const std::function<boo
     for (const auto& Row : Rows) if (!Sources.contains(Row.target_.toCaseFolded()) && GetFileAttributesW(reinterpret_cast<LPCWSTR>(NativePath(Row.target_).utf16())) != INVALID_FILE_ATTRIBUTES) {
         Result.error_ = QObject::tr("충돌 · 이미 있음: %1").arg(Row.target_); return Result;
     }
-    QStringList Temporary; for (int I = 0; I < Rows.size(); ++I) Temporary.append(QDir(Folder).filePath(".hc-rename-" + QUuid::createUuid().toString(QUuid::Id128)));
+    QStringList Temporary; for (int I = 0; I < Rows.size(); ++I) Temporary.append(QDir(Folder).filePath("hc-rename-" + QUuid::createUuid().toString(QUuid::Id128)));
     int Step = 0;
     const auto Move = [&](int I, const QString& Path, bool Interruptible) {
         if (Interruptible && Stop && Stop(Step++)) { Result.error_ = QObject::tr("작업 중지 요청"); return false; }

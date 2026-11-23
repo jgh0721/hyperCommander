@@ -1259,6 +1259,38 @@ private slots:
         writer_ = MakeNativeWritableStorage(kind_, reader_);
         qInfo().noquote() << "Owned mutation fixture:" << root_->path();
     }
+    void patchClearsHiddenAndPreservesArchive_data()
+    {
+        QTest::addColumn<bool>("SetTime");
+        QTest::newRow("attributes-only") << false;
+        QTest::newRow("attributes-and-time") << true;
+    }
+    void patchClearsHiddenAndPreservesArchive()
+    {
+        QFETCH(bool, SetTime);
+        const auto Name = SetTime ? "attribute-and-time.txt" : "attribute-patch.txt";
+        const auto Path = root_->filePath(Name);
+        const auto Native = QDir::toNativeSeparators(Path).toStdWString();
+        constexpr DWORD Mask = FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_HIDDEN;
+        const auto File = CreateFileW(Native.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, Mask, nullptr);
+        QVERIFY(File != INVALID_HANDLE_VALUE);
+        QVERIFY(CloseHandle(File));
+        const auto Entry = writer_->Inspect(at(Name), {});
+        QVERIFY(Entry.HasValue() && Entry.Value());
+        QCOMPARE(DWORD(Entry.Value()->attributes_) & Mask, Mask);
+        MetadataPatch Patch;
+        Patch.clearMask_ = FILE_ATTRIBUTE_HIDDEN;
+        if (SetTime) Patch.modifiedUtcMs_ = 1735689600000LL;
+        const auto Patched = writer_->PatchMetadata(*Entry.Value(), Patch, {});
+        QVERIFY2(Patched.HasValue(), Patched.HasValue() ? "" : Patched.Failure().code_.c_str());
+        // The SMB client can return cached attributes for several seconds after a named SET.
+        QTRY_VERIFY_WITH_TIMEOUT(([&] {
+            const auto After = writer_->Inspect(at(Name), {});
+            return After.HasValue() && After.Value()
+                && (DWORD(After.Value()->attributes_) & Mask) == FILE_ATTRIBUTE_ARCHIVE
+                && (!SetTime || After.Value()->modifiedUtcMs_ == *Patch.modifiedUtcMs_);
+        })(), (kind_ == LocatorKind::Smb ? 15000 : 1000));
+    }
     void redirectedOperationsAndRecovery()
     {
         const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
