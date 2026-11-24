@@ -661,10 +661,12 @@ CFSModel::CFSModel()
             carryDirectorySizes_ = true; autoRefreshRequested_ = true; Refresh();
         }
     });
-    connect(this, &CFSModel::sigRefreshCompleted, this, [this] { tracker_.SetBusy(loading_ || selectionInputActive_); });
+    connect(&tracker_, &QtDirectoryTracker::NamesChanged, this, &CFSModel::reconcileDirectoryNames);
+    connect(this, &CFSModel::sigRefreshCompleted, this, &CFSModel::updateDirectoryWatchBusy);
     connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) {
         const auto Settings = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
-        tracker_.SetSuspended(Settings.pauseInBackground && State != Qt::ApplicationActive);
+        windowWatchSuspended_ = Settings.pauseInBackground && State != Qt::ApplicationActive;
+        tracker_.SetSuspended(windowWatchSuspended_ || !watchEnabled_);
         hc::icons::FileIconService::Instance().SetAutomaticRefresh(this, !Settings.Excludes(GetCurrentPathWithRoot())
             && (!Settings.pauseInBackground || State == Qt::ApplicationActive));
         if (State == Qt::ApplicationActive && !iconApplyTimer_.isActive()) iconApplyTimer_.start();
@@ -676,8 +678,8 @@ void CFSModel::ApplyRefreshSettings()
 {
     const auto Settings = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
     tracker_.Configure(Settings);
-    tracker_.SetSuspended(Settings.pauseInBackground && QGuiApplication::applicationState() != Qt::ApplicationActive);
-    SetWatchEnabled(watchEnabled_);
+    windowWatchSuspended_ = Settings.pauseInBackground && QGuiApplication::applicationState() != Qt::ApplicationActive;
+    SetWatchEnabled(watchEnabled_, watchRetained_);
 }
 
 hc::storage::Locator CFSModel::WorkspaceLocation() const
@@ -706,19 +708,325 @@ void CFSModel::SetSelectionInputActive(bool Active)
     if (selectionInputActive_ == Active) return;
     selectionInputActive_ = Active;
     // Keep native notifications pending until a held selection key is released.
-    tracker_.SetBusy(loading_ || selectionInputActive_);
+    updateDirectoryWatchBusy();
 }
 
-void CFSModel::SetWatchEnabled(bool Enabled)
+void CFSModel::SetWatchEnabled(bool Enabled, bool RetainCoverage)
 {
+    if (!Enabled && !RetainCoverage && tracker_.NotificationsAvailable()) directoryWatchGap_ = true;
     watchEnabled_ = Enabled;
+    watchRetained_ = RetainCoverage;
+    tracker_.SetSuspended(windowWatchSuspended_ || !Enabled);
+    if (!Enabled && !RetainCoverage) tracker_.SetLocation({});
+    if (!loading_) configureDirectoryWatch(WorkspaceLocation());
+    if (Enabled && !loading_ && std::exchange(directoryWatchGap_, false) && tracker_.NotificationsAvailable())
+        tracker_.Invalidate();
+}
+
+void CFSModel::updateDirectoryWatchBusy()
+{
+    tracker_.SetBusy(loading_ || pageBusy_ || selectionInputActive_ || entryRefreshBusy_);
+}
+
+bool CFSModel::UsesDetailedDirectoryWatch() const
+{
+    return watchEnabled_ && tracker_.NotificationsAvailable() && !elevatedDirectorySession_ && !searchResults_;
+}
+
+bool CFSModel::ApplyWatchedFileJob(const QStringList& RemovedNames, bool ChangesMetadata)
+{
+    if ((!watchEnabled_ && !watchRetained_) || elevatedDirectorySession_ || searchResults_ || !tracker_.CoversNames()
+        || (ChangesMetadata && !tracker_.CoversMetadata()) || !pageSource_) return false;
+    // The native feed is armed throughout the job. Confirm visible removals
+    // promptly from its result as well, without losing concurrent external changes.
     const auto Location = WorkspaceLocation();
+    const auto Prefix = Location.root_ + (Location.root_.ends_with('\\') ? "" : "\\");
+    QStringList Pending;
+    for (const auto& Name : RemovedNames) {
+        hc::storage::EntrySnapshot Entry;
+        Entry.locator_ = {hc::storage::LocatorKind::Local, Prefix + Name.toStdString()};
+        if (index_.Row(hc::workspace::SelectionKey(Entry)) >= 0) Pending.append(Name);
+    }
+    tracker_.VerifyNames(Pending);
+    return true;
+}
+
+void CFSModel::configureDirectoryWatch(const hc::storage::Locator& Location)
+{
     const auto Root = GetRoot();
     // Registering a native watcher on an unreachable server can block the GUI.
     const auto Native = Root && !Root->IsRemote() && Location.kind_ == hc::storage::LocatorKind::Local
         && Location.nesting_.empty() ? QString::fromStdString(Location.root_) : QString{};
-    tracker_.SetLocation(Enabled && Root && providerEnabled_ && !searchResults_ ? hc::workspace::LocationKey(Location) : QString{}, Native,
+    tracker_.SetLocation((watchEnabled_ || watchRetained_) && Root && providerEnabled_ && !searchResults_ ? hc::workspace::LocationKey(Location) : QString{}, Native,
         QString::fromStdString(Location.root_));
+}
+
+void CFSModel::reconcileDirectoryNames(const QStringList& Names)
+{
+    using namespace hc::storage;
+    if (!UsesDetailedDirectoryWatch() || !pageSource_ || !pageView_ || !acceptedProvider_) {
+        if (watchEnabled_ && GetRoot()) tracker_.Invalidate();
+        return;
+    }
+    const auto Location = WorkspaceLocation();
+    const auto Prefix = Location.root_ + (Location.root_.ends_with('\\') ? "" : "\\");
+    struct KnownRow {
+        std::optional<EntrySnapshot> entry_, preceding_, following_;
+        bool hasOrder_ = false;
+    };
+    std::map<std::string, KnownRow, std::less<>> Known;
+    for (const auto& Name : Names) {
+        if (Name.isEmpty() || Name == "." || Name == ".." || Name.contains(QChar(0))
+            || Name.contains('\\') || Name.contains('/') || Name.contains(':') || Name.contains('*') || Name.contains('?')) {
+            tracker_.Invalidate(); return;
+        }
+        auto Path = Prefix + Name.toStdString();
+        EntrySnapshot Lookup;
+        Lookup.locator_ = {LocatorKind::Local, Path};
+        const int Row = index_.Row(hc::workspace::SelectionKey(Lookup));
+        const auto ModelRow = Row + rowCount() - int(pageView_->Count());
+        KnownRow Previous;
+        if (Row >= 0 && ModelRow >= 0 && ModelRow < vecNode_.size()) {
+            const auto& Candidate = vecNode_[ModelRow]->storageEntry_;
+            if (Candidate && Candidate->locator_ == Lookup.locator_) {
+                Previous.entry_ = *Candidate;
+                if (Names.size() == 1 && UsesIndexedOrder() && pageSorts_ == columnSorts_) {
+                    if (ModelRow > 0) Previous.preceding_ = vecNode_[ModelRow - 1]->storageEntry_;
+                    if (ModelRow + 1 < vecNode_.size()) Previous.following_ = vecNode_[ModelRow + 1]->storageEntry_;
+                    Previous.hasOrder_ = true;
+                } else if (Names.size() == 1 && !UsesIndexedOrder() && columnSortRanks_.size() == vecNode_.size()
+                    && completedSorts_ == columnSorts_ && !columnSorts_.isEmpty()) {
+                    const auto Rank = columnSortRanks_[ModelRow];
+                    if (const auto Before = columnSortRanks_.indexOf(Rank - 1); Before >= 0)
+                        Previous.preceding_ = vecNode_[Before]->storageEntry_;
+                    if (const auto After = columnSortRanks_.indexOf(Rank + 1); After >= 0)
+                        Previous.following_ = vecNode_[After]->storageEntry_;
+                    Previous.hasOrder_ = true;
+                }
+            }
+        }
+        Known.emplace(std::move(Path), std::move(Previous));
+    }
+    const auto Source = pageSource_, View = pageView_;
+    const auto Provider = acceptedProvider_;
+    const auto Navigation = generation_, PageGeneration = pageGeneration_;
+    const auto Sorts = columnSorts_;
+    const auto TextOptions = sortTextOptions();
+    const auto Query = pageQuery_, Match = pageMatch_;
+    const bool ShowHidden = pageShowHidden_, Indexed = UsesIndexedOrder();
+    const auto RefreshSettings = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
+    const bool Append = RefreshSettings.appendNewEntries, AlreadyAppended = appendOrder_;
+    auto Compare = pageComparison(GetCurrentPathWithRoot());
+    const bool Fast = canReplaceEntryRows() && Compare.HasValue() && (Append || !AlreadyAppended);
+    const bool DiffRows = canApplyListingDelta() && Indexed && !Append;
+    const bool PrepareRanks = hasPlainNameColumn(columnView_);
+    if (!Compare.HasValue()) Compare = pageComparison({}, true);
+    OperationContext Context;
+    Context.stopToken_ = entryRefreshStop_.get_token();
+    Context.workerRead_ = true;
+    Context.directoryEntryName_ = true;
+    const auto Rules = fileColorRules_;
+    const auto RuleGeneration = fileRuleLoadGeneration_;
+    const bool Dark = colorScheme_.IsDarkMode;
+    entryRefreshBusy_ = true;
+    updateDirectoryWatchBusy();
+
+    struct UpdatedListing {
+        PagedEntryIndex::Changes replacements_;
+        std::shared_ptr<PagedEntryIndex> source_, view_;
+        std::vector<EntrySnapshot> entries_;
+        std::vector<hc::settings::FileRuleResult> styles_;
+        PreparedListing prepared_;
+    };
+    using UpdateResult = Result<UpdatedListing>;
+    auto* Watcher = new QFutureWatcher<UpdateResult>(this);
+    connect(Watcher, &QFutureWatcher<UpdateResult>::finished, this,
+        [this, Watcher, Names, Source, View, Navigation, PageGeneration, Sorts, TextOptions, Query, Match, ShowHidden, Append, RuleGeneration, Dark] {
+        auto Result = Watcher->future().takeResult();
+        Watcher->deleteLater();
+        auto Apply = [this, Result = std::move(Result), Names, Source, View, Navigation, PageGeneration,
+            Sorts, TextOptions, Query, Match, ShowHidden, Append, RuleGeneration, Dark]() mutable {
+            if (Navigation != generation_) return;
+            entryRefreshBusy_ = false;
+            updateDirectoryWatchBusy();
+            if (!watchEnabled_ || windowWatchSuspended_) {
+                if (watchRetained_ || watchEnabled_) tracker_.VerifyNames(Names);
+                return;
+            }
+            if (Source != pageSource_ || View != pageView_ || PageGeneration != pageGeneration_ || Sorts != columnSorts_
+                || TextOptions != sortTextOptions() || Query != pageQuery_ || Match != pageMatch_ || ShowHidden != pageShowHidden_) {
+                tracker_.VerifyNames(Names);
+                return;
+            }
+            if (!Result.HasValue()) { tracker_.Invalidate(); return; }
+            auto& Update = Result.Value();
+            if (!Update.source_ && !canReplaceEntryRows()) { tracker_.VerifyNames(Names); return; }
+            automaticRefresh_ = true;
+            const auto Finish = qScopeGuard([this] { automaticRefresh_ = false; });
+            if (!Update.source_) {
+                if (Update.replacements_.empty()) return;
+                hc::startup::Span Trace("listing.publishEntries");
+                pageSource_ = Source->ReplaceEntries(Update.replacements_);
+                pageView_ = Source == View ? pageSource_ : View->ReplaceEntries(Update.replacements_);
+                applyEntryReplacements(Update.replacements_);
+                emit PageChanged();
+                emit sigRefreshCompleted();
+            } else {
+                carryDirectorySizes_ = true;
+                pageSource_ = std::move(Update.source_);
+                pageView_ = std::move(Update.view_);
+                appendOrder_ = Append;
+                if (Update.prepared_.delta_ && canApplyListingDelta() && UsesIndexedOrder()
+                    && rowCount() == Update.prepared_.delta_->previousCount_ + 1 && !Update.prepared_.nameRanks_.isEmpty())
+                    applyListingDelta(std::move(Update.entries_), std::move(Update.prepared_));
+                else
+                    publishProvider(std::move(Update.entries_), fileRuleSeedsUsable(RuleGeneration, Dark)
+                        ? std::move(Update.styles_) : std::vector<hc::settings::FileRuleResult>{}, std::move(Update.prepared_));
+                emit PageChanged();
+                emit sigRefreshCompleted();
+            }
+        };
+        applyListingWhenIdle(std::move(Apply), Navigation);
+    });
+    Watcher->setFuture(QtConcurrent::run([Source, View, Provider, Context, Location, Known = std::move(Known),
+        Compare, Query, Match, ShowHidden, Indexed, Fast, DiffRows, PrepareRanks, TextOptions, Append, AlreadyAppended, Rules, Dark]() mutable -> UpdateResult {
+        try {
+            UpdatedListing Update;
+            auto& Changes = Update.replacements_;
+            const auto Visible = [&](const EntrySnapshot& Entry) {
+                return (ShowHidden || !(Entry.attributes_ & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)))
+                    && (Match.isEmpty() ? hc::workspace::DirectoryIndex{}.Matches(Entry, Query)
+                        : hc::quickfind::Matches(QString::fromStdString(Entry.name_), Query, Match));
+            };
+            bool SameRows = Fast, SamePaths = true, Removed = false;
+            {
+                hc::startup::Span Trace("listing.resolveChangedEntries");
+                for (const auto& [Path, Previous] : Known) {
+                    const auto& Old = Previous.entry_;
+                    if (const auto Failure = Context.Check(Provider->Id())) return *Failure;
+                    auto Entry = Provider->Resolve({LocatorKind::Local, Path}, Context).get();
+                    if (!Entry.HasValue()) {
+                        if (Entry.Failure().category_ != ErrorCategory::NotFound) return Entry.Failure();
+                        Changes.try_emplace(Path, std::nullopt);
+                        SameRows = SamePaths = false;
+                        Removed = true;
+                        continue;
+                    }
+                    auto& Next = Entry.Value();
+                    if (Next.locator_.root_ != Path) {
+                        Changes.try_emplace(Path, std::nullopt);
+                        SameRows = SamePaths = false;
+                    }
+                    if (!Old) SamePaths = false;
+                    if (!Old || Old->directory_ != Next.directory_ || (Indexed && !Visible(Next))) SameRows = false;
+                    if (SameRows && !Append && Compare.Value()) {
+                        const auto& Less = Compare.Value();
+                        const bool OrderChanged = Less(*Old, Next) || Less(Next, *Old);
+                        if (OrderChanged && (!Previous.hasOrder_
+                            || (Previous.preceding_ && Less(Next, *Previous.preceding_))
+                            || (Previous.following_ && Less(*Previous.following_, Next)))) SameRows = false;
+                    }
+                    // An existing revision can be unchanged after notification.
+                    // Keep the probe so row-level presentation caches can be invalidated.
+                    auto Canonical = Next.locator_.root_;
+                    Changes.insert_or_assign(std::move(Canonical), std::move(Next));
+                }
+            }
+            if (Removed) {
+                auto ParentContext = Context; ParentContext.directoryEntryName_ = false;
+                auto Parent = Provider->Resolve(Location, ParentContext).get();
+                if (!Parent.HasValue()) return Parent.Failure();
+                if (!Parent.Value().directory_) return Error{ErrorCategory::NotFound, "directory-change-parent"};
+            }
+            const bool Sparse = SamePaths && Source->ReplacementCount() + Changes.size() <= 1024;
+            if (SameRows && Sparse) return Update;
+            hc::startup::Span Trace("listing.mergeChangedEntries");
+            auto NewSource = Sparse ? Result<std::shared_ptr<PagedEntryIndex>>(Source->ReplaceEntries(Changes))
+                : Source->Reconcile(std::move(Changes), Context);
+            if (!NewSource.HasValue()) return NewSource.Failure();
+            if (Append) {
+                auto Ordered = AlreadyAppended ? Source : View;
+                if (!AlreadyAppended && !Indexed) {
+                    auto Sorted = Source->Project(Compare.Value(), {}, Context, {});
+                    if (!Sorted.HasValue()) return Sorted.Failure();
+                    Ordered = std::move(Sorted.Value());
+                }
+                NewSource = hc::refresh::AppendNewEntries(NewSource.Value(), Ordered, {}, Context);
+                if (!NewSource.HasValue()) return NewSource.Failure();
+            }
+            auto NewView = NewSource;
+            if (NewSource.Value()->Count() > IndexedOrderThreshold)
+                NewView = NewSource.Value()->Project(Append ? hc::refresh::ArrivalOrder() : Compare.Value(), Visible, Context, {});
+            if (!NewView.HasValue()) return NewView.Failure();
+            auto Page = NewView.Value()->Read(0, (std::numeric_limits<std::size_t>::max)(), Context);
+            if (!Page.HasValue()) return Page.Failure();
+            Update.entries_ = std::move(Page.Value().entries_);
+            Update.prepared_ = prepareListing(Update.entries_, PrepareRanks, TextOptions, Context.stopToken_);
+            if (DiffRows && !Context.stopToken_.stop_requested()) {
+                const auto Previous = View->Read(0, (std::numeric_limits<std::size_t>::max)(), Context);
+                if (Previous.HasValue()) Update.prepared_.delta_ = prepareListingDelta(Previous.Value().entries_, Update.entries_);
+            }
+            if (!Update.prepared_.delta_) Update.styles_ = seedFileRuleStyles(Rules, Update.entries_, Dark, Context.stopToken_);
+            Update.source_ = std::move(NewSource.Value());
+            Update.view_ = std::move(NewView.Value());
+            return Update;
+        } catch (const std::exception&) { return Error{ErrorCategory::Internal, "directory-change-worker"}; }
+    }));
+}
+
+void CFSModel::applyEntryReplacements(const hc::storage::PagedEntryIndex::Changes& Updates)
+{
+    QModelIndexList ChangedDirectories;
+    QSet<QString> Families;
+    for (const auto& Binding : columnView_.VecColumns) Families.unite(bindingFamilies(Binding));
+    for (const auto& Field : fileColorRules_.RequiredFields()) {
+        const auto Family = hc::columns::QueryFamily(Field);
+        if (!Family.isEmpty()) Families.insert(Family);
+    }
+    for (const auto& [Path, Entry] : Updates) {
+        if (!Entry) continue;
+        const int Row = index_.Row(hc::workspace::SelectionKey(*Entry)) + rowCount() - int(pageView_->Count());
+        if (Row < 0 || Row >= vecNode_.size()) continue;
+        const auto Previous = vecNode_[Row];
+        if (!Previous->storageEntry_ || Previous->storageEntry_->locator_ != Entry->locator_) continue;
+        auto Item = makePreparedItem(*Entry, prepareFileRow(*Entry));
+        Item->Icon = Previous->Icon;
+        if (Entry->directory_) {
+            if (Previous->directorySize_) {
+                directorySizeStale_.remove(QString::fromStdString(hc::storage::Serialize(Previous->storageEntry_->id_)));
+                directorySizeStale_.insert(QString::fromStdString(hc::storage::Serialize(Entry->id_)));
+                Item->directorySize_ = Previous->directorySize_;
+                Item->Size_ = Previous->Size_;
+            }
+            ChangedDirectories.append(index(Row, 0));
+        } else {
+            totalSize_ -= Previous->Size_;
+            totalSize_ += Item->Size_;
+        }
+        const auto QueryPath = queryPath(Previous);
+        if (Previous->Attributes_ != Item->Attributes_) {
+            hc::icons::FileIconService::Instance().InvalidatePaths({QDir::toNativeSeparators(QueryPath)}, 500);
+            if (!iconApplyTimer_.isActive()) iconApplyTimer_.start();
+        }
+        for (const auto& Family : Families) {
+            columnQueries_->InvalidateFamily(QueryPath, Family);
+            ruleFieldRequests_.remove(QueryPath + QChar(0) + Family);
+        }
+        ruleFields_.remove(QueryPath);
+        ruleFieldsStale_.remove(QueryPath);
+        if (auto* Style = displayedFileRules_.object(Row); Style && !Style->style_.pending_) {
+            Style->item_ = Item;
+            if (!Style->expiresAt_) {
+                Style->expiresAt_ = fileRuleDisplayClock_.elapsed() + 500;
+                if (!fileRuleDisplayTimer_.isActive()) fileRuleDisplayTimer_.start(500);
+            }
+        } else displayedFileRules_.remove(Row);
+        index_.Replace(*Entry);
+        vecNode_[Row] = Item;
+        createBuiltFsValues(Item, -1);
+        if (columnCount()) emit dataChanged(index(Row, 0), index(Row, columnCount() - 1));
+    }
+    if (!ChangedDirectories.isEmpty()) RequestDirectorySizes(ChangedDirectories, true);
 }
 
 void CFSModel::SetPlaceholder(const hc::storage::Locator& Location, const QString& Reason, bool Pending)
@@ -792,6 +1100,7 @@ CFSModel::~CFSModel()
     everythingSession_.reset();
     flatSession_.reset(); flatRescan_.reset(); sortWorker_.reset(); stopFlatWatch();
     navigationStop_.request_stop(); iconStop_.request_stop(); pageStop_.request_stop(); directorySizeStop_.request_stop();
+    entryRefreshStop_.request_stop();
     if (FsIconGatherer_)
     {
         if (FsIconGatherer_) FsIconGatherer_->requestInterruption();
@@ -810,10 +1119,15 @@ void CFSModel::CancelNavigation(bool Superseding)
     navigationStop_.request_stop();
     const auto Generation = ++generation_;
     pageStop_.request_stop(); ++pageGeneration_; pageBusy_ = false;
+    entryRefreshStop_.request_stop();
+    entryRefreshStop_ = {};
+    if (std::exchange(entryRefreshBusy_, false) && !Superseding) tracker_.Invalidate();
+    updateDirectoryWatchBusy();
     if (!loading_) return;
     if (!Superseding)
     {
         loading_ = false;
+        configureDirectoryWatch(WorkspaceLocation());
         navigationError_ = hc::storage::Error{hc::storage::ErrorCategory::Cancelled, "cancelled"};
         emit sigNavigationFailed("cancelled");
         emit sigRefreshCompleted();
@@ -827,6 +1141,7 @@ void CFSModel::CancelNavigation(bool Superseding)
     QTimer::singleShot(0, this, [this, Generation] {
         if (generation_ != Generation || !loading_) return;
         loading_ = false;
+        configureDirectoryWatch(WorkspaceLocation());
         navigationError_ = hc::storage::Error{hc::storage::ErrorCategory::Cancelled, "cancelled"};
         emit sigRefreshCompleted();
     });
@@ -846,7 +1161,7 @@ void CFSModel::SetProviderEnabled(bool Enabled)
     pageSource_.reset(); pageView_.reset(); emit PageChanged();
     // The compatibility path performs synchronous legacy I/O. Automatic
     // rescans belong only to the asynchronous provider path.
-    index_.Publish({}); SetWatchEnabled(watchEnabled_);
+    index_.Publish({}); SetWatchEnabled(watchEnabled_, watchRetained_);
     acceptedRoots_ = vecFs_;
     acceptedPath_ = path_;
     if (GetRoot()) Refresh();
@@ -886,6 +1201,82 @@ void CFSModel::applyListingWhenIdle(std::function<void()> Apply, std::uint64_t G
     Timer->start();
 }
 
+namespace
+{
+    using RawListing = hc::storage::Result<std::shared_ptr<hc::storage::PagedEntryIndex>>;
+
+    RawListing enumerateFolder(const std::shared_ptr<hc::storage::IStorageProvider>& Provider,
+        const hc::storage::Locator& Location, const hc::storage::OperationContext& Context,
+        const std::shared_ptr<hc::permissions::DirectoryElevationSession>& Session = {})
+    {
+        hc::startup::Span Trace("listing.enumerate");
+        auto Cursor = Session ? Session->Enumerate(QString::fromStdString(Location.root_), Context, Provider)
+            : Provider->Enumerate(Location, Context).get();
+        if (!Cursor.HasValue()) return Cursor.Failure();
+        return hc::storage::PagedEntryIndex::Build(*Cursor.Value(), Context);
+    }
+
+    struct FolderRead : std::enable_shared_from_this<FolderRead> {
+        using Cancellation = std::stop_callback<std::function<void()>>;
+        QFuture<RawListing> future_;
+        std::stop_source stop_;
+
+        bool AddConsumer(std::stop_token Token) {
+            {
+                std::lock_guard Lock(mutex_);
+                if (started_ || stop_.stop_requested()) return false;
+                consumers_.push_back(Token);
+            }
+            cancellations_.push_back(std::make_unique<Cancellation>(Token, [Weak = weak_from_this()] {
+                if (auto Read = Weak.lock()) Read->cancelIfUnused();
+            }));
+            return true;
+        }
+        void Start() {
+            std::lock_guard Lock(mutex_);
+            started_ = true;
+        }
+    private:
+        void cancelIfUnused() {
+            std::lock_guard Lock(mutex_);
+            if (std::all_of(consumers_.begin(), consumers_.end(), [](const auto& Token) { return Token.stop_requested(); }))
+                stop_.request_stop();
+        }
+        std::mutex mutex_;
+        std::vector<std::stop_token> consumers_;
+        std::vector<std::unique_ptr<Cancellation>> cancellations_;
+        bool started_ = false;
+    };
+
+    // Coalesce the panels' requests queued for the same read. Once it starts,
+    // a new subscriber may have missed an event before arming its own watcher.
+    std::shared_ptr<FolderRead> shareFolderRead(const std::shared_ptr<hc::storage::IStorageProvider>& Provider,
+        const hc::storage::Locator& Location, hc::storage::OperationContext Context)
+    {
+        using Key = QPair<quintptr, QString>;
+        static QHash<Key, std::weak_ptr<FolderRead>> Reads;
+        for (auto It = Reads.begin(); It != Reads.end();)
+            if (It.value().expired()) It = Reads.erase(It); else ++It;
+        const Key Scope{reinterpret_cast<quintptr>(Provider.get()), hc::workspace::LocationKey(Location)};
+        auto Read = std::make_shared<FolderRead>();
+        if (const auto Found = Reads.value(Scope).lock(); Found && Found->AddConsumer(Context.stopToken_)) return Found;
+        Read->AddConsumer(Context.stopToken_);
+        Context.stopToken_ = Read->stop_.get_token();
+        // Projection workers may wait for this result. Keep reads in their own pool.
+        static auto* FolderIoPool = [] {
+            auto* Pool = new QThreadPool;
+            Pool->setMaxThreadCount(2);
+            return Pool;
+        }();
+        Read->future_ = QtConcurrent::run(FolderIoPool, [Read, Provider, Location, Context] {
+            Read->Start();
+            return enumerateFolder(Provider, Location, Context);
+        });
+        Reads.insert(Scope, Read);
+        return Read;
+    }
+}
+
 void CFSModel::refreshProvider()
 {
     hc::startup::Span Trace("listing.dispatch");
@@ -910,6 +1301,11 @@ void CFSModel::refreshProvider()
     const bool ReusedArchive = Location.kind_ == LocatorKind::Archive && Provider == acceptedProvider_;
     const auto Session = Location.kind_ == LocatorKind::Local && elevatedDirectorySession_
         && elevatedDirectorySession_->Contains(QString::fromStdString(Location.root_)) ? elevatedDirectorySession_ : nullptr;
+    configureDirectoryWatch(Location);
+    directoryWatchGap_ = false;
+    entryRefreshStop_.request_stop();
+    entryRefreshStop_ = {};
+    entryRefreshBusy_ = false;
     if (!acceptedRoots_.isEmpty())
     {
         vecFs_ = acceptedRoots_;
@@ -924,6 +1320,10 @@ void CFSModel::refreshProvider()
     Context.stopToken_ = navigationStop_.get_token();
     Context.freshEnumerationMetadata_ = true;
     Context.allowUnavailableChildMetadata_ = true;
+    const auto SharedRead = Location.kind_ == LocatorKind::Local && Provider && !Root->IsRemote()
+        && !Session && !Elevated && !automaticRefresh_ && tracker_.NotificationsAvailable()
+        && property("hc.snapshotLocation").toString() != hc::workspace::LocationKey(Location)
+        ? shareFolderRead(Provider, Location, Context) : std::shared_ptr<FolderRead>{};
     struct Listing { std::shared_ptr<PagedEntryIndex> source_, view_; EntryPage page_; std::shared_ptr<hc::permissions::DirectoryElevationSession> session_; std::vector<hc::settings::FileRuleResult> styles_; PreparedListing prepared_; };
     using ReadResult = Result<Listing>;
     const auto Rules = fileColorRules_; const auto RuleGeneration = fileRuleLoadGeneration_; const bool Dark = colorScheme_.IsDarkMode;
@@ -952,7 +1352,7 @@ void CFSModel::refreshProvider()
     const auto TextOptions = sortTextOptions();
     const bool PrepareNameRanks = Native && hasPlainNameColumn(Columns ? Columns->view_ : columnView_);
     const auto DeltaBase = automaticRefresh_ && !PageWasBusy && Location.kind_ == LocatorKind::Local
-        && !Root->IsRemote() && !Append && !Fallback && Query.isEmpty() && canApplyListingDelta()
+        && !Root->IsRemote() && !Append && !Fallback && Query.isEmpty() && UsesIndexedOrder() && canApplyListingDelta()
         && Sorts == pageSorts_ && property("hc.snapshotLocation").toString() == hc::workspace::LocationKey(Location)
         ? pageView_ : std::shared_ptr<PagedEntryIndex>{};
     auto* Watcher = new QFutureWatcher<ReadResult>(this);
@@ -980,6 +1380,7 @@ void CFSModel::refreshProvider()
                     Refresh();
                 };
                 if (acceptedRoots_.isEmpty()) publishNavigationFallback(Location);
+                else configureDirectoryWatch(WorkspaceLocation());
                 emit sigNavigationFailed(QString::fromStdString(Result.Failure().code_));
                 emit sigRefreshCompleted();
                 if (Result.Failure().category_ != ErrorCategory::Cancelled)
@@ -1012,7 +1413,7 @@ void CFSModel::refreshProvider()
             else publishProvider(std::move(Result.Value().page_.entries_), fileRuleSeedsUsable(RuleGeneration, Dark) ? std::move(Result.Value().styles_) : std::vector<hc::settings::FileRuleResult>{}, std::move(Prepared), AppliedColumns, CancelSort);
             if (CancelSort && !AppliedColumns) emit ColumnSortCancelled();
             setProperty("hc.snapshotLocation", hc::workspace::LocationKey(Location));
-            SetWatchEnabled(watchEnabled_);
+            SetWatchEnabled(watchEnabled_, watchRetained_);
             emit PageChanged();
             emit sigRefreshCompleted();
             const auto Notify = IsRoot() && (GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK)
@@ -1025,7 +1426,7 @@ void CFSModel::refreshProvider()
         if (Defer) applyListingWhenIdle(std::move(Apply), Generation);
         else Apply();
     });
-    Watcher->setFuture(QtConcurrent::run([Provider, Location, Context, Compare, Query, Match, ShowHidden, Elevated, Session, Append, Previous, SortPrevious, Rules, Dark, DeltaBase, TextOptions, PrepareNameRanks, PreviousRows = std::move(PreviousRows)]() mutable -> ReadResult {
+    Watcher->setFuture(QtConcurrent::run([Provider, Location, Context, Compare, Query, Match, ShowHidden, Elevated, Session, Append, Previous, SortPrevious, Rules, Dark, DeltaBase, TextOptions, PrepareNameRanks, SharedRead, PreviousRows = std::move(PreviousRows)]() mutable -> ReadResult {
         // Only provider ownership and immutable values enter this worker.
         try
         {
@@ -1036,11 +1437,7 @@ void CFSModel::refreshProvider()
                 if (!Open.HasValue()) return Open.Failure();
                 ActiveSession = std::move(Open.Value());
             }
-            auto Cursor = ActiveSession
-                ? ActiveSession->Enumerate(QString::fromStdString(Location.root_), Context, Provider)
-                : Provider->Enumerate(Location, Context).get();
-            if (!Cursor.HasValue()) return Cursor.Failure();
-            auto Source = PagedEntryIndex::Build(*Cursor.Value(), Context);
+            auto Source = SharedRead ? SharedRead->future_.result() : enumerateFolder(Provider, Location, Context, ActiveSession);
             if (!Source.HasValue()) return Source.Failure();
             if (Append) {
                 if (SortPrevious) {
@@ -1174,6 +1571,7 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
     }
     pageStop_.request_stop(); pageStop_ = std::stop_source{};
     pageBusy_ = true;
+    updateDirectoryWatchBusy();
     const auto Generation = ++pageGeneration_; const auto Navigation = generation_;
     const auto Source = pageSource_; const auto Current = pageView_;
     const auto Query = pageQuery_; const auto Match = pageMatch_; const auto ShowHidden = pageShowHidden_; const auto Metadata = index_;
@@ -1193,6 +1591,7 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
         auto Apply = [this, Result = std::move(Result), Generation, Navigation, Sorts, RuleGeneration, Dark, TextOptions]() mutable {
             if (Generation != pageGeneration_ || Navigation != generation_) return;
             pageBusy_ = false;
+            updateDirectoryWatchBusy();
             if (!Result.HasValue()) {
                 columnSorts_ = pageSorts_; completedSorts_ = pageSorts_; emit ColumnSortCancelled();
                 emit ColumnQueryStatus(QString::fromStdString(Result.Failure().code_)); return;
@@ -1342,7 +1741,7 @@ void CFSModel::StartEverythingSearch(const QString& Query, const QString& Match,
     searchResults_ = true; resultSource_ = ResultSource::Everything; everythingQuery_ = Query;
     pageSource_.reset(); pageView_.reset(); index_.Publish({});
     columnQueries_->Reset(); clearRuleFields(); iconStop_.request_stop(); ++iconGeneration_;
-    SetWatchEnabled(watchEnabled_);
+    SetWatchEnabled(watchEnabled_, watchRetained_);
     if (!searchLocal_) searchLocal_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
     if (!searchSmb_) searchSmb_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Smb);
     resetSortWorker();
@@ -1372,7 +1771,7 @@ void CFSModel::StartFlatListing(hc::flat::ListingOptions Options)
     flatKind_ = Options.roots_.empty() ? hc::storage::LocatorKind::Local : Options.roots_.front().kind_;
     pageSource_.reset(); pageView_.reset(); index_.Publish({});
     columnQueries_->Reset(); clearRuleFields(); iconStop_.request_stop(); ++iconGeneration_;
-    SetWatchEnabled(watchEnabled_);
+    SetWatchEnabled(watchEnabled_, watchRetained_);
     if (!searchLocal_) searchLocal_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
     if (!searchSmb_) searchSmb_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Smb);
     resetSortWorker();
@@ -1860,7 +2259,7 @@ std::optional<CFSModel::ListingDelta> CFSModel::prepareListingDelta(
 
 bool CFSModel::canApplyListingDelta() const
 {
-    if (!UsesIndexedOrder() || !hasPlainNameColumn(columnView_) || grouping_.enabled_ || searchResults_
+    if (!hasPlainNameColumn(columnView_) || grouping_.enabled_ || searchResults_
         || property("hc.selectAllEntries").toBool()) return false;
     const auto Async = [](const QString& Field) {
         return Field.startsWith("lua.") || !hc::columns::QueryFamily(Field).isEmpty() || hc::columns::IsVfsColumn(Field);
@@ -1870,6 +2269,19 @@ bool CFSModel::canApplyListingDelta() const
         if (Async(Definition.fieldId_) || Async(Definition.sortField_)
             || Async(hc::columns::DisplayField(columnView_.profile_, Definition))
             || std::any_of(Binding.compiled_.dependencies_.cbegin(), Binding.compiled_.dependencies_.cend(), Async)) return false;
+    }
+    return true;
+}
+
+bool CFSModel::canReplaceEntryRows() const
+{
+    if (!hasPlainNameColumn(columnView_) || searchResults_ || property("hc.selectAllEntries").toBool()) return false;
+    const auto Unsupported = [](const QString& Field) { return Field.startsWith("lua.") || hc::columns::IsVfsColumn(Field); };
+    for (const auto& Binding : columnView_.VecColumns) {
+        const auto& Definition = Binding.definition_;
+        if (Unsupported(Definition.fieldId_) || Unsupported(Definition.sortField_)
+            || Unsupported(hc::columns::DisplayField(columnView_.profile_, Definition))
+            || std::any_of(Binding.compiled_.dependencies_.cbegin(), Binding.compiled_.dependencies_.cend(), Unsupported)) return false;
     }
     return true;
 }
@@ -2182,11 +2594,14 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
     if (IndexOnly && !UseIndex) return;
     std::vector<EntrySnapshot> Targets;
     QHash<QString, int> Rows;
-    const QSet<QModelIndex> Requested(Entries.begin(), Entries.end());
+    QVector<int> RequestedRows;
+    RequestedRows.reserve(Entries.size());
+    for (const auto& Entry : Entries)
+        if (Entry.model() == this && Entry.row() >= 0 && Entry.row() < rowCount()) RequestedRows.append(Entry.row());
     const auto IsNetwork = [this](const Locator& At) { return isNetworkLocation(At); };
     bool HadSizes = false;
-    for (int Row = 0; Row < rowCount(); ++Row) {
-        if (!Entries.isEmpty() && !Requested.contains(index(Row, 0))) continue;
+    for (int Position = 0; Position < (Entries.isEmpty() ? rowCount() : RequestedRows.size()); ++Position) {
+        const int Row = Entries.isEmpty() ? Position : RequestedRows[Position];
         const auto& Item = vecNode_[Row];
         if (!Item->storageEntry_ || Item->Name_ == ".." || !Item->storageEntry_->directory_
             || (Item->Attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
@@ -3152,6 +3567,7 @@ void CFSModel::CancelColumnQueries()
 {
     queryRefreshTimer_.stop();
     pageStop_.request_stop(); ++pageGeneration_; pageBusy_ = false;
+    updateDirectoryWatchBusy();
     const bool HadPending = columnQueries_->Pending() != 0;
     const bool SortChanged = columnSorts_ != completedSorts_;
     columnQueries_->Cancel(); ruleFieldRequests_.clear(); columnSorts_ = completedSorts_;

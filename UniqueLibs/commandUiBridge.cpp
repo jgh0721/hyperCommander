@@ -471,6 +471,10 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         }
         const auto It = Guard->affectedLocations_.find(Result.snapshot_.id_);
         if (It == Guard->affectedLocations_.end()) return;
+        using hc::operations::JobKind;
+        const auto Kind = Result.snapshot_.metadata_.kind_;
+        const bool WatchedDeletion = Kind == JobKind::Delete || Kind == JobKind::Recycle;
+        const bool WatchedTransfer = Kind == JobKind::Copy || Kind == JobKind::Move;
         for (auto* Model : Guard->main_->findChildren<CFSModel*>()) {
             // 평면 보기는 영향받은 폴더만 다시 확인한다. 기준 폴더 전체를 다시 열거하지 않는다.
             if (Model->IsFlatListing()) {
@@ -498,7 +502,22 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
                     const auto Current = Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot());
                     if (Current.kind_ == At.kind_ && QDir::cleanPath(QString::fromStdString(At.root_)).compare(
                         QDir::cleanPath(QString::fromStdString(Current.root_)), Qt::CaseInsensitive) == 0)
-                    { Model->Refresh(); break; }
+                    {
+                        QStringList Removed;
+                        if ((WatchedDeletion || WatchedTransfer) && Current.kind_ == LocatorKind::Local) {
+                            const auto Folder = QDir::cleanPath(QString::fromStdString(Current.root_));
+                            // The preview is bounded for large jobs. The continuous native
+                            // watch covers the remainder, including skipped and concurrent work.
+                            for (const auto& Outcome : Result.items_) {
+                                if (!Outcome.sourceRemoved_ || !Outcome.source_ || Outcome.source_->locator_.kind_ != LocatorKind::Local) continue;
+                                const QFileInfo Source(QString::fromStdString(Outcome.source_->locator_.root_));
+                                if (QDir::cleanPath(Source.absolutePath()) == Folder) Removed.append(Source.fileName());
+                            }
+                            if (Model->ApplyWatchedFileJob(Removed, WatchedTransfer)) break;
+                        }
+                        Model->Refresh();
+                        break;
+                    }
                 }
         }
         Guard->affectedLocations_.erase(It);

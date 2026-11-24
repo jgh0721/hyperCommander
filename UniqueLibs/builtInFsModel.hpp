@@ -137,7 +137,9 @@ public:
     static constexpr int FileColorOverrideRole = Qt::UserRole + 66;
     static constexpr int GridSortRole = Qt::UserRole + 65;
     static constexpr int ColumnStateRole = Qt::UserRole + 64;
-    void SetWatchEnabled(bool Enabled);
+    void SetWatchEnabled(bool Enabled, bool RetainCoverage = false);
+    bool UsesDetailedDirectoryWatch() const;
+    bool ApplyWatchedFileJob(const QStringList& RemovedNames, bool ChangesMetadata);
     void SetSelectionInputActive(bool Active);
     void ApplyRefreshSettings();
     bool IsAutomaticRefresh() const { return automaticRefresh_; }
@@ -261,6 +263,10 @@ private:
     void                            createBuiltFsValues( const nsHC::TySpFileSource& Item, int Column );
     void                            setColumnBinding(const ColumnView& View);
     void                            refreshProvider();
+    void updateDirectoryWatchBusy();
+    void configureDirectoryWatch(const hc::storage::Locator& Location);
+    void reconcileDirectoryNames(const QStringList& Names);
+    void applyEntryReplacements(const hc::storage::PagedEntryIndex::Changes& Updates);
     void publishNavigationFallback(const hc::storage::Locator& Location);
     void requestPage(std::uint64_t Offset, bool Rebuild);
     hc::storage::Result<hc::storage::PagedEntryIndex::Less> pageComparison(const QString& ParentPath = {}, bool NameOnly = false, const ColumnView* Columns = nullptr) const;
@@ -286,6 +292,7 @@ private:
     static std::optional<ListingDelta> prepareListingDelta(const std::vector<hc::storage::EntrySnapshot>& Previous,
         const std::vector<hc::storage::EntrySnapshot>& Next);
     bool hasPlainNameColumn(const ColumnView& View) const;
+    bool canReplaceEntryRows() const;
     bool canApplyListingDelta() const;
     static nsHC::TySpFileSource makePreparedItem(hc::storage::EntrySnapshot Entry, PreparedFileRow Row);
     void applyListingDelta(std::vector<hc::storage::EntrySnapshot> Entries, PreparedListing Prepared);
@@ -458,6 +465,10 @@ private:
     bool                            providerEnabled_ = true;
     QtDirectoryTracker              tracker_;
     bool                            watchEnabled_ = false;
+    bool                            watchRetained_ = false, windowWatchSuspended_ = false;
+    bool                            entryRefreshBusy_ = false;
+    std::stop_source                entryRefreshStop_;
+    bool                            directoryWatchGap_ = false;
     bool                            selectionInputActive_ = false;
     bool                            autoRefreshRequested_ = false, automaticRefresh_ = false;
     bool                            appendOrder_ = false;

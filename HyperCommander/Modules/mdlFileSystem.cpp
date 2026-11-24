@@ -527,8 +527,15 @@ namespace nsHC
 
     std::shared_ptr<hc::storage::IStorageProvider> CFileSystemT::ReadProvider()
     {
-        if (!readProvider_)
-            readProvider_ = hc::storage::MakeNativeReadProvider(cate_ == FS_CATE_REMOTE ? hc::storage::LocatorKind::Smb : hc::storage::LocatorKind::Local);
+        if (!readProvider_) {
+            if (cate_ == FS_CATE_REMOTE) readProvider_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Smb);
+            else {
+                // Local folder models use the same process access token. Elevated
+                // directory access is a separate session owned by the model.
+                static const auto Local = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
+                readProvider_ = Local;
+            }
+        }
         return readProvider_;
     }
 

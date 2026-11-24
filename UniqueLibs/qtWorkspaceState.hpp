@@ -63,6 +63,7 @@ public:
     void PublishPrepared(Prepared Entries);
     void Publish(const std::vector<storage::EntrySnapshot>& Entries);
     void Append(const std::vector<storage::EntrySnapshot>& Entries);
+    void Replace(const storage::EntrySnapshot& Entry);
     bool Put(const storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation);
     QMap<QString, QString> Metadata(const storage::EntrySnapshot& Entry) const;
     QMap<QString, QMap<QString, QString>> SearchMetadata() const {

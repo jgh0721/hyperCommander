@@ -1634,6 +1634,7 @@ private slots:
         auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
         QTRY_VERIFY(!Model->IsLoading()); QTRY_COMPARE(Model->rowCount(), 121);
         QVERIFY(View->ApplyColumnProfile(hc::columns::DefaultProfile())); QVERIFY(View->SetListMode("one-line"));
+        QSignalSpy Enumerations(Model, &CFSModel::DirectoryReadStarted);
         auto* Grid = View->BaseView();
         const auto RowFor = [&](const QString& Name) {
             for (int I = 0; I < Grid->getRowCount(); ++I) {
@@ -1681,6 +1682,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Bridge->FileJobs()->Scheduler().Snapshot(OtherJob.Value().jobId_).Value().state_), 10000);
         QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 115);
         QTRY_COMPARE(FocusName(), QString("entry070.txt"));
+        QCOMPARE(Enumerations.size(), 0);
     }
 
     void todoBugLargeFolderFileOperationsUi()
@@ -1725,7 +1727,10 @@ private slots:
                 }
                 return inner_->Enumerate(At, Ctx);
             }
-            Task<EntrySnapshot> Resolve(Locator At, OperationContext Ctx) override { return inner_->Resolve(At, Ctx); }
+            Task<EntrySnapshot> Resolve(Locator At, OperationContext Ctx) override {
+                if (hold_ && Ctx.directoryEntryName_) return Ready<EntrySnapshot>(Error{ErrorCategory::Unavailable, "watch-replay-unavailable"});
+                return inner_->Resolve(At, Ctx);
+            }
             Task<EntrySnapshot> Stat(ResourceId Id, OperationContext Ctx) override { return inner_->Stat(Id, Ctx); }
             Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext Ctx) override { return inner_->OpenRead(Id, Ctx); }
         };
@@ -1751,7 +1756,7 @@ private slots:
         QElapsedTimer Clock; Clock.start(); View->RestoreSelection(Keys, Keys.front());
         QCOMPARE(View->CaptureSelection().size(), SelectedCount); const auto SelectMs = Clock.elapsed();
         QVERIFY2(SelectMs < 2000, qPrintable(QString("Selecting %1 of %2 took %3 ms").arg(SelectedCount).arg(Count).arg(SelectMs)));
-        // A real watcher rescan remains in flight across the confirmation dialog
+        // A watcher recovery scan remains in flight across the confirmation dialog
         // and every operation, so the old blanket IsLoading guard is exercised.
         Provider->hold_ = true;
         { QFile Trigger(Source.filePath("watch-trigger.txt")); QVERIFY(Trigger.open(QIODevice::WriteOnly)); Trigger.write("watch"); }
@@ -6621,6 +6626,8 @@ private slots:
             PendingRefreshes += DownloadIndex().data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker");
         });
         const auto Disconnect = qScopeGuard([&] { disconnect(FocusProbe); disconnect(RefreshProbe); });
+        QSignalSpy Enumerations(Model, &CFSModel::DirectoryReadStarted);
+        QSignalSpy Resets(Model, &QAbstractItemModel::modelReset);
         QTimer MarkerProbe; MarkerProbe.setInterval(25);
         connect(&MarkerProbe, &QTimer::timeout, this, [&] {
             const auto Index = DownloadIndex();
@@ -6636,6 +6643,7 @@ private slots:
         MarkerProbe.stop();
         qInfo() << "download-background-refresh automatic" << AutomaticRefreshes << "focus-steals" << FocusSteals << "pending-at-publication" << PendingRefreshes << "pending-samples" << PendingSamples;
         QVERIFY(AutomaticRefreshes >= 6); QCOMPARE(FocusSteals, 0); QCOMPARE(PendingRefreshes, 0); QCOMPARE(PendingSamples, 0);
+        QCOMPARE(Enumerations.size(), 0); QCOMPARE(Resets.size(), 0);
         QVERIFY(Holds(RightView)); QCOMPARE(LeftView->CaptureFocus(), LeftCursor);
     }
     void groupedParentPageKeysUi()
@@ -8350,6 +8358,7 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(Panel, "processPanelStatusText", Qt::DirectConnection));
         QTRY_VERIFY(!Panel->findChild<QLabel*>("lblVolumeStatus")->text().contains(QStringLiteral("조회 중")));
         int AutomaticStarts = 0;
+        int AutomaticCompletions = 0;
         bool StableFooter = true, HiddenProgress = true, StableHeader = true;
         QString PreviousLeft, PreviousRight;
         const auto Started = connect(Model, &CFSModel::DirectoryReadStarted, Panel, [&] {
@@ -8362,6 +8371,7 @@ private slots:
         });
         const auto Completed = connect(Model, &CFSModel::sigRefreshCompleted, Panel, [&] {
             if (Model->IsAutomaticRefresh()) {
+                ++AutomaticCompletions;
                 const auto Text = Panel->findChild<QLabel*>("lblVolumeStatus")->text();
                 StableHeader &= !Text.contains(QStringLiteral("조회 중"));
                 HiddenProgress &= Busy->isHidden();
@@ -8377,7 +8387,8 @@ private slots:
             QVERIFY(Status->leftText().startsWith(QStringLiteral("파일 ")));
             QVERIFY(Busy->isHidden());
         }
-        QVERIFY(AutomaticStarts >= 4); QVERIFY(StableFooter); QVERIFY(StableHeader); QVERIFY(HiddenProgress);
+        QCOMPARE(AutomaticStarts, 0); QVERIFY(AutomaticCompletions >= 4);
+        QVERIFY(StableFooter); QVERIFY(StableHeader); QVERIFY(HiddenProgress);
         Policy.excludedDrives = QDir::fromNativeSeparators(Directory.path()).left(2); General["refresh"] = Policy.ToJson();
         QVERIFY(Settings.Put(hc::settings::Section::General, General)); Model->ApplyRefreshSettings();
         QVERIFY(Create("excluded.txt")); QTest::qWait(600); QVERIFY(!names(Model).contains("excluded.txt"));
@@ -12541,6 +12552,7 @@ private slots:
         QSignalSpy Resets(Model, &QAbstractItemModel::modelReset);
         QSignalSpy Inserts(Model, &QAbstractItemModel::rowsInserted);
         QSignalSpy Removals(Model, &QAbstractItemModel::rowsRemoved);
+        QSignalSpy Enumerations(Model, &CFSModel::DirectoryReadStarted);
         const auto Added = Directory.filePath("aaa-added.txt");
         { QFile File(Added); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("new"), 3); }
         { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::Append)); QCOMPARE(File.write("modified"), 8); }
@@ -12555,12 +12567,35 @@ private slots:
         QVERIFY(Visual.isValid());
         QCOMPARE(View->BaseView()->getRow(Visual).rowIndex(), 1);
         QVERIFY(QFile::remove(Added));
-        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == Entries + 1, 15000);
+        { QFile File(Directory.filePath(FileName(Entries / 2 + 1))); QVERIFY(File.open(QIODevice::Append)); QCOMPARE(File.write("other"), 5); }
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == Entries + 1 && Model->GetTotalSize() == Entries + 13, 15000);
         QCOMPARE(Removals.size(), 1); QCOMPARE(Resets.size(), 0);
-        QCOMPARE(Model->GetTotalSize(), Entries + 8);
         QCOMPARE(View->CaptureFocus(), Key); QCOMPARE(View->CaptureSelection(), QStringList{Key});
         QCOMPARE(View->CaptureScrollState()["anchor"].toString(), Anchor);
         QCOMPARE(QApplication::focusWidget()->window(), static_cast<QWidget*>(main_));
+        const auto Before = Model->SelectAllEntries(); QVERIFY(Before.HasValue());
+        for (int Pass = 0; Pass < 5; ++Pass) {
+            { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::Append)); QCOMPARE(File.write("grow"), 4); }
+            QTRY_COMPARE_WITH_TIMEOUT(Model->GetTotalSize(), quint64(Entries + 13 + 4 * (Pass + 1)), 5000);
+        }
+        Model->SetWatchEnabled(false, true);
+        { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::Append)); QCOMPARE(File.write("parked"), 6); }
+        QTest::qWait(300);
+        QCOMPARE(Model->GetTotalSize(), quint64(Entries + 33));
+        Model->SetWatchEnabled(true);
+        QTRY_COMPARE_WITH_TIMEOUT(Model->GetTotalSize(), quint64(Entries + 39), 5000);
+        QCOMPARE(Enumerations.size(), 0);
+        QCOMPARE(Resets.size(), 0);
+        QCOMPARE(Inserts.size(), 1); QCOMPARE(Removals.size(), 1);
+        const auto OldSelection = Before.Value()->Read(0, Entries);
+        QVERIFY(OldSelection.HasValue());
+        const auto Old = std::find_if(OldSelection.Value().entries_.begin(), OldSelection.Value().entries_.end(),
+            [&](const auto& Entry) { return Entry.name_ == Name.toStdString(); });
+        QVERIFY(Old != OldSelection.Value().entries_.end());
+        QCOMPARE(Old->size_, std::uint64_t(9));
+        QVERIFY(Persistent.isValid());
+        QCOMPARE(View->CaptureFocus(), Key);
+        QCOMPARE(View->CaptureSelection(), QStringList{Key});
     }
 
     void scopedSearchUi()

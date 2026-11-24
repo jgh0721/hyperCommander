@@ -143,6 +143,15 @@ void DirectoryIndex::Append(const std::vector<storage::EntrySnapshot>& Entries) 
         records_.insert(Key, Record{Entry, {}});
     }
 }
+void DirectoryIndex::Replace(const storage::EntrySnapshot& Entry) {
+    const auto Key = SelectionKey(Entry);
+    const auto Match = records_.find(Key);
+    if (Match == records_.end()) return;
+    valued_.remove(Key);
+    Match->entry_ = Entry;
+    Match->values_.clear();
+    ++generation_;
+}
 bool DirectoryIndex::Put(const storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation) {
     // A refresh may finish while metadata is being queried. An unchanged
     // revision still describes the same content; unversioned entries require

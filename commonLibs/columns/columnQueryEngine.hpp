@@ -97,6 +97,16 @@ namespace hc::columns
             statusDirty_ = false; deferred_.invalidate(); drain_.stop();
         }
         void Resume() { if (paused_) { std::lock_guard Lock(shared_->lock_); shared_->stop_ = std::stop_source{}; paused_ = false; } }
+        void InvalidateFamily(const QString& Path, const QString& Family)
+        {
+            if (Family.isEmpty()) return;
+            const auto Key = Path + QChar(0) + Family;
+            cache_.remove(Key);
+            if (!pending_.remove(Key)) return;
+            std::lock_guard Lock(shared_->lock_);
+            for (auto& Queue : shared_->queues_)
+                Queue.removeIf([&](const Job& Item) { return Item.key_ == Key; });
+        }
         CellValue Read(const QString& Path, const QString& Field, bool Request = true, bool Urgent = true, bool SlowStorage = false)
         {
             const auto Family = QueryFamily(Field); if (Family.isEmpty()) return CellValue::Missing(ValueState::Unsupported);
@@ -108,7 +118,7 @@ namespace hc::columns
             if (paused_) return CellValue::Missing(ValueState::OnDemand);
             if (Request && !pending_.contains(Key)) {
                 if (pending_.size() >= 4096) return CellValue::Missing(ValueState::OnDemand, "query-budget");
-                pending_.insert(Key); ++started_; statusDirty_ = true;
+                pending_.insert(Key, ++started_); statusDirty_ = true;
                 const bool Network = ((Path.startsWith("\\\\") || Path.startsWith("//")) && !Path.startsWith("\\\\?\\") && !Path.startsWith("//?/"))
                     || Path.startsWith("\\\\?\\UNC\\", Qt::CaseInsensitive) || Path.startsWith("//?/UNC/", Qt::CaseInsensitive);
                 const bool Slow = SlowStorage || Network ||
@@ -116,7 +126,7 @@ namespace hc::columns
                 {
                     std::lock_guard Lock(shared_->lock_);
                     auto& Queue = shared_->queues_[Slow ? 1 : 0];
-                    const Job Next{Path, Family, Key, shared_->epoch_};
+                    const Job Next{Path, Family, Key, shared_->epoch_, started_};
                     if (Urgent) Queue.prepend(Next); else Queue.append(Next);
                 }
                 schedule(shared_);
@@ -131,7 +141,7 @@ namespace hc::columns
         }
     private:
         struct Cached { FieldValues values_; QElapsedTimer age_; };
-        struct Job { QString path_, family_, key_; quint64 epoch_ = 0; };
+        struct Job { QString path_, family_, key_; quint64 epoch_ = 0, request_ = 0; };
         struct Done { Job job_; FieldValues values_; };
         // Shared with the worker loops, which outlive the engine when an OS call is still running.
         struct Shared
@@ -215,7 +225,7 @@ namespace hc::columns
                 Epoch = shared_->epoch_; Loops = shared_->loops_[0] + shared_->loops_[1];
             }
             for (auto& Item : Finished) {
-                if (Item.job_.epoch_ != Epoch) continue;
+                if (Item.job_.epoch_ != Epoch || pending_.value(Item.job_.key_) != Item.job_.request_) continue;
                 auto* Entry = new Cached{std::move(Item.values_), {}}; Entry->age_.start();
                 cache_.insert(Item.job_.key_, Entry); pending_.remove(Item.job_.key_);
                 changedPaths_.insert(Item.job_.path_); changedFamilies_.insert(Item.job_.family_);
@@ -231,7 +241,8 @@ namespace hc::columns
         }
         std::shared_ptr<Shared> shared_;
         QCache<QString, Cached> cache_;
-        QSet<QString> pending_, changedPaths_, changedFamilies_, reportedFamilies_;
+        QHash<QString, quint64> pending_;
+        QSet<QString> changedPaths_, changedFamilies_, reportedFamilies_;
         QTimer drain_;
         QElapsedTimer deferred_;
         quint64 started_ = 0;

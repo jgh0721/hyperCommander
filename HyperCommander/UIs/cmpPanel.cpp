@@ -1412,7 +1412,11 @@ void CmpPanel::on_tabWidget_currentChanged(int Index)
             Other->StopEverythingSearch();
             if (Other->IsFlatRunning()) Other->StopFlatListing(false);
         }
-        static_cast<CFSModel*>(vecTabStates[Candidate]->Model)->SetWatchEnabled(Candidate == Index);
+        auto* CandidateModel = static_cast<CFSModel*>(vecTabStates[Candidate]->Model);
+        // Retain the last active local tab alongside the current one. It collects
+        // names for a quick return without updating a hidden grid.
+        const bool Selected = Candidate == Index;
+        CandidateModel->SetWatchEnabled(Selected, !Selected && CandidateModel->UsesDetailedDirectoryWatch());
     }
     if (WasPending) restoreSystemView(Index);
     viewMode_->setVisible(!State->SystemView);

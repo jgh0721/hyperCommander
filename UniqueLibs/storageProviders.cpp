@@ -357,16 +357,38 @@ namespace hc::storage
             }
             Task<EntrySnapshot> Resolve(Locator At, OperationContext Context) override
             {
-                return Run<EntrySnapshot>([At = std::move(At), Context, Id = id_, Prefix = session_, Kind = kind_]() -> Result<EntrySnapshot> {
+                return Run<EntrySnapshot>([At = std::move(At), Context, Id = id_, Prefix = session_, Kind = kind_]() mutable -> Result<EntrySnapshot> {
                     if (const auto Failure = Context.Check(Id)) return *Failure;
                     if (At.kind_ != Kind || At.root_.empty() || !At.nesting_.empty()) return Error{ErrorCategory::InvalidRequest, "locator-kind", Id};
+                    WIN32_FIND_DATAW Found{};
+                    const bool Listing = Context.directoryEntryName_ && Kind == LocatorKind::Local;
+                    if (Listing) {
+                        const auto File = FindFirstFileW(FilePath(At.root_).c_str(), &Found);
+                        if (File == INVALID_HANDLE_VALUE) return NativeError(GetLastError(), Id);
+                        FindClose(File);
+                        const auto Separator = At.root_.find_last_of("\\/");
+                        At.root_.replace(Separator == std::string::npos ? 0 : Separator + 1, std::string::npos, Utf8(Found.cFileName));
+                    }
                     WIN32_FILE_ATTRIBUTE_DATA Data{};
                     ResourceRevision ActualRevision;
                     DWORD ReparseTag = 0;
-                    if (!ReadAttributes(FilePath(At.root_), Data, &ActualRevision, nullptr, &ReparseTag)) return NativeError(GetLastError(), Id);
+                    DWORD MetadataError = ERROR_SUCCESS;
+                    if (!ReadAttributes(FilePath(At.root_), Data, &ActualRevision, nullptr, &ReparseTag)) {
+                        MetadataError = GetLastError();
+                        if (!Listing || (MetadataError != ERROR_ACCESS_DENIED && MetadataError != ERROR_SHARING_VIOLATION))
+                            return NativeError(MetadataError, Id);
+                        Data = {Found.dwFileAttributes, Found.ftCreationTime, Found.ftLastAccessTime, Found.ftLastWriteTime,
+                            Found.nFileSizeHigh, Found.nFileSizeLow};
+                        ReparseTag = Found.dwReserved0;
+                    }
                     const auto Separator = At.root_.find_last_of("\\/");
                     auto Value = Entry(Id, Prefix, At, At.root_.substr(Separator == std::string::npos ? 0 : Separator + 1), Data);
-                    Value.id_.revision_ = std::move(ActualRevision);
+                    if (MetadataError) {
+                        Value.hints_["nativeListingRevision"] = Value.id_.revision_->token_;
+                        Value.id_.revision_.reset();
+                        Value.hints_["comparisonError"] = "win32:" + std::to_string(MetadataError);
+                    } else Value.id_.revision_ = std::move(ActualRevision);
+                    if (Found.cAlternateFileName[0]) Value.hints_["nativeAlternateName"] = Utf8(Found.cAlternateFileName);
                     Value.hints_["reparseTag"] = std::to_string(ReparseTag);
                     return Value;
                 });
@@ -488,7 +510,8 @@ namespace hc::storage
                         const auto Handle = Recovery.Invoke([&] {
                             const auto Pattern = Path + (Path.ends_with(L'\\') || Path.ends_with(L'/') ? L"*" : L"\\*");
                             return native::FindFirstCompatible([&](DWORD Flags) {
-                                return FindFirstFileExW(Pattern.c_str(), FindExInfoBasic, &Found, FindExSearchNameMatch, nullptr, Flags);
+                                const auto Info = Kind == LocatorKind::Local && Context.allowUnavailableChildMetadata_ ? FindExInfoStandard : FindExInfoBasic;
+                                return FindFirstFileExW(Pattern.c_str(), Info, &Found, FindExSearchNameMatch, nullptr, Flags);
                             }, Context);
                         }, [](HANDLE Value) { return Value == INVALID_HANDLE_VALUE; }, Context);
                         if (Handle == INVALID_HANDLE_VALUE)
@@ -534,6 +557,7 @@ namespace hc::storage
                                 auto Item = Entry(Id, Prefix, {Kind, ChildPath}, Name, Data);
                                 if (HasRevision) Item.id_.revision_ = std::move(ActualRevision);
                                 else { Item.hints_["nativeListingRevision"] = Item.id_.revision_->token_; Item.id_.revision_.reset(); Item.hints_["comparisonError"] = "win32:" + std::to_string(MetadataError); }
+                                if (Found.cAlternateFileName[0]) Item.hints_["nativeAlternateName"] = Utf8(Found.cAlternateFileName);
                                 Item.hints_["reparseTag"] = std::to_string(Found.dwReserved0);
                                 Entries.push_back(std::move(Item));
                             } while (FindNextFileW(Handle, &Found));

@@ -181,6 +181,9 @@ namespace hc::storage
         // Coordinator-only execution hints; neither grants access to a path.
         bool directContent_ = true;
         bool workerRead_ = false;
+        // A directory notification may use an alternate name. Resolve the exact
+        // directory entry spelling when reconciling a native child.
+        bool directoryEntryName_ = false;
         std::shared_ptr<MutationScope> mutationScope_;
         std::shared_ptr<IRemovalPreparation> removalPreparation_;
         // Local coordinator policy. One preserves sequential execution; zero

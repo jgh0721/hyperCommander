@@ -143,6 +143,64 @@ Result<EntrySnapshot> DecodeEntry(const QByteArray& Bytes)
     return Entry;
 }
 std::uint64_t PagedEntryIndex::Count() const { return records_->Count(); }
+std::shared_ptr<PagedEntryIndex> PagedEntryIndex::ReplaceEntries(const Changes& Updates) const
+{
+    auto Next = std::shared_ptr<PagedEntryIndex>(new PagedEntryIndex(*this));
+    for (const auto& [Path, Entry] : Updates)
+        if (Entry) Next->replacements_.insert_or_assign(Path, *Entry);
+    return Next;
+}
+
+Result<std::shared_ptr<PagedEntryIndex>> PagedEntryIndex::Reconcile(Changes Updates, const OperationContext& Context) const
+{
+    class ChangedCursor final : public IEntryCursor {
+    public:
+        ChangedCursor(const PagedEntryIndex& Base, Changes Updates) : base_(Base), updates_(std::move(Updates)) {
+            for (const auto& [Path, Entry] : updates_)
+                if (!Entry) removedNames_.insert(QString::fromStdString(Path).toCaseFolded(), Path);
+        }
+        Task<EntryPage> Next(std::size_t MaxItems, OperationContext Context) override {
+            EntryPage Page;
+            while (offset_ < base_.Count() && Page.entries_.size() < MaxItems) {
+                auto Read = base_.Read(offset_, MaxItems - Page.entries_.size(), Context);
+                if (!Read.HasValue()) return Ready<EntryPage>(Read.Failure());
+                offset_ += Read.Value().entries_.size();
+                for (auto& Entry : Read.Value().entries_) {
+                    auto Match = updates_.find(Entry.locator_.root_);
+                    if (Match == updates_.end() && Entry.locator_.kind_ == LocatorKind::Local) {
+                        const auto Alias = Entry.hints_.find("nativeAlternateName");
+                        if (Alias != Entry.hints_.end()) {
+                            const auto& Path = Entry.locator_.root_;
+                            const auto Prefix = Path.find_last_of("\\/");
+                            const auto Key = QString::fromStdString(Path.substr(0, Prefix == std::string::npos ? 0 : Prefix + 1) + Alias->second).toCaseFolded();
+                            if (const auto Found = removedNames_.constFind(Key); Found != removedNames_.cend())
+                                Match = updates_.find(*Found);
+                        }
+                    }
+                    if (Match == updates_.end()) Page.entries_.push_back(std::move(Entry));
+                    else {
+                        if (Match->second) Page.entries_.push_back(std::move(*Match->second));
+                        updates_.erase(Match);
+                    }
+                }
+            }
+            while (!updates_.empty() && Page.entries_.size() < MaxItems) {
+                auto Node = updates_.extract(updates_.begin());
+                if (Node.mapped()) Page.entries_.push_back(std::move(*Node.mapped()));
+            }
+            Page.end_ = offset_ == base_.Count() && updates_.empty();
+            return Ready<EntryPage>(std::move(Page));
+        }
+    private:
+        const PagedEntryIndex& base_;
+        Changes updates_;
+        QHash<QString, std::string> removedNames_;
+        std::uint64_t offset_ = 0;
+    };
+    ChangedCursor Cursor(*this, std::move(Updates));
+    return Build(Cursor, Context);
+}
+
 Result<std::shared_ptr<PagedEntryIndex>> PagedEntryIndex::Build(IEntryCursor& Cursor, const OperationContext& Context, const QString& Parent)
 {
     auto Created = DiskRecords::Create(Parent); if (!Created.HasValue()) return Created.Failure();
@@ -177,6 +235,8 @@ Result<EntryPage> PagedEntryIndex::Read(std::uint64_t Offset, std::size_t MaxIte
         if (auto Failure = Context.Check({})) return *Failure;
         auto Bytes = records_->Read(Row); if (!Bytes.HasValue()) return Bytes.Failure();
         auto Entry = DecodeEntry(Bytes.Value()); if (!Entry.HasValue()) return Entry.Failure();
+        if (const auto Found = replacements_.find(Entry.Value().locator_.root_); Found != replacements_.end())
+            Entry.Value() = Found->second;
         Page.entries_.push_back(std::move(Entry.Value()));
     }
     Page.end_ = End == Count(); return Page;
@@ -235,6 +295,10 @@ Result<std::shared_ptr<PagedEntryIndex>> PagedEntryIndex::Project(const Less& Co
             const auto Ordinal = Offset++;
             auto Bytes = records_->Read(Ordinal); if (!Bytes.HasValue()) return Bytes.Failure();
             auto Entry = DecodeEntry(Bytes.Value()); if (!Entry.HasValue()) return Entry.Failure();
+            if (const auto Found = replacements_.find(Entry.Value().locator_.root_); Found != replacements_.end()) {
+                Entry.Value() = Found->second;
+                Bytes.Value() = EncodeEntry(Entry.Value());
+            }
             if (Filter && !Filter(Entry.Value())) continue;
             // Encoded payload plus decoded strings/map nodes and row overhead.
             BytesUsed += std::size_t(Bytes.Value().size()) * 3 + sizeof(Row) + Entry.Value().hints_.size() * 96;
@@ -345,7 +409,7 @@ Result<std::shared_ptr<ISelectionManifest>> PagedEntryIndex::SelectRanges(const 
     }
     auto Flushed = Manifest.Value()->Flush(); if (!Flushed.HasValue()) return Flushed.Failure();
     // The facade shares files, not the lifetime of the UI/provider object.
-    auto Source = std::shared_ptr<PagedEntryIndex>(new PagedEntryIndex(records_, revision_));
+    auto Source = std::shared_ptr<PagedEntryIndex>(new PagedEntryIndex(*this));
     return std::shared_ptr<ISelectionManifest>(new Selection(std::move(Source), Manifest.Value(), Count));
 }
 Result<std::shared_ptr<ISelectionManifest>> PagedEntryIndex::SelectAll(const OperationContext& Context) const { return Select({{0, Count()}}, Context); }

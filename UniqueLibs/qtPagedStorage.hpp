@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "commonLibs/storage/entryIndex.hpp"
+#include <map>
 #include <QByteArray>
 #include <QString>
 #include <functional>
@@ -32,6 +33,7 @@ namespace hc::storage
     public:
         using Less = std::function<bool(const EntrySnapshot&, const EntrySnapshot&)>;
         using Accept = std::function<bool(const EntrySnapshot&)>;
+        using Changes = std::map<std::string, std::optional<EntrySnapshot>, std::less<>>;
         using NextRange = std::function<Result<std::optional<EntryRange>>() >;
         struct SortBuffer {
             std::size_t entries_ = 8192;
@@ -45,6 +47,11 @@ namespace hc::storage
             const OperationContext& Context = {}) const override;
         Result<std::shared_ptr<PagedEntryIndex>> Project(const Less& Compare, const Accept& Filter,
             const OperationContext& Context, SortBuffer Buffer) const;
+        // Replace known rows without copying the base records. Reconcile also accepts
+        // new paths and removals and compacts the snapshot without provider I/O.
+        std::shared_ptr<PagedEntryIndex> ReplaceEntries(const Changes& Changes) const;
+        std::size_t ReplacementCount() const { return replacements_.size(); }
+        Result<std::shared_ptr<PagedEntryIndex>> Reconcile(Changes Changes, const OperationContext& Context) const;
         Result<std::shared_ptr<ISelectionManifest>> Select(const std::vector<EntryRange>& Ranges,
             const OperationContext& Context = {}) const;
         Result<std::shared_ptr<ISelectionManifest>> SelectAll(const OperationContext& Context = {}) const;
@@ -55,6 +62,7 @@ namespace hc::storage
             : records_(std::move(Records)), revision_(std::move(Revision)) {}
         std::shared_ptr<DiskRecords> records_;
         std::optional<ResourceRevision> revision_;
+        std::map<std::string, EntrySnapshot, std::less<>> replacements_;
     };
     QByteArray EncodeEntry(const EntrySnapshot& Entry);
     Result<EntrySnapshot> DecodeEntry(const QByteArray& Bytes);

@@ -57,6 +57,39 @@ class PagedStorageTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void reconcileKeepsPreviousSelection()
+    {
+        std::vector<EntrySnapshot> Entries(4);
+        for (std::size_t Row = 0; Row < Entries.size(); ++Row) {
+            auto& Entry = Entries[Row];
+            Entry.name_ = std::to_string(Row);
+            Entry.locator_ = {LocatorKind::Local, "C:/folder/" + Entry.name_};
+            Entry.size_ = Row + 1;
+        }
+        hc::refresh::OrderCursor Cursor({}, Entries);
+        auto Base = PagedEntryIndex::Build(Cursor, {}); QVERIFY(Base.HasValue());
+        auto Captured = Base.Value()->SelectAll(); QVERIFY(Captured.HasValue());
+        auto Changed = Entries[1]; Changed.size_ = 50;
+        PagedEntryIndex::Changes Replacements{{Changed.locator_.root_, Changed}};
+        auto Patched = Base.Value()->ReplaceEntries(Replacements);
+        QCOMPARE(Patched->Count(), std::uint64_t(4));
+        QCOMPARE(Patched->Read(1, 1).Value().entries_.front().size_, std::uint64_t(50));
+        auto Sorted = Patched->Project([](const auto& A, const auto& B) { return A.size_ > B.size_; }, {}, {}, {});
+        QVERIFY(Sorted.HasValue());
+        QCOMPARE(Sorted.Value()->Read(0, 1).Value().entries_.front().name_, "1"s);
+        auto Added = Entries[0]; Added.name_ = "new"; Added.locator_.root_ = "C:/folder/new";
+        PagedEntryIndex::Changes Structural{{Entries[0].locator_.root_, std::nullopt},
+            {Entries[2].locator_.root_, std::nullopt}, {Added.locator_.root_, Added}};
+        OperationContext Context; Context.maxPageItems_ = 1;
+        auto Updated = Patched->Reconcile(std::move(Structural), Context); QVERIFY(Updated.HasValue());
+        auto Page = Updated.Value()->Read(0, 10); QVERIFY(Page.HasValue());
+        QCOMPARE(Page.Value().entries_.size(), std::size_t(3));
+        QCOMPARE(Page.Value().entries_[0].size_, std::uint64_t(50));
+        QCOMPARE(Page.Value().entries_[1].name_, "3"s);
+        QCOMPARE(Page.Value().entries_[2].name_, "new"s);
+        QCOMPARE(Captured.Value()->Read(1, 1).Value().entries_.front().size_, std::uint64_t(2));
+    }
+
     void defaultIndexWatcherIsolation()
     {
         auto Lease = DiskRecords::Create(); QVERIFY(Lease.HasValue());
