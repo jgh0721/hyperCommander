@@ -5,7 +5,7 @@
 #include "commonLibs/storage/nativeTemporaryDirectory.hpp"
 
 namespace hc::iso {
-struct RewriteSource { std::string diskPath_, imagePath_; bool directory_ = false; };
+struct RewriteSource { std::string diskPath_, imagePath_; bool directory_ = false; HcIsoMetadata metadata_{}; };
 struct RewriteRequest {
     std::vector<RewriteSource> sources_;
     uint32_t profile_ = HC_ISO_UDF_BRIDGE;

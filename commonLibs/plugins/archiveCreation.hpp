@@ -122,6 +122,7 @@ namespace hc::plugins
         // This bounds the physical output, including metadata and alignment.
         std::uint64_t maxImageBytes_ = 128ull * 1024 * 1024 * 1024;
         bool verifyContents_ = true;
+        bool preserveEntryTimes_ = true;
         bool operator==(const IsoCreateSettings&) const = default;
     };
     // WCX/DOpus own their settings. Without a verified snapshot API they use

@@ -40,6 +40,13 @@ int hcIsoGetEntry(const HcIsoImage* Image, uint64_t Index, HcIsoEntry* Entry)
         const auto& Item = Image->reader_.Entries()[size_t(Index)]; Entry->path_ = Item.path_.c_str(); Entry->directory_ = Item.directory_; Entry->size_ = Item.size_;
     });
 }
+int hcIsoGetMetadata(const HcIsoImage* Image, uint64_t Index, HcIsoMetadata* Metadata)
+{
+    return Boundary([&] {
+        hc::iso::Require(Image && Metadata && Index < Image->reader_.Entries().size(), "Invalid metadata arguments");
+        *Metadata = Image->reader_.Entries()[size_t(Index)].metadata_;
+    });
+}
 int hcIsoRead(HcIsoImage* Image, uint64_t Index, uint64_t Offset, void* Buffer, uint32_t Capacity, uint32_t* Read)
 {
     if (Read) *Read = 0;
@@ -66,10 +73,14 @@ int hcIsoBuild(const char* StagingPath, const HcIsoSource* Sources, uint64_t Cou
 }
 int hcIsoBuildEx(const char* StagingPath, const HcIsoSource* Sources, uint64_t Count, const HcIsoOptionsEx* Options)
 {
+    return hcIsoBuildWithMetadata(StagingPath, Sources, Count, Options, nullptr);
+}
+int hcIsoBuildWithMetadata(const char* StagingPath, const HcIsoSource* Sources, uint64_t Count, const HcIsoOptionsEx* Options, const HcIsoMetadata* Metadata)
+{
     return Boundary([&] {
         hc::iso::Require(Options && Options->structSize_ == sizeof(*Options) && Options->version_ == 1
             && !(Options->flags_ & ~(HC_ISO_SHARE_DUPLICATE_CONTENTS | HC_ISO_EXPLICIT_TIMESTAMP | HC_ISO_VERIFY_STRUCTURE_ONLY)), "Unsupported extended build options", HC_ISO_UNSUPPORTED);
-        hc::iso::Writer(Sources, Count, Options->base_, Options->flags_).Write(hc::iso::DiskPath(StagingPath));
+        hc::iso::Writer(Sources, Count, Options->base_, Options->flags_, Metadata).Write(hc::iso::DiskPath(StagingPath));
     });
 }
 }

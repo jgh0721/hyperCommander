@@ -3,6 +3,10 @@
 #include "HyperCommanderBuiltInPlugin/IsoImage/isoJob.hpp"
 #include "HyperCommanderBuiltInPlugin/IsoImage/builtinIso.hpp"
 #include "UniqueLibs/storageProviders.hpp"
+#include "UniqueLibs/nativeWritableStorage.hpp"
+#include "HyperCommanderBuiltInPlugin/IsoImage/isoProvider.hpp"
+#include "HyperCommanderBuiltInPlugin/IsoImage/isoRewrite.hpp"
+#include <Windows.h>
 
 using namespace hc::storage;
 using namespace hc::operations;
@@ -13,6 +17,51 @@ QByteArray Read(const QString& Path) { QFile File(Path); return File.open(QIODev
 class IsoJobTests : public QObject {
     Q_OBJECT
 private slots:
+    void extractMetadata_data()
+    {
+        QTest::addColumn<unsigned>("Profile");
+        for (unsigned Profile = 0; Profile <= 3; ++Profile) QTest::newRow(QByteArray::number(Profile)) << Profile;
+    }
+    void extractMetadata()
+    {
+        QFETCH(unsigned, Profile);
+        QTemporaryDir Directory;
+        const auto Input = Directory.filePath("payload");
+        QVERIFY(Put(Input, "contents"));
+        constexpr int64_t Modified = 1666666666123LL;
+        hc::iso::RewriteRequest Build; Build.profile_ = Profile;
+        Build.sources_ = {{"", "FOLDER", true, {Modified, 0x27, 0x27, 1}},
+            {Input.toStdString(), "FOLDER/FILE", false, {Modified + 1, 0x27, 0x27, 1}}};
+        auto Image = hc::iso::PrepareRewrite(Build).get();
+        QVERIFY2(Image.HasValue(), Image.HasValue() ? "" : Image.Failure().code_.c_str());
+        Locator Root{LocatorKind::Archive, Image.Value()->Path().toStdString(), {{"wcx", "/"}}};
+        auto Provider = hc::iso::MakeReadProvider(Root);
+        Root.nesting_.back().entry_ = "/FOLDER";
+        auto Entry = Provider->Resolve(Root, {}).get(); QVERIFY(Entry.HasValue());
+        FileOperationRequest Copy; Copy.sources_ = {{Entry.Value(), Provider, {}}};
+        const auto Share = qEnvironmentVariable("HC_TEST_ARCHIVE_OUTPUT_ROOT");
+        QTemporaryDir Output(QDir(Share.isEmpty() ? Directory.path() : Share).filePath("iso-metadata-XXXXXX"));
+        QVERIFY(Output.isValid());
+        const auto Kind = Share.isEmpty() ? LocatorKind::Local : LocatorKind::Smb;
+        Copy.destination_ = {Kind, Output.path().toStdString()};
+        Copy.destinationWriter_ = MakeNativeWritableStorage(Kind, MakeNativeReadProvider(Kind));
+        const auto Folder = Output.filePath("FOLDER"), File = Folder + "/FILE";
+        const auto Reset = qScopeGuard([&] {
+            SetFileAttributesW(reinterpret_cast<LPCWSTR>(File.utf16()), FILE_ATTRIBUTE_NORMAL);
+            SetFileAttributesW(reinterpret_cast<LPCWSTR>(Folder.utf16()), FILE_ATTRIBUTE_NORMAL);
+        });
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        auto Job = SubmitFileOperation(Scheduler, Copy); QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
+        const auto Result = Job.Value().completion_.get();
+        QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "extract");
+        QCOMPARE(Read(File), QByteArray("contents"));
+        for (const auto& Path : {File, Folder}) {
+            const auto Flags = GetFileAttributesW(reinterpret_cast<LPCWSTR>(Path.utf16()));
+            QVERIFY(Flags != INVALID_FILE_ATTRIBUTES); QCOMPARE(Flags & 0x27u, 0x27u);
+            QCOMPARE(QFileInfo(Path).lastModified().toMSecsSinceEpoch(), Modified + (Path == File));
+        }
+    }
     void schedulerCommitAndCancel()
     {
         QTemporaryDir Directory; const auto Source = Directory.filePath("한글.txt"), Target = Directory.filePath("result.iso"); QVERIFY(Put(Source, QByteArray(4097, 'a')));
@@ -27,6 +76,8 @@ private slots:
         QVERIFY(Result.cleanupErrors_.empty()); QVERIFY(QFileInfo(Target).size() > 256 * 2048);
         auto Backend = hc::plugins::MakeApprovedWcxBackend(hc::plugins::BuiltinIsoOptions()); auto Cursor = Backend->Enumerate(Target.toStdString(), true, {}); QVERIFY(Cursor.HasValue());
         auto Page = Cursor.Value()->Next(10, {}); QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().entries_.size(), size_t(1)); QCOMPARE(Page.Value().entries_[0].name_, std::string("한글.txt")); Cursor.Value().reset();
+        QCOMPARE(Page.Value().entries_[0].modifiedUtcMs_, Entry.Value().modifiedUtcMs_);
+        QCOMPARE(Page.Value().entries_[0].attributes_ & 0x27u, Entry.Value().attributes_ & 0x27u);
         const auto Original = Read(Target);
         auto Again = hc::iso::PrepareCreate(Request); QVERIFY(Again.HasValue());
         auto Pending = Scheduler.Submit(std::move(Again.Value().request_), std::move(Again.Value().task_)); QVERIFY(Pending.HasValue());

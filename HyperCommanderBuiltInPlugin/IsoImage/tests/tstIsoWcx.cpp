@@ -1,4 +1,7 @@
-﻿#include <QtTest>
+﻿#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <QtTest>
 #include <QTemporaryDir>
 #include <QCryptographicHash>
 #include <QJsonDocument>

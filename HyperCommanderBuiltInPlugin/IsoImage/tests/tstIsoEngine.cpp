@@ -17,6 +17,40 @@ HcIsoOptions Options(uint32_t Profile = HC_ISO_UDF_BRIDGE) { return {sizeof(HcIs
 class IsoEngineTests : public QObject {
     Q_OBJECT
 private slots:
+    void entryMetadataRoundTrip()
+    {
+        QTemporaryDir Directory;
+        const auto Disk = Directory.filePath("source").toUtf8();
+        QVERIFY(Put(QString::fromUtf8(Disk), "shared"));
+        std::array<QByteArray, 32> Names;
+        std::array<HcIsoSource, 32> Sources{};
+        std::array<HcIsoMetadata, 32> Metadata{};
+        for (int I = 0; I < 32; ++I) {
+            const bool Folder = I >= 16;
+            Names[I] = QByteArray(Folder ? "D" : "F") + QByteArray::number(I);
+            Sources[I] = {Folder ? nullptr : Disk.constData(), Names[I].constData(), uint32_t(Folder)};
+            Metadata[I] = {I == 0 ? 0 : 1672531200123LL + I, uint32_t((I & 7) | ((I & 8) << 2)), 0x27, 1};
+        }
+        for (uint32_t Profile = 0; Profile <= 3; ++Profile) {
+            const auto Target = Directory.filePath(QString::number(Profile) + ".iso").toUtf8();
+            HcIsoOptionsEx Config{sizeof(Config), 1, Options(Profile), HC_ISO_SHARE_DUPLICATE_CONTENTS};
+            QVERIFY2(hcIsoBuildWithMetadata(Target.constData(), Sources.data(), Sources.size(), &Config, Metadata.data()) == HC_ISO_OK, hcIsoLastError());
+            for (auto Namespace : {HC_ISO_PRIMARY, HC_ISO_JOLIET, HC_ISO_UDF}) {
+                if ((Namespace == HC_ISO_JOLIET && Profile != 1 && Profile != 2) || (Namespace == HC_ISO_UDF && Profile < 2)) continue;
+                HcIsoImage* Raw = nullptr;
+                QCOMPARE(hcIsoOpen(Target.constData(), Namespace, &Raw), HC_ISO_OK);
+                ImagePtr Image(Raw);
+                for (int I = 0; I < 32; ++I) {
+                    uint64_t Index = 0;
+                    QCOMPARE(hcIsoFindEntry(Raw, Names[I].constData(), &Index), HC_ISO_OK);
+                    HcIsoMetadata Actual{};
+                    QCOMPARE(hcIsoGetMetadata(Raw, Index, &Actual), HC_ISO_OK);
+                    QCOMPARE(Actual.attributes_, Metadata[I].attributes_); QCOMPARE(Actual.knownMask_, 0x27u);
+                    QCOMPARE(Actual.hasModified_, 1u); QCOMPARE(Actual.modifiedUtcMs_, Metadata[I].modifiedUtcMs_);
+                }
+            }
+        }
+    }
     void compareBridgeCreation() {
         if (!qEnvironmentVariableIsSet("HC_ARCHIVE_BENCH")) QSKIP("Opt-in ISO creation comparison");
         QTemporaryDir Dir;

@@ -49,8 +49,21 @@ public:
             // enters its irreversible boundary only for the final ISO target.
             auto InnerContext = Context; InnerContext.committing_ = innerCommitting_;
             InnerContext.operation_.writeCheckpoint_ = {}; // Private input copies are not published destinations.
+            // Individual outcomes identify both the original snapshot and its staged path.
+            InnerContext.operation_.fileCopyWorkers_ = 1;
+            InnerContext.operation_.fileTransferWorkers_ = 1;
             auto Step = copy_->Advance(std::move(InnerContext)); innerCommitting_ = Step.next_ == JobState::Committing;
-            if (Step.item_ && Step.item_->source_) copiedSources_.push_back(*Step.item_->source_);
+            if (Step.item_ && Step.item_->source_) {
+                const auto& Entry = *Step.item_->source_;
+                copiedSources_.push_back(Entry);
+                if (Step.progress_ && Step.item_->destinationCommitted_) {
+                    const auto Target = ParseLocator(Step.progress_->destination_);
+                    if (!Target.HasValue()) return failed(Target.Failure());
+                    const auto StagePath = QDir::fromNativeSeparators(QString::fromStdString(Target.Value().root_));
+                    const auto Name = QDir(temp_->filePath("input")).relativeFilePath(StagePath);
+                    metadata_[Name.toStdString()] = {Entry.modifiedUtcMs_, Entry.attributes_ & 0x27u, 0x27, 1};
+                }
+            }
             Step.item_.reset();
             if (Step.next_ == JobState::Completed) {
                 auto Errors = copy_->Finalize(JobState::Completed); copy_.reset();
@@ -82,7 +95,7 @@ public:
             Rewrite.maxImageBytes_ = ImageLimit; Rewrite.temporaryBase_ = temp_->path();
             for (auto Name : names_) {
                 const bool Directory = Name.ends_with('/'); if (Directory) Name.pop_back();
-                Rewrite.sources_.push_back({Directory ? "" : QDir(temp_->filePath("input")).filePath(QString::fromStdString(Name)).toStdString(), Name, Directory});
+                Rewrite.sources_.push_back({Directory ? "" : QDir(temp_->filePath("input")).filePath(QString::fromStdString(Name)).toStdString(), Name, Directory, metadata_[Name]});
             }
             auto Prepared = PrepareRewrite(std::move(Rewrite), Context.operation_).get();
             if (!Prepared.HasValue()) return failed(Prepared.Failure());
@@ -140,6 +153,7 @@ private:
     std::unique_ptr<QDirIterator> iterator_;
     std::unique_ptr<IJobTask> copy_;
     bool innerCommitting_ = false;
+    std::map<std::string, HcIsoMetadata> metadata_;
     std::vector<EntrySnapshot> copiedSources_;
     size_t rechecked_ = 0;
     std::vector<std::string> names_;

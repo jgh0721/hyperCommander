@@ -22,6 +22,10 @@ namespace hc::plugins
     {
         QJsonObject Out{{"name", Text(Header.name_)}, {"size", QString::number(Header.size_)}, {"packedSize", QString::number(Header.packedSize_)},
             {"attributes", QString::number(Header.attributes_)}, {"crc", QString::number(Header.crc_)}, {"modifiedUtcMs", QString::number(Header.modifiedUtcMs_)}, {"directory", Header.directory_}, {"encrypted", Header.encrypted_}, {"rebuildEncrypted", Header.rebuildEncrypted_}};
+        if (Header.attributeMask_) {
+            Out["attributeMask"] = int(*Header.attributeMask_);
+            Out["hasModified"] = Header.hasModified_;
+        }
         if (Header.metadataRename_) Out["metadataRename"] = true;
         if (Header.virtualRoot_) Out["virtualRoot"] = true;
         if (!Header.virtualError_.empty()) Out["virtualError"] = Text(Header.virtualError_);
@@ -29,13 +33,19 @@ namespace hc::plugins
     }
     Result<ArchiveHeader> DecodeArchiveHeader(const QJsonObject& Object)
     {
-        if (Object.size() != 9 + Object.contains("metadataRename") + Object.contains("virtualRoot") + Object.contains("virtualError")
+        if (Object.size() != 9 + Object.contains("attributeMask") + Object.contains("hasModified") + Object.contains("metadataRename") + Object.contains("virtualRoot") + Object.contains("virtualError")
             || (Object.contains("virtualRoot") && (!Object["virtualRoot"].isBool() || !Object["directory"].toBool()))
             || (Object.contains("virtualError") && (!Object["virtualRoot"].toBool() || !String(Object["virtualError"], 1024))) || (Object.contains("metadataRename") && !Object["metadataRename"].isBool()) || !Object["rebuildEncrypted"].isBool() || !String(Object["name"], 1024) || Object["name"].toString().isEmpty() || !Object["directory"].isBool() || !Object["encrypted"].isBool() || !Object["modifiedUtcMs"].isString()) return Invalid();
         auto Size = WireUnsigned(Object["size"]), Packed = WireUnsigned(Object["packedSize"]), Attributes = WireUnsigned(Object["attributes"]), Crc = WireUnsigned(Object["crc"]);
         if (!Size.HasValue() || !Packed.HasValue() || !Attributes.HasValue() || !Crc.HasValue() || Attributes.Value() > UINT32_MAX || Crc.Value() > UINT32_MAX) return Invalid();
         bool Ok = false; auto Time = Object["modifiedUtcMs"].toString().toLongLong(&Ok); if (!Ok) return Invalid();
-        return ArchiveHeader{Object["name"].toString().toStdString(), Size.Value(), Packed.Value(), static_cast<std::uint32_t>(Attributes.Value()), static_cast<std::uint32_t>(Crc.Value()), Time, Object["directory"].toBool(), Object["encrypted"].toBool(), Object["rebuildEncrypted"].toBool(), Object["metadataRename"].toBool(), Object["virtualRoot"].toBool(), Object["virtualError"].toString().toStdString()};
+        ArchiveHeader Header{Object["name"].toString().toStdString(), Size.Value(), Packed.Value(), static_cast<std::uint32_t>(Attributes.Value()), static_cast<std::uint32_t>(Crc.Value()), Time, Object["directory"].toBool(), Object["encrypted"].toBool(), Object["rebuildEncrypted"].toBool(), Object["metadataRename"].toBool(), Object["virtualRoot"].toBool(), Object["virtualError"].toString().toStdString()};
+        if (Object.contains("attributeMask") || Object.contains("hasModified")) {
+            const int Mask = Object["attributeMask"].toInt(-1);
+            if ((Mask & ~0x27) || !Object["hasModified"].isBool()) return Invalid();
+            Header.attributeMask_ = uint32_t(Mask); Header.hasModified_ = Object["hasModified"].toBool();
+        }
+        return Header;
     }
     QJsonObject EncodeSevenZipSettings(const SevenZipCreateSettings& Settings)
     {
@@ -151,7 +161,7 @@ namespace hc::plugins
     }
     Result<OperationContext> DecodeContextV2(const QJsonObject& Object)
     {
-        if (Object.size() != 9 + Object.contains("metadataRename") || (Object.contains("metadataRename") && !Object["metadataRename"].isBool()) || !Object["automatic"].isBool()) return Invalid();
+        if (Object.size() != 9 + Object.contains("attributeMask") + Object.contains("hasModified") + Object.contains("metadataRename") || (Object.contains("metadataRename") && !Object["metadataRename"].isBool()) || !Object["automatic"].isBool()) return Invalid();
         auto Entries = WireUnsigned(Object["entries"]), Page = WireUnsigned(Object["page"]), Read = WireUnsigned(Object["read"]),
             Bytes = WireUnsigned(Object["autoBytes"]), Count = WireUnsigned(Object["autoEntries"]), Depth = WireUnsigned(Object["autoDepth"]), Ratio = WireUnsigned(Object["autoRatio"]);
         if (!Entries.HasValue() || Entries.Value() > SIZE_MAX || !Page.HasValue() || !Page.Value() || Page.Value() > 100000

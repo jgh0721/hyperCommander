@@ -56,6 +56,10 @@ typedef struct HcIsoInfo {
     char volumeLabel_[129];
     uint32_t features_; // bit 0: boot record; bit 1: primary system-use metadata
 } HcIsoInfo;
+typedef struct HcIsoMetadata {
+    int64_t modifiedUtcMs_;
+    uint32_t attributes_, knownMask_, hasModified_;
+} HcIsoMetadata;
 typedef struct HcIsoEntry {
     uint32_t structSize_;
     uint32_t directory_;
@@ -81,6 +85,9 @@ HC_ISO_API void hcIsoClose(HcIsoImage* Image);
 HC_ISO_API int hcIsoGetInfo(const HcIsoImage* Image, HcIsoInfo* Info);
 HC_ISO_API int hcIsoGetEntry(const HcIsoImage* Image, uint64_t Index, HcIsoEntry* Entry);
 // Root directory uses UINT64_MAX; HC_ISO_END means no such path/child.
+HC_ISO_API int hcIsoGetMetadata(const HcIsoImage* Image, uint64_t Index, HcIsoMetadata* Metadata);
+HC_ISO_API int hcIsoBuildWithMetadata(const char* StagingPath, const HcIsoSource* Sources,
+                                     uint64_t Count, const HcIsoOptionsEx* Options, const HcIsoMetadata* Metadata);
 HC_ISO_API int hcIsoFindEntry(const HcIsoImage* Image, const char* Path, uint64_t* Index);
 HC_ISO_API int hcIsoGetChild(const HcIsoImage* Image, uint64_t Directory, uint64_t Child, uint64_t* Index);
 HC_ISO_API int hcIsoRead(HcIsoImage* Image, uint64_t Index, uint64_t Offset,

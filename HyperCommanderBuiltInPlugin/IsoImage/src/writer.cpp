@@ -19,6 +19,29 @@ Bytes Record(const Node& Item, const Bytes& Name, bool Joliet, uint64_t Offset =
     Data[0] = uint8_t(Data.size()); Both(Data, 2, Sector, 4); Both(Data, 10, uint32_t(Size), 4);
     Timestamp(Data, 18, 0, false); Data[25] = uint8_t((Item.directory_ ? 2 : 0) | (More ? 128 : 0)); Both(Data, 28, 1, 2);
     Data[32] = uint8_t(Name.size()); std::copy(Name.begin(), Name.end(), Data.begin() + 33);
+    const auto& Meta = Item.metadata_;
+    if (Meta.hasModified_) {
+        const auto Seconds = std::chrono::floor<std::chrono::seconds>(std::chrono::milliseconds(Meta.modifiedUtcMs_));
+        // ISO short dates encode years 1900..2155. Keep the exact time in
+        // System Use when the standard recording date must remain unspecified.
+        if (Seconds.count() >= -2208988800LL && Seconds < std::chrono::sys_days(std::chrono::year(2156)/1/1).time_since_epoch())
+            Timestamp(Data, 18, Seconds.count(), false, true);
+        else std::fill_n(Data.begin() + 18, 7, uint8_t{});
+    }
+    if (Meta.attributes_ & 2) Data[25] |= 1;
+    // Named records have room for this application-specific System Use field,
+    // including a maximum-length Joliet name. Leave dot records interoperable.
+    if ((Name.size() != 1 || Name[0] > 1) && (Meta.knownMask_ || Meta.hasModified_)) {
+        const auto At = Data.size();
+        Data.resize(At + 20);
+        Text(Data, At, "HC", 2); Data[At + 2] = 20; Data[At + 3] = 1;
+        Text(Data, At + 4, "HCMD", 4);
+        Data[At + 8] = uint8_t(Meta.knownMask_);
+        Data[At + 9] = uint8_t(Meta.attributes_);
+        Data[At + 10] = uint8_t(Meta.hasModified_);
+        Put(Data, At + 12, uint64_t(Meta.modifiedUtcMs_), 8);
+        Data[0] = uint8_t(Data.size());
+    }
     return Data;
 }
 std::string PrimaryName(const std::string& Name, bool Directory, size_t Suffix)
@@ -38,7 +61,7 @@ std::string PrimaryName(const std::string& Name, bool Directory, size_t Suffix)
     return Result;
 }
 }
-Writer::Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& Options, uint32_t Flags) : options_(Options),
+Writer::Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& Options, uint32_t Flags, const HcIsoMetadata* Metadata) : options_(Options),
     shareContents_((Flags & HC_ISO_SHARE_DUPLICATE_CONTENTS) != 0), explicitTimestamp_((Flags & HC_ISO_EXPLICIT_TIMESTAMP) != 0),
     verifyContents_((Flags & HC_ISO_VERIFY_STRUCTURE_ONLY) == 0)
 {
@@ -50,9 +73,9 @@ Writer::Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& O
     if (hasJoliet()) Require(label_.size() <= 16, "Joliet volume label exceeds 16 characters");
     if (hasUdf()) Require(label_.size() <= 30, "UDF volume label exceeds 30 characters");
     Bytes Check(12); Timestamp(Check, 0, options_.timestampUtc_, true, explicitTimestamp_);
-    inventory(Sources, Count); connectPayloads(); layout();
+    inventory(Sources, Count, Metadata); connectPayloads(); layout();
 }
-void Writer::inventory(const HcIsoSource* Sources, uint64_t Count)
+void Writer::inventory(const HcIsoSource* Sources, uint64_t Count, const HcIsoMetadata* Metadata)
 {
     Require(Count <= MaxEntries && (Sources || Count == 0), "Invalid source inventory");
     nodes_.push_back({}); nodes_[0].directory_ = true;
@@ -85,6 +108,12 @@ void Writer::inventory(const HcIsoSource* Sources, uint64_t Count)
             payloadBytes_ += Item.size_;
             Index = nodes_.size(); nodes_.push_back(std::move(Item)); nodes_[Parent].children_.push_back(Index); Paths.emplace(Path, Index);
         }
+        if (Metadata) {
+            auto& Meta = nodes_[Index].metadata_;
+            Meta = Metadata[I];
+            Require(!(Meta.knownMask_ & ~0x27u) && !(Meta.attributes_ & ~Meta.knownMask_) && Meta.hasModified_ <= 1, "Invalid source metadata");
+            Require(!Meta.hasModified_ || (Meta.modifiedUtcMs_ >= -11644473600000LL && Meta.modifiedUtcMs_ <= 253402300799999LL), "Invalid source modification time");
+        }
         Require(nodes_.size() <= MaxEntries, "Source entry budget exceeded");
     }
     // Breadth-first directory numbering is required by ISO path tables.
@@ -108,19 +137,19 @@ void Writer::inventory(const HcIsoSource* Sources, uint64_t Count)
 Bytes Writer::directory(size_t Index, bool Joliet)
 {
     const auto& Parent = nodes_[Index]; Bytes Data;
-    auto Append = [&](Bytes Rec) {
-        Timestamp(Rec, 18, options_.timestampUtc_, false, explicitTimestamp_);
+    auto Append = [&](Bytes Rec, const Node& Item) {
+        if (!Item.metadata_.hasModified_) Timestamp(Rec, 18, options_.timestampUtc_, false, explicitTimestamp_);
         if (Data.size() % Block + Rec.size() > Block) Data.resize(size_t(Round(Data.size())));
         Data.insert(Data.end(), Rec.begin(), Rec.end());
     };
-    Append(Record(Parent, Bytes{0}, Joliet)); Append(Record(nodes_[Parent.parent_], Bytes{1}, Joliet));
+    Append(Record(Parent, Bytes{0}, Joliet), Parent); Append(Record(nodes_[Parent.parent_], Bytes{1}, Joliet), nodes_[Parent.parent_]);
     auto Children = Parent.children_;
     auto NameOf = [&](size_t Child) { const auto& N = nodes_[Child]; return Joliet ? Unicode(N.name_, false) : Bytes(N.isoName_.begin(), N.isoName_.end()); };
     std::sort(Children.begin(), Children.end(), [&](size_t A, size_t B) { return NameOf(A) < NameOf(B); });
     for (const auto Child : Children) {
         const auto& Item = nodes_[Child]; const auto Name = NameOf(Child);
         uint64_t Offset = 0;
-        do { const bool More = !Item.directory_ && Item.size_ - Offset > IsoExtentMax; Append(Record(Item, Name, Joliet, Offset, More)); if (!More) break; Offset += IsoExtentMax; } while (true);
+        do { const bool More = !Item.directory_ && Item.size_ - Offset > IsoExtentMax; Append(Record(Item, Name, Joliet, Offset, More), Item); if (!More) break; Offset += IsoExtentMax; } while (true);
     }
     Data.resize(size_t(Round(Data.size()))); return Data;
 }
@@ -292,6 +321,10 @@ void Writer::Write(const fs::path& Path)
                 Names[Child] = Names[Parent].empty() ? Name : Names[Parent] + '/' + Name;
                 const auto Found = Lookup.find(Names[Child]); Require(Found != Lookup.end(), "Reopened path mismatch");
                 const auto& Actual = Image.Entries()[Found->second]; Require(Actual.directory_ == Item.directory_ && Actual.size_ == Item.size_, "Reopened file metadata mismatch");
+                const auto& ExpectedMetadata = Item.metadata_;
+                Require(((Actual.metadata_.attributes_ ^ ExpectedMetadata.attributes_) & ExpectedMetadata.knownMask_) == 0
+                    && (!ExpectedMetadata.hasModified_ || (Actual.metadata_.hasModified_ && Actual.metadata_.modifiedUtcMs_ == ExpectedMetadata.modifiedUtcMs_)),
+                    "Reopened entry attributes or modification time differ");
                 if (Item.directory_) continue;
                 // Each namespace may split an extent differently. Validate the
                 // exact physical byte sequence before sharing its payload check.

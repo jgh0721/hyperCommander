@@ -3,6 +3,7 @@
 #include "../storage/archiveDiscovery.hpp"
 #include <set>
 #include <array>
+#include <charconv>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -483,7 +484,11 @@ namespace hc::operations
                     auto Verified = current().source_.reader_->Stat(current().source_.entry_.id_, Context.operation_).get();
                     if (!Verified.HasValue()) return failed(Verified.Failure());
                     if (request_.copyOptions_.metadata_) {
-                        auto Metadata = session_->SetMetadata({current().source_.entry_.modifiedUtcMs_, current().source_.entry_.attributes_}, Context.operation_);
+                        const auto& Source = current().source_.entry_;
+                        FileMetadata Values{Source.modifiedUtcMs_, Source.attributes_};
+                        if (const auto Time = Source.hints_.find("isoHasTime"); Time != Source.hints_.end() && Time->second == "0")
+                            Values.modifiedUtcMs_.reset();
+                        auto Metadata = session_->SetMetadata(Values, Context.operation_);
                         if (!Metadata.HasValue()) return failed(Metadata.Failure());
                     }
                     stream_.reset();
@@ -1970,11 +1975,21 @@ namespace hc::operations
                         if (!Created.HasValue()) return failed(Created.Failure());
                         if (!Created.Value() || !Created.Value()->directory_)
                             return failed({ErrorCategory::StaleRevision, "extracted-directory-changed"});
-                        constexpr std::uint32_t DosAttributes = 0x27;
+                        std::uint32_t DosAttributes = 0x27;
+                        if (const auto Mask = Source.hints_.find("isoAttributeMask"); Mask != Source.hints_.end()) {
+                            unsigned Value = 0;
+                            const auto End = Mask->second.data() + Mask->second.size();
+                            const auto Parsed = std::from_chars(Mask->second.data(), End, Value);
+                            if (Parsed.ec != std::errc{} || Parsed.ptr != End || (Value & ~DosAttributes))
+                                return failed({ErrorCategory::InvalidRequest, "invalid-iso-attribute-mask"});
+                            DosAttributes = Value;
+                        }
                         MetadataPatch Patch;
                         Patch.setMask_ = Source.attributes_ & ~Created.Value()->attributes_ & DosAttributes;
                         Patch.clearMask_ = Created.Value()->attributes_ & ~Source.attributes_ & DosAttributes;
-                        if (Source.modifiedUtcMs_) Patch.modifiedUtcMs_ = Source.modifiedUtcMs_;
+                        const auto Time = Source.hints_.find("isoHasTime");
+                        if (Time != Source.hints_.end() ? Time->second == "1" : Source.modifiedUtcMs_ != 0)
+                            Patch.modifiedUtcMs_ = Source.modifiedUtcMs_;
                         if (!Patch.Empty()) archiveDirectories_.emplace_back(std::move(*Created.Value()), Patch);
                     }
                     if (request_.operation_ == FileOperation::Copy && request_.preservePaths_

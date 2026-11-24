@@ -44,10 +44,12 @@ uint16_t Crc16(std::span<const uint8_t> Value);
 void Tag(Bytes& Data, uint16_t Id, uint32_t Location, size_t Length);
 void CheckTag(std::span<const uint8_t> Data, uint32_t Location, uint16_t Id = 0);
 void Timestamp(Bytes& Data, size_t Offset, int64_t Epoch, bool Udf, bool Explicit = false);
+bool DecodeTimestamp(std::span<const uint8_t> Data, bool Udf, int64_t& Milliseconds);
 void Pulse(const HcIsoOptions& Options, uint64_t Done, uint64_t Total);
 
 struct Extent { uint64_t offset_; uint64_t size_; };
 struct Entry {
+    HcIsoMetadata metadata_{};
     std::string path_;
     bool directory_ = false;
     uint64_t size_ = 0;
@@ -96,6 +98,7 @@ private:
     uint64_t metadataBytes_ = 0;
 };
 struct Node {
+    HcIsoMetadata metadata_{};
     std::string name_, path_, isoName_;
     fs::path source_;
     fs::file_time_type modified_{};
@@ -112,10 +115,10 @@ struct Node {
 struct Payload { size_t sourceNode_; uint32_t dataBlock_ = 0; };
 class Writer {
 public:
-    Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& Options, uint32_t Flags = 0);
+    Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& Options, uint32_t Flags = 0, const HcIsoMetadata* Metadata = nullptr);
     void Write(const fs::path& Path);
 private:
-    void inventory(const HcIsoSource* Sources, uint64_t Count);
+    void inventory(const HcIsoSource* Sources, uint64_t Count, const HcIsoMetadata* Metadata);
     void connectPayloads();
     bool hasJoliet() const { return options_.profile_ == HC_ISO_9660_JOLIET || options_.profile_ == HC_ISO_UDF_BRIDGE; }
     bool hasUdf() const { return options_.profile_ == HC_ISO_UDF_BRIDGE || options_.profile_ == HC_ISO_UDF_NO_JOLIET; }

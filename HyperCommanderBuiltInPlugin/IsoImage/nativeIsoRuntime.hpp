@@ -18,6 +18,8 @@ struct Runtime final {
     decltype(&hcIsoRead) read_ = nullptr;
     decltype(&hcIsoBuild) build_ = nullptr;
     decltype(&hcIsoBuildEx) buildEx_ = nullptr;
+    decltype(&hcIsoGetMetadata) metadata_ = nullptr;
+    decltype(&hcIsoBuildWithMetadata) buildMetadata_ = nullptr;
     ~Runtime();
     Runtime() = default;
     Runtime(const Runtime&) = delete;

@@ -1,4 +1,7 @@
-﻿#include <QtTest>
+﻿#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <QtTest>
 #include <QFile>
 #include <QTemporaryDir>
 #include "HyperCommanderBuiltInPlugin/IsoImage/isoProvider.hpp"
@@ -33,7 +36,7 @@ private slots:
         const auto Source = Directory.filePath("source"); QVERIFY(Put(Source, Payload));
         hc::iso::RewriteRequest Request;
         Request.profile_ = Profile; Request.temporaryBase_ = Directory.path();
-        Request.sources_ = {{Source.toStdString(), "DIR/DATA.BIN", false}, {"", "EMPTY", true}};
+        Request.sources_ = {{Source.toStdString(), "DIR/DATA.BIN", false, {1620000000123, 0x23, 0x27, 1}}, {"", "EMPTY", true, {1620000000345, 4, 0x27, 1}}};
         auto Prepared = hc::iso::PrepareRewrite(Request).get(); QVERIFY(Prepared.HasValue());
         const auto Image = Prepared.Value()->Path();
         for (const auto Namespace : {HC_ISO_PRIMARY, HC_ISO_JOLIET, HC_ISO_UDF}) {
@@ -51,6 +54,7 @@ private slots:
             QVERIFY(!Summary.Value().hints_.contains("unpackedBytes"));
             auto FileAt = Root(Image); FileAt.nesting_.back().entry_ = "/DIR/DATA.BIN";
             auto File = Provider->Resolve(FileAt, {}).get(); QVERIFY(File.HasValue()); QCOMPARE(File.Value().size_, uint64_t(Payload.size()));
+            QCOMPARE(File.Value().modifiedUtcMs_, 1620000000123LL); QCOMPARE(File.Value().attributes_ & 0x27u, 0x23u);
             auto First = Provider->OpenRead(File.Value().id_, {}).get(); QVERIFY(First.HasValue());
             auto Second = Provider->OpenRead(File.Value().id_, {}).get(); QVERIFY(Second.HasValue());
             QVERIFY(First.Value()->CanSeek()); QCOMPARE(First.Value()->Access(), ReadAccess::RandomAccess);
@@ -83,7 +87,7 @@ private slots:
         uint64_t WcxFiles = 0, WcxBytes = 0;
         for (;;) {
             auto Page = Wcx.Value()->Next(2, {}); QVERIFY(Page.HasValue());
-            for (const auto& Entry : Page.Value().entries_) if (!Entry.directory_) { ++WcxFiles; WcxBytes += Entry.size_; }
+            for (const auto& Entry : Page.Value().entries_) if (!Entry.directory_) { ++WcxFiles; WcxBytes += Entry.size_; QCOMPARE(Entry.modifiedUtcMs_, 1620000000123LL); QCOMPARE(Entry.attributes_ & 0x27u, 0x23u); }
             if (Page.Value().end_) break;
         }
         QCOMPARE(WcxFiles, 1ull); QCOMPARE(WcxBytes, uint64_t(Payload.size()));

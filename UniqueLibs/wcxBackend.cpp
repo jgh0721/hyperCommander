@@ -1,4 +1,5 @@
 ﻿#include "wcxBackend.hpp"
+#include <cstring>
 #include <QtCore>
 #include "commonLibs/plugins/archiveSelectionDigest.hpp"
 #define WIN32_LEAN_AND_MEAN
@@ -184,6 +185,11 @@ namespace hc::plugins
             const QDate Date(1980 + ((Header.FileTime >> 25) & 127), (Header.FileTime >> 21) & 15, (Header.FileTime >> 16) & 31);
             const QTime Time((Header.FileTime >> 11) & 31, (Header.FileTime >> 5) & 63, (Header.FileTime & 31) * 2);
             if (Date.isValid() && Time.isValid()) Out.modifiedUtcMs_ = QDateTime(Date, Time).toMSecsSinceEpoch();
+            if (!std::memcmp(Header.Reserved, "HCISOM01", 8) && !(uint8_t(Header.Reserved[16]) & ~0x27)
+                && uint8_t(Header.Reserved[17]) <= 1) {
+                std::memcpy(&Out.modifiedUtcMs_, Header.Reserved + 8, 8);
+                Out.attributeMask_ = uint8_t(Header.Reserved[16]); Out.hasModified_ = Header.Reserved[17] != 0;
+            }
             return Out;
         }
         class Listing final : public IArchiveListing

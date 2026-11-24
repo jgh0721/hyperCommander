@@ -132,12 +132,37 @@ void Timestamp(Bytes& Data, size_t Offset, int64_t Epoch, bool Udf, bool Explici
     using namespace std::chrono;
     const sys_seconds Time{seconds(Epoch || Explicit ? Epoch : 946684800)};
     const auto Day = floor<days>(Time); const year_month_day Date{Day}; const hh_mm_ss Clock{Time - Day};
-    const int Year = int(Date.year()); Require(Date.ok() && Year >= 1900 && Year <= 2155, "Timestamp out of range");
+    const int Year = int(Date.year()); Require(Date.ok() && (Udf ? Year >= 1 && Year <= 9999 : Year >= 1900 && Year <= 2155), "Timestamp out of range");
     if (Udf) { Put(Data, Offset, 0x1000, 2); Put(Data, Offset + 2, Year, 2); Offset += 4; }
     else Data[Offset++] = uint8_t(Year - 1900);
     Data[Offset++] = uint8_t(unsigned(Date.month())); Data[Offset++] = uint8_t(unsigned(Date.day()));
     Data[Offset++] = uint8_t(Clock.hours().count()); Data[Offset++] = uint8_t(Clock.minutes().count()); Data[Offset++] = uint8_t(Clock.seconds().count());
     Data[Offset] = 0;
+}
+bool DecodeTimestamp(std::span<const uint8_t> Data, bool Udf, int64_t& Milliseconds)
+{
+    using namespace std::chrono;
+    const size_t Start = Udf ? 4 : 1;
+    const int Year = Udf ? int(Get(Data, 2, 2)) : 1900 + Data[0];
+    const year_month_day Date{year(Year), month(Data[Start]), day(Data[Start + 1])};
+    if (Year < 1 || Year > 9999 || !Date.ok() || Data[Start + 2] > 23 || Data[Start + 3] > 59 || Data[Start + 4] > 59) return false;
+    int Zone = 0;
+    int Fraction = 0;
+    if (Udf) {
+        const int Type = int(Get(Data, 0, 2));
+        Zone = Type & 4095;
+        if (Zone >= 2048) Zone -= 4096;
+        if ((Type >> 12) > 1 || Zone < -1440 || Zone > 1440 || ((Type >> 12) == 0 && Zone != 0)) return false;
+        if (Data[9] > 99 || Data[10] > 99 || Data[11] > 99) return false;
+        Fraction = Data[9] * 10 + Data[10] / 10;
+    } else {
+        const int Quarters = int(int8_t(Data[6]));
+        if (Quarters < -48 || Quarters > 52) return false;
+        Zone = Quarters * 15;
+    }
+    const auto Time = sys_days(Date) + hours(Data[Start + 2]) + minutes(Data[Start + 3] - Zone) + seconds(Data[Start + 4]);
+    Milliseconds = duration_cast<milliseconds>(Time.time_since_epoch()).count() + Fraction;
+    return true;
 }
 void Pulse(const HcIsoOptions& Options, uint64_t Done, uint64_t Total)
 { if (Options.progress_ && !Options.progress_(Options.context_, Done, Total)) throw Error(HC_ISO_CANCELLED, "ISO operation cancelled"); }

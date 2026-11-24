@@ -137,6 +137,16 @@ struct Session {
         Value.attributes_ = Value.directory_ ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
         Value.hints_ = {{"wcxName", Path}, {"packedSize", std::to_string(Value.size_)},
             {"isoNamespace", std::to_string(info_.selectedNamespace_)}};
+        if (runtime_->metadata_) {
+            HcIsoMetadata Meta{};
+            const auto Status = runtime_->metadata_(image_, Index, &Meta);
+            if (Status != HC_ISO_OK) return EngineError(Status);
+            Value.attributes_ = (Value.directory_ ? FILE_ATTRIBUTE_DIRECTORY : 0) | Meta.attributes_;
+            if (!Value.attributes_) Value.attributes_ = FILE_ATTRIBUTE_NORMAL;
+            Value.modifiedUtcMs_ = Meta.modifiedUtcMs_;
+            Value.hints_["isoAttributeMask"] = std::to_string(Meta.knownMask_);
+            Value.hints_["isoHasTime"] = Meta.hasModified_ ? "1" : "0";
+        }
         return Value;
     }
 };

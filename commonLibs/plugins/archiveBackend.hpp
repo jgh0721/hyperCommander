@@ -19,6 +19,8 @@ namespace hc::plugins
         // Synthetic container, never a physical output directory name.
         bool virtualRoot_ = false;
         std::string virtualError_;
+        std::optional<uint32_t> attributeMask_;
+        bool hasModified_ = true;
     };
     struct ArchivePage { std::vector<ArchiveHeader> entries_; bool end_ = false; };
     class IArchiveListing

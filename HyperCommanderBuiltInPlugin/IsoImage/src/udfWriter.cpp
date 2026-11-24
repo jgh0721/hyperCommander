@@ -25,7 +25,7 @@ Bytes Fid(const Node& Item, bool Parent, uint32_t Location)
 {
     const auto Name = Parent ? Bytes{} : Unicode(Item.name_, true);
     Bytes Data(size_t(Round(38 + Name.size(), 4))); Put(Data, 16, 1, 2);
-    Data[18] = uint8_t((Item.directory_ ? 2 : 0) | (Parent ? 8 : 0)); Data[19] = uint8_t(Name.size());
+    Data[18] = uint8_t((Item.directory_ ? 2 : 0) | (Parent ? 8 : 0) | ((Item.metadata_.attributes_ & 2) ? 1 : 0)); Data[19] = uint8_t(Name.size());
     LongAd(Data, 20, Block, Item.feBlock_); std::copy(Name.begin(), Name.end(), Data.begin() + 38);
     Tag(Data, 257, Location, Data.size()); return Data;
 }
@@ -89,10 +89,20 @@ void Writer::udfWrite(std::ofstream& Stream)
     for (size_t I = 0; I < nodes_.size(); ++I) {
         const auto& Item = nodes_[I]; const uint64_t Size = Item.directory_ ? Item.udfData_.size() : Item.size_;
         Bytes Fe(Block); Put(Fe, 20, 4, 2); Put(Fe, 24, 1, 2); Fe[27] = Item.directory_ ? 4 : 5;
-        Put(Fe, 36, UINT32_MAX, 4); Put(Fe, 40, UINT32_MAX, 4); Put(Fe, 44, 0x14a5, 4);
+        Put(Fe, 36, UINT32_MAX, 4); Put(Fe, 40, UINT32_MAX, 4); const auto& Meta = Item.metadata_;
+        const uint32_t WritePermissions = (Meta.attributes_ & 1) ? 0 : 0x842;
+        Put(Fe, 44, 0x14a5 | WritePermissions, 4);
+        Put(Fe, 34, (Meta.attributes_ & 32) | ((Meta.attributes_ & 4) ? 0x400 : 0), 2);
         uint32_t Links = 1; if (Item.directory_) for (const auto Child : Item.children_) if (nodes_[Child].directory_) ++Links;
         Put(Fe, 48, Links, 2); Put(Fe, 56, Size, 8); Put(Fe, 64, Round(Size) / Block, 8);
         for (const size_t Offset : {72, 84, 96}) Timestamp(Fe, Offset, options_.timestampUtc_, true, explicitTimestamp_);
+        if (Meta.hasModified_) {
+            const auto Millis = std::chrono::milliseconds(Meta.modifiedUtcMs_);
+            const auto Seconds = std::chrono::floor<std::chrono::seconds>(Millis);
+            Timestamp(Fe, 84, Seconds.count(), true, true);
+            const auto Fraction = (Millis - Seconds).count();
+            Fe[93] = uint8_t(Fraction / 10); Fe[94] = uint8_t((Fraction % 10) * 10);
+        }
         Put(Fe, 108, 1, 4); Entity(Fe, 128, "*HyperCommander"); Put(Fe, 160, I == 0 ? 0 : I + 16, 8);
         size_t AdOffset = 176;
         // A short_ad has 30 size bits. Split large files at a block boundary.

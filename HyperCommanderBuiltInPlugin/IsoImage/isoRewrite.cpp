@@ -14,9 +14,11 @@ Task<std::shared_ptr<PreparedImage>> PrepareRewrite(RewriteRequest Request, Oper
         if (!Directory->IsValid()) return Directory->Failure("iso-staging-directory", {"iso"});
         auto Prepared = std::make_shared<PreparedImage>(std::move(Directory));
         std::vector<HcIsoSource> Sources; Sources.reserve(Request.sources_.size());
+        std::vector<HcIsoMetadata> Metadata; Metadata.reserve(Request.sources_.size());
         for (const auto& Source : Request.sources_) {
             if (Source.diskPath_.find('\0') != std::string::npos || Source.imagePath_.find('\0') != std::string::npos)
                 return Error{ErrorCategory::InvalidRequest, "iso-source-nul", {"iso"}};
+            Metadata.push_back(Source.metadata_);
             Sources.push_back({Source.directory_ ? nullptr : Source.diskPath_.c_str(), Source.imagePath_.c_str(), uint32_t(Source.directory_)});
         }
         if (Request.volumeLabel_.find('\0') != std::string::npos)
@@ -39,7 +41,10 @@ Task<std::shared_ptr<PreparedImage>> PrepareRewrite(RewriteRequest Request, Oper
             | (Request.verifyContents_ ? 0 : HC_ISO_VERIFY_STRUCTURE_ONLY);
         if (Flags && !Module.Value()->buildEx_) return Error{ErrorCategory::Unsupported, "iso-extended-build-unsupported", {"iso"}};
         const HcIsoOptionsEx Extended{sizeof(HcIsoOptionsEx), 1, Options, Flags};
-        const auto Status = Flags ? Module.Value()->buildEx_(Path.constData(), Sources.data(), Sources.size(), &Extended)
+        const bool WithMetadata = std::ranges::any_of(Metadata, [](const auto& Item) { return Item.knownMask_ || Item.hasModified_; });
+        if (WithMetadata && !Module.Value()->buildMetadata_) return Error{ErrorCategory::Unsupported, "iso-metadata-build-unsupported", {"iso"}};
+        const auto Status = WithMetadata ? Module.Value()->buildMetadata_(Path.constData(), Sources.data(), Sources.size(), &Extended, Metadata.data())
+            : Flags ? Module.Value()->buildEx_(Path.constData(), Sources.data(), Sources.size(), &Extended)
             : Module.Value()->build_(Path.constData(), Sources.data(), Sources.size(), &Options);
         if (auto Error = Context.Check({"iso"})) return *Error;
         if (Status != HC_ISO_OK) return EngineError(Status);

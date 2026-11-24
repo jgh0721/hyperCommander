@@ -169,7 +169,8 @@ Result<PreparedArchiveOutput> CreatePreparedArchive(const CreatorRuntime& Creato
         for (size_t Index = 0; Index < Plan.entries_.size(); ++Index) {
             const auto& Entry = Plan.entries_[Index];
             const auto Path = Plan.inputPaths_.empty() ? QDir(Input).filePath(Entry.member_) : Plan.inputPaths_[Index];
-            Request.sources_.push_back({Path.toStdString(), Entry.member_.toStdString(), Entry.source_.entry_.directory_});
+            Request.sources_.push_back({Path.toStdString(), Entry.member_.toStdString(), Entry.source_.entry_.directory_,
+                {Value.preserveEntryTimes_ ? Entry.source_.entry_.modifiedUtcMs_ : Value.timestampUtc_ * 1000, Entry.source_.entry_.attributes_ & 0x27u, 0x27, 1}});
         }
         auto Prepared = iso::PrepareRewrite(std::move(Request), Context).get(); if (!Prepared.HasValue()) return Prepared.Failure();
         return PreparedArchiveOutput{Prepared.Value()->Path(), Prepared.Value()};

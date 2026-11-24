@@ -7,6 +7,7 @@
 #include "hcIso/isoImage.h"
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -136,7 +137,7 @@ struct TemporaryDirectory {
     }
     ~TemporaryDirectory() { std::error_code Ignored; if (!path_.empty()) fs::remove_all(path_, Ignored); }
 };
-struct Item { std::string path_, disk_; bool directory_ = false; };
+struct Item { std::string path_, disk_; bool directory_ = false; HcIsoMetadata metadata_{}; };
 std::vector<std::wstring> MultiString(const wchar_t* List)
 {
     Require(List != nullptr); std::vector<std::wstring> Result; size_t Offset = 0;
@@ -166,7 +167,8 @@ void Update(const wchar_t* Archive, const wchar_t* SubPath, const wchar_t* Sourc
             Require(Entry.size_ <= 128ull * 1024 * 1024 * 1024 - Bytes, E_TOO_MANY_FILES); Bytes += Entry.size_;
             const auto Key = Name(Wide(Entry.path_)); const auto Disk = Temp.path_ / std::to_wstring(I);
             if (!Entry.directory_) Extract(Image.get(), I, Entry, &Disk, PackingProgress);
-            Items.emplace(Key, Item{Entry.path_, Entry.directory_ ? "" : Utf8(Disk.wstring()), Entry.directory_ != 0});
+            HcIsoMetadata Meta{}; Check(hcIsoGetMetadata(Image.get(), I, &Meta));
+            Items.emplace(Key, Item{Entry.path_, Entry.directory_ ? "" : Utf8(Disk.wstring()), Entry.directory_ != 0, Meta});
         }
     } else Require(!Delete, E_EOPEN);
     const auto Prefix = SubPath && *SubPath ? Name(SubPath) + L'/' : L"";
@@ -177,7 +179,11 @@ void Update(const wchar_t* Archive, const wchar_t* SubPath, const wchar_t* Sourc
         const auto Disk = fs::path(Source) / fs::path(Input); const auto Status = fs::symlink_status(Disk);
         Require(!fs::is_symlink(Status) && (fs::is_regular_file(Status) || fs::is_directory(Status)), E_EREAD);
         Require((GetFileAttributesW(hc::storage::native::ExtendedPath(Disk.wstring()).c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) == 0, E_NOT_SUPPORTED);
-        Items[Key] = Item{Utf8(Key), Utf8(Disk.wstring()), fs::is_directory(Status)};
+        WIN32_FILE_ATTRIBUTE_DATA Info{};
+        Require(GetFileAttributesExW(hc::storage::native::ExtendedPath(Disk.wstring()).c_str(), GetFileExInfoStandard, &Info), E_EREAD);
+        const auto Ticks = (uint64_t(Info.ftLastWriteTime.dwHighDateTime) << 32) | Info.ftLastWriteTime.dwLowDateTime;
+        Items[Key] = Item{Utf8(Key), Utf8(Disk.wstring()), fs::is_directory(Status),
+            {int64_t(Ticks / 10000) - 11644473600000LL, Info.dwFileAttributes & 0x27u, 0x27, 1}};
     }
     if (!Exists && !DefaultIni.empty()) {
         Profile = GetPrivateProfileIntW(L"IsoImage", L"Profile", HC_ISO_UDF_BRIDGE, DefaultIni.c_str());
@@ -188,7 +194,10 @@ void Update(const wchar_t* Archive, const wchar_t* SubPath, const wchar_t* Sourc
     // Staging beside the destination keeps the final rename on the same volume.
     const auto Stage = Target.parent_path() / (Target.filename().wstring() + L".hc-" + Temp.path_.filename().wstring());
     HcIsoOptions Options{sizeof(HcIsoOptions), Profile, Label.c_str(), 128ull * 1024 * 1024 * 1024, 0, Progress, nullptr};
-    Check(hcIsoBuild(Utf8(Stage.wstring()).c_str(), Sources.data(), Sources.size(), &Options));
+    std::vector<HcIsoMetadata> Metadata;
+    for (const auto& [Key, Value] : Items) Metadata.push_back(Value.metadata_);
+    HcIsoOptionsEx Extended{sizeof(HcIsoOptionsEx), 1, Options, 0};
+    Check(hcIsoBuildWithMetadata(Utf8(Stage.wstring()).c_str(), Sources.data(), Sources.size(), &Extended, Metadata.data()));
     try {
         Require(!PackingProgress || PackingProgress(nullptr, 0), E_EABORTED);
         Require(fs::exists(Target) == Exists && (!Exists || (fs::file_size(Target) == OldSize && fs::last_write_time(Target) == OldTime)), E_EWRITE);
@@ -218,7 +227,20 @@ extern "C" __declspec(dllexport) int __stdcall ReadHeaderExW(HANDLE Handle, tHea
         *Header = {}; std::copy(Path.begin(), Path.end(), Header->FileName);
         Header->FileAttr = Entry.directory_ ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
         Header->UnpSize = Header->PackSize = uint32_t(Entry.size_); Header->UnpSizeHigh = Header->PackSizeHigh = uint32_t(Entry.size_ >> 32);
-        Header->FileTime = (20 << 25) | (1 << 21) | (1 << 16);
+        HcIsoMetadata Meta{}; Check(hcIsoGetMetadata(Value->image_.get(), Value->index_, &Meta));
+        if (Meta.attributes_) Header->FileAttr = Meta.attributes_ | (Entry.directory_ ? FILE_ATTRIBUTE_DIRECTORY : 0);
+        if (Meta.hasModified_ && Meta.modifiedUtcMs_ >= -11644473600000LL && Meta.modifiedUtcMs_ <= 910692730085477LL) {
+            const uint64_t Ticks = uint64_t(Meta.modifiedUtcMs_ + 11644473600000LL) * 10000;
+            FILETIME Utc{DWORD(Ticks), DWORD(Ticks >> 32)}, Local{};
+            WORD Date{}, Time{};
+            if (FileTimeToLocalFileTime(&Utc, &Local) && FileTimeToDosDateTime(&Local, &Date, &Time))
+                Header->FileTime = int((uint32_t(Date) << 16) | Time);
+        }
+        // Private adapter-to-host extension; TC continues to consume its DOS fields.
+        std::memcpy(Header->Reserved, "HCISOM01", 8);
+        std::memcpy(Header->Reserved + 8, &Meta.modifiedUtcMs_, 8);
+        Header->Reserved[16] = char(Meta.knownMask_);
+        Header->Reserved[17] = char(Meta.hasModified_);
     });
 }
 extern "C" __declspec(dllexport) int __stdcall ProcessFileW(HANDLE Handle, int Operation, wchar_t* Path, wchar_t* NameValue)

@@ -452,6 +452,10 @@ namespace hc::storage
                     auto Entry = makeEntry(Path, Directory);
                     Entry.attributes_ = Header.attributes_; Entry.size_ = Header.size_;
                     Entry.modifiedUtcMs_ = Header.modifiedUtcMs_;
+                    if (Header.attributeMask_) {
+                        Entry.hints_["isoAttributeMask"] = std::to_string(*Header.attributeMask_);
+                        Entry.hints_["isoHasTime"] = Header.hasModified_ ? "1" : "0";
+                    }
                     Entry.hints_["packedSize"] = std::to_string(Header.packedSize_);
                     Entry.hints_["crc"] = std::to_string(Header.crc_);
                     if (Header.encrypted_) Entry.hints_["encrypted"] = "1";

@@ -20,6 +20,30 @@ uint32_t Paired(std::span<const uint8_t> Data, size_t Offset, size_t Width)
     Require(Value == Get(Data, Offset + Width, Width, true), "ISO endian copies disagree");
     return uint32_t(Value);
 }
+uint32_t DataBlock(std::span<const uint8_t> Record)
+{
+    const auto Base = Paired(Record, 2, 4);
+    Require(Base <= UINT32_MAX - Record[1], "ISO extended attribute extent overflow");
+    return Base + Record[1];
+}
+bool ExtendedModificationTime(std::span<const uint8_t> Field, int64_t& Millis)
+{
+    // ECMA-119 XAR long timestamp: decimal components, centiseconds and zone.
+    unsigned Values[7]{};
+    size_t Pos = 0;
+    for (unsigned I = 0; I < 7; ++I) {
+        for (unsigned J = 0; J < (I == 0 ? 4u : 2u); ++J) {
+            const auto Digit = Field[Pos++];
+            if (Digit < '0' || Digit > '9') return false;
+            Values[I] = Values[I] * 10 + Digit - '0';
+        }
+    }
+    if (Values[0] < 1900 || Values[0] > 2155) return false;
+    const std::array<uint8_t, 7> Short{uint8_t(Values[0] - 1900), uint8_t(Values[1]), uint8_t(Values[2]),
+        uint8_t(Values[3]), uint8_t(Values[4]), uint8_t(Values[5]), Field[16]};
+    if (!DecodeTimestamp(Short, false, Millis)) return false;
+    Millis += Values[6] * 10; return true;
+}
 }
 DiskReader::DiskReader(const fs::path& Path)
 {
@@ -94,7 +118,7 @@ void Reader::initialize(uint32_t Namespace)
     }
     Require(!Primary.empty() && End, "Missing ISO primary descriptor or terminator");
     Require(Paired(Primary, 128, 2) == Block && uint64_t(Paired(Primary, 80, 4)) * Block <= info_.imageBytes_, "Invalid ISO volume extent");
-    const auto PrimaryRoot = ReadAt(uint64_t(Paired(Primary, 158, 4)) * Block, Block);
+    const auto PrimaryRoot = ReadAt(uint64_t(DataBlock(std::span(Primary).subspan(156, 34))) * Block, Block);
     Require(PrimaryRoot[0] >= 34, "Missing primary root self record");
     if (PrimaryRoot[0] > 34 && std::any_of(PrimaryRoot.begin() + 34, PrimaryRoot.begin() + PrimaryRoot[0], [](auto B) { return B != 0; })) info_.features_ |= 2;
     std::string Label(reinterpret_cast<const char*>(Primary.data() + 40), 32);
@@ -191,7 +215,7 @@ void Reader::readIso(const Bytes& Descriptor, bool Joliet)
             if (!Size) { Offset = size_t(Round(Offset + 1)); continue; }
             Require(Size >= 34 && Size <= Data.size() - Offset && Offset % Block + Size <= Block, "Invalid ISO directory record");
             const auto Rec = std::span(Data).subspan(Offset, Size); Offset += Size;
-            Require(Rec[1] == 0 && Rec[26] == 0 && Rec[27] == 0, "Extended attributes/interleaving unsupported", HC_ISO_UNSUPPORTED);
+            Require(Rec[26] == 0 && Rec[27] == 0, "Interleaving unsupported", HC_ISO_UNSUPPORTED);
             const auto NameSize = Rec[32]; Require(NameSize && 33u + NameSize <= Rec.size(), "Invalid ISO identifier");
             if (NameSize == 1 && Rec[33] <= 1) continue;
             const auto NameData = Rec.subspan(33, NameSize);
@@ -200,11 +224,34 @@ void Reader::readIso(const Bytes& Descriptor, bool Joliet)
             if (!Directory && !Joliet) { const auto Version = Name.rfind(';'); if (Version != std::string::npos) Name.resize(Version); if (!Name.empty() && Name.back() == '.') Name.pop_back(); }
             Require(Name.find('/') == std::string::npos, "Invalid ISO component");
             const auto Path = Parent.empty() ? Name : Parent + '/' + Name;
-            const auto ExtentBlock = Paired(Rec, 2, 4), ExtentSize = Paired(Rec, 10, 4);
+            const auto ExtentBlock = DataBlock(Rec), ExtentSize = Paired(Rec, 10, 4);
             Require(uint64_t(ExtentBlock) * Block <= info_.imageBytes_ && ExtentSize <= info_.imageBytes_ - uint64_t(ExtentBlock) * Block, "ISO file extent outside image");
             Require(Paired(Rec, 28, 2) == 1, "Multi-volume ISO unsupported", HC_ISO_UNSUPPORTED);
             if (Multi) Require(!Directory && Pending.path_ == Path, "Broken ISO multi-extent chain");
-            else { Pending = {}; Pending.path_ = Path; Pending.directory_ = Directory; }
+            else {
+                Pending = {}; Pending.path_ = Path; Pending.directory_ = Directory;
+                auto& Meta = Pending.metadata_;
+                Meta.knownMask_ = 2; Meta.attributes_ = (Rec[25] & 1) ? 2 : 0;
+                Meta.hasModified_ = DecodeTimestamp(Rec.subspan(18, 7), false, Meta.modifiedUtcMs_);
+                if (Rec[1]) {
+                    info_.features_ |= 2; // Rebuilding an external XAR could discard other fields.
+                    const auto Xar = ReadAt(uint64_t(Paired(Rec, 2, 4)) * Block, 250);
+                    int64_t Modified = 0;
+                    if (Xar[180] == 1 && ExtendedModificationTime(std::span(Xar).subspan(27, 17), Modified)) {
+                        Meta.modifiedUtcMs_ = Modified; Meta.hasModified_ = 1;
+                    }
+                }
+                const auto Extra = Rec.subspan(std::min(Rec.size(), size_t(Round(33 + NameSize, 2))));
+                if (Extra.size() == 20 && !std::memcmp(Extra.data(), "HC\x14\x01HCMD", 8)
+                    && !(Extra[8] & ~0x27) && !(Extra[9] & ~Extra[8]) && Extra[10] <= 1) {
+                    Meta.knownMask_ = Extra[8]; Meta.attributes_ = Extra[9]; Meta.hasModified_ = Extra[10];
+                    if (Extra[10]) {
+                        const auto Millis = int64_t(Get(Extra, 12, 8));
+                        Require(Millis >= -11644473600000LL && Millis <= 253402300799999LL, "Invalid ISO modification timestamp");
+                        Meta.modifiedUtcMs_ = Millis; Meta.hasModified_ = 1;
+                    }
+                }
+            }
             Pending.size_ += ExtentSize; Pending.extents_.push_back({uint64_t(ExtentBlock) * Block, ExtentSize});
             Multi = (Rec[25] & 128) != 0;
             Require(!Directory || !Multi, "Multi-extent directory unsupported", HC_ISO_UNSUPPORTED);
@@ -212,7 +259,7 @@ void Reader::readIso(const Bytes& Descriptor, bool Joliet)
         }
         Require(!Multi, "Unterminated ISO multi-extent chain");
     };
-    Walk(Paired(Descriptor, 158, 4), Paired(Descriptor, 166, 4), {}, 0);
+    Walk(DataBlock(std::span(Descriptor).subspan(156, 34)), Paired(Descriptor, 166, 4), {}, 0);
 }
 void Reader::readUdf()
 {
@@ -245,14 +292,20 @@ void Reader::readUdf()
     const auto Fsd = ReadPartition(FsdBlock, Block); CheckTag(Fsd, FsdBlock, 256);
     Require(Get(Fsd, 408, 2) == 0, "Invalid root partition reference");
     std::set<uint32_t> Visited;
-    std::function<void(uint32_t, const std::string&, unsigned)> Walk;
-    Walk = [&](uint32_t Sector, const std::string& Path, unsigned Depth) {
+    std::function<void(uint32_t, const std::string&, unsigned, bool)> Walk;
+    Walk = [&](uint32_t Sector, const std::string& Path, unsigned Depth, bool Hidden) {
         Require(Depth <= 128 && Visited.insert(Sector).second, "Cyclic UDF tree or shared ICB unsupported");
         const auto Fe = ReadPartition(Sector, Block); CheckTag(Fe, Sector);
         const auto Id = Get(Fe, 0, 2); Require(Id == 261 || Id == 266, "Unsupported UDF ICB", HC_ISO_UNSUPPORTED);
         const bool Extended = Id == 266;
         Require(Get(Fe, 20, 2) == 4 && (Fe[27] == 4 || Fe[27] == 5), "UDF strategy/special file unsupported", HC_ISO_UNSUPPORTED);
         Entry Item; Item.path_ = Path; Item.directory_ = Fe[27] == 4; Item.size_ = Get(Fe, 56, 8);
+        const auto Flags = Get(Fe, 34, 2);
+        auto& Meta = Item.metadata_;
+        Meta.knownMask_ = 0x27;
+        Meta.attributes_ = uint32_t(Flags & 32) | (Hidden ? 2 : 0) | ((Flags & 0x400) ? 4 : 0)
+            | ((Get(Fe, 44, 4) & 0x842) ? 0 : 1);
+        Meta.hasModified_ = DecodeTimestamp(std::span(Fe).subspan(Extended ? 92 : 84, 12), true, Meta.modifiedUtcMs_);
         const size_t Header = Extended ? 216 : 176;
         const auto EaLength = Get(Fe, Header - 8, 4), AdLength = Get(Fe, Header - 4, 4);
         Require(EaLength <= Block - Header && AdLength <= Block - Header - EaLength, "Invalid UDF allocation length");
@@ -299,9 +352,9 @@ void Reader::readUdf()
             Require(NameSize != 0, "Empty UDF file identifier");
             const auto Name = DecodeUnicode(Tail.subspan(38 + ImplSize, NameSize), true);
             Require(Name.find('/') == std::string::npos, "Invalid UDF component");
-            Walk(uint32_t(Get(Tail, 24, 4)), Path.empty() ? Name : Path + '/' + Name, Depth + 1);
+            Walk(uint32_t(Get(Tail, 24, 4)), Path.empty() ? Name : Path + '/' + Name, Depth + 1, (Tail[18] & 1) != 0);
         }
     };
-    Walk(uint32_t(Get(Fsd, 404, 4)), {}, 0);
+    Walk(uint32_t(Get(Fsd, 404, 4)), {}, 0, false);
 }
 }
