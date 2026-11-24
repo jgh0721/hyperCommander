@@ -81,6 +81,27 @@ CreateJobRequest Request(hc::settings::Repository& Settings, const std::vector<O
 class ArchiveCreationTests final : public QObject {
     Q_OBJECT
 private slots:
+    void pagedPlanningReusesVerifiedChildren()
+    {
+        QTemporaryDir Dir;
+        const auto Input = Dir.filePath("src");
+        QVERIFY(QDir().mkdir(Input));
+        for (int Index = 0; Index < 300; ++Index)
+            QVERIFY(Put(QDir(Input).filePath(QString::number(Index)), QByteArray()));
+        auto Reader = std::make_shared<ProbeProvider>();
+        PlanRequest Request;
+        Request.sources_ = {Source(Reader, Input)};
+        Request.destination_ = {LocatorKind::Local, Dir.filePath("out.zip").toStdString()};
+        Request.format_ = "zip";
+        Reader->calls_ = 0;
+        JobStep Last;
+        const auto Outputs = Plan(std::move(Request), Last);
+        QCOMPARE(Last.next_, JobState::Completed);
+        QCOMPARE(Outputs.size(), size_t(1));
+        QCOMPARE(Outputs.front().entries_.size(), size_t(301));
+        // Only the selected root needs Stat and Enumerate across all three pages.
+        QCOMPARE(Reader->calls_.load(), 2u);
+    }
     void unifiedDialogAndSettings()
     {
         QTemporaryDir Dir; hc::settings::Repository Settings(Dir.filePath("settings"));
@@ -329,6 +350,61 @@ private slots:
             QVERIFY(Result.cleanupErrors_.empty()); QVERIFY(QFileInfo(Target).size() > 0);
         }
         Reader.reset(); QVERIFY(Remote.remove());
+    }
+    void smallFileZipBenchmark()
+    {
+        if (!qEnvironmentVariableIsSet("HC_ARCHIVE_BENCH")) QSKIP("Opt-in small-file comparison");
+        const auto Tool = qEnvironmentVariable("HC_BENCH_7Z");
+        QVERIFY(QFileInfo(Tool).isFile());
+        QTemporaryDir Dir;
+        QVERIFY(Dir.isValid());
+        const auto Input = Dir.filePath("input");
+        QVERIFY(QDir().mkdir(Input));
+        constexpr int FileCount = 2000;
+        for (int Index = 0; Index < FileCount; ++Index)
+            QVERIFY(Put(QDir(Input).filePath(QString::number(Index)), QByteArray::number(Index)));
+        hc::settings::Repository Settings(Dir.filePath("settings"));
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        const auto HcPath = Dir.filePath("hc.zip");
+        const auto RefPath = Dir.filePath("reference.zip");
+        auto R = Request(Settings, {Source(Reader, Input)}, HcPath, "zip");
+        auto& Seven = std::get<SevenZipCreateSettings>(R.value_.settings_);
+        Seven.level_ = 0;
+        Seven.verifyContents_ = false;
+        QProcess Cli;
+        Cli.setWorkingDirectory(Dir.path());
+        for (int Round = 0; Round < 3; ++Round) {
+            for (const bool External : {bool(Round % 2), !bool(Round % 2)}) {
+                const auto Output = External ? RefPath : HcPath;
+                QElapsedTimer Clock;
+                Clock.start();
+                if (External) {
+                    Cli.start(Tool, {"a", "-tzip", "-mx=0", RefPath, "input"});
+                    QVERIFY(Cli.waitForFinished(120000));
+                    QCOMPARE(Cli.exitCode(), 0);
+                } else {
+                    OperationContext Context;
+                    Context.flushFileContents_ = false;
+                    auto Job = PrepareCreation(R, Context);
+                    QVERIFY(Job.HasValue());
+                    QCOMPARE(Run(std::move(Job.Value())).snapshot_.state_, JobState::Completed);
+                }
+                qInfo() << "ZIP store" << FileCount << (External ? "7zip" : "HC") << Clock.elapsed() << "ms";
+                const auto Extracted = Dir.filePath("restored");
+                Cli.start(Tool, {"x", "-y", "-o" + Extracted, Output});
+                QVERIFY(Cli.waitForFinished(120000));
+                QCOMPARE(Cli.exitCode(), 0);
+                const QDir Files(QDir(Extracted).filePath("input"));
+                QCOMPARE(Files.entryList(QDir::Files).size(), FileCount);
+                for (int Index = 0; Index < FileCount; ++Index) {
+                    QFile File(Files.filePath(QString::number(Index)));
+                    QVERIFY(File.open(QIODevice::ReadOnly));
+                    QCOMPARE(File.readAll(), QByteArray::number(Index));
+                }
+                QVERIFY(QDir(Extracted).removeRecursively());
+                QVERIFY(QFile::remove(Output));
+            }
+        }
     }
     void publicationBenchmark_data() { nativeCreation_data(); }
     void publicationBenchmark()

@@ -99,7 +99,7 @@ public:
         if (Id == IID_IUnknown || Id == IID_IInStream || Id == IID_ISequentialInStream) *Value = static_cast<IInStream*>(this);
         if (!*Value) return E_NOINTERFACE; AddRef(); return S_OK;
     }
-    bool Open(const QString& Path, bool Split = false, unsigned RequiredPart = 1) {
+    bool Open(const QString& Path, bool Split = false, unsigned RequiredPart = 1, BY_HANDLE_FILE_INFORMATION* FirstInfo = nullptr) {
         auto Name = Path; unsigned Number = 1;
         bufferRemoteReads_ = QDir::fromNativeSeparators(Path).startsWith("//");
         const auto Width = QFileInfo(Path).suffix().size();
@@ -112,6 +112,7 @@ public:
             if (!GetFileInformationByHandle(Handle, &Info) || (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) { CloseHandle(Handle); return false; }
             const auto Size = (uint64_t(Info.nFileSizeHigh) << 32) | Info.nFileSizeLow;
             if (Size > INT64_MAX - size_) { CloseHandle(Handle); return false; }
+            if (FirstInfo && parts_.empty()) *FirstInfo = Info;
             parts_.push_back({Handle, size_, Size}); size_ += Size;
             if (!Split) return true;
             Name = Path.left(Path.size() - Width) + QString::number(++Number).rightJustified(Width, '0');

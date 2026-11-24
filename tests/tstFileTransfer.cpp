@@ -215,6 +215,21 @@ private slots:
         QVERIFY(QFileInfo::exists(path(Base + "/file.txt")));
         QVERIFY(QDir(path(Base + "/current")).isEmpty());
     }
+    void streamsNestedCopyAcrossPages()
+    {
+        buildTree("paged/source");
+        QVERIFY(QDir().mkpath(path("paged/to")));
+        auto Request = request(FileOperation::Copy, "paged/source", "paged/to");
+        Request.calculateSizeBefore_ = false;
+        auto Context = engine(1);
+        Context.maxPageItems_ = 4;
+        Context.fileCopyWorkers_ = 4;
+        const auto Result = run(std::move(Request), Context);
+        QCOMPARE(Result.snapshot_.state_, JobState::Completed);
+        QCOMPARE(Result.snapshot_.failedItems_, std::uint64_t(0));
+        QCOMPARE(Snapshot(path("paged/to/source")), Snapshot(path("paged/source")));
+        ClearReadOnly(path("paged"));
+    }
     void copiesFolderLikeItemPath()
     {
         // The engine and the per-item path produce the same tree and ledger.

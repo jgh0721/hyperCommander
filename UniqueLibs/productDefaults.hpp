@@ -1532,7 +1532,7 @@ namespace hc::defaults
                  // 켜면 Enter·두 번 클릭으로 오디오를 제목표시줄에서 재생한다. 모든 설치에서 기본으로 끈다.
                  { "audioOpenInternally",     false },
                  { "folderSizeOnSpace",       true },
-                 { "folderSizeBeforeOperations", true },
+                 { "folderSizeBeforeOperations", false },
                  { "folderSizeUseEverything", true },
                  { "folderSizeMode",          "everything" },
                  { "copyMetadata",            true },

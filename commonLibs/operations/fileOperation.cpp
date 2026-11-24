@@ -288,8 +288,10 @@ namespace hc::operations
                 if (phase_ == Phase::ElevationPrompt) return permission(Context);
                 if (phase_ == Phase::ElevationRun) return elevated(Context);
                 if (phase_ == Phase::Preparing) {
+                    const auto Deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(10);
                     auto Step = prepare(Context.operation_);
-                    for (std::size_t I = 1; deleteWorkers_ > 1 && I < 64 && phase_ == Phase::Preparing && !tree_
+                    for (std::size_t I = 1; I < 64 && std::chrono::steady_clock::now() < Deadline
+                        && phase_ == Phase::Preparing && !tree_ && !transfer_ && !Context.pauseSignal_.stop_requested()
                         && Step.next_ == JobState::Preparing && !Step.error_ && !Step.item_ && Step.items_.empty() && !Step.interaction_; ++I) {
                         if (const auto Error = Context.operation_.Check({})) return failed(*Error);
                         Step = prepare(Context.operation_);
@@ -742,7 +744,13 @@ namespace hc::operations
                         copies_.push_back(std::move(Copy)); runCopy(*copies_.back(), std::move(WorkContext));
                     }
                 }
-                if (copies_.empty()) return begin(Context.operation_);
+                if (copies_.empty()) {
+                    // All global copy slots are busy. Keep the coordinator
+                    // cancellable; a synchronous copy here would exceed the cap.
+                    auto Step = copyProgress();
+                    Step.deferFor_ = std::chrono::milliseconds(1);
+                    return Step;
+                }
                 auto& Copy = *copies_.front();
                 if (Copy.work_.valid()) {
                     // New workers were started above; wait for the oldest within
@@ -813,7 +821,7 @@ namespace hc::operations
                 std::unique_ptr<IEntryCursor> cursor_;
                 std::vector<EntrySnapshot> entries_;
                 std::size_t next_ = 0;
-                bool ended_ = false;
+                bool ended_ = false, verifiedChildren_ = false;
                 // Declared after cursor_: destruction joins the outstanding
                 // page before destroying the cursor captured by its provider.
                 Task<EntryPage> readAhead_;
@@ -1157,7 +1165,7 @@ namespace hc::operations
                 Context.fileDeleteWorkers_ = deleteWorkers_;
                 if (request_.operation_ == FileOperation::Delete && request_.deleteMode_ == DeleteMode::Permanent)
                     Context.removalPreparation_ = std::dynamic_pointer_cast<IRemovalPreparation>(mutationScope_);
-                Context.incrementalEnumeration_ = request_.operation_ == FileOperation::Delete;
+                Context.incrementalEnumeration_ = streaming_ || request_.operation_ == FileOperation::Delete;
                 if (request_.operation_ == FileOperation::Delete) Context.allowUnavailableChildMetadata_ = true;
                 if (!transferLeftover_.empty()) {
                     auto Step = progress(); Step.next_ = JobState::Running;
@@ -1168,7 +1176,7 @@ namespace hc::operations
                 }
                 if (tree_) return collectTree();
                 if (transfer_) return collectTransfer();
-                if (incrementalDelete_ && !enumerations_.empty()) return prepareIncremental(Context);
+                if (!enumerations_.empty()) return prepareIncremental(Context);
                 if (incrementalDelete_ && request_.deleteMode_ == DeleteMode::Recycle && index_ < items_.size()) {
                     // Recycle a selected directory as one unit, after its own
                     // readonly/link checks, while later selected roots remain unscanned.
@@ -1284,7 +1292,8 @@ namespace hc::operations
                     auto Entry = std::move(Frame.entries_[Frame.next_++]);
                     PlannedItem Item{{std::move(Entry), Frame.parent_.source_.reader_, Frame.parent_.source_.writer_}, {}, Frame.parent_.depth_ + 1};
                     Item.destination_ = Child(request_.preservePaths_ ? Frame.parent_.destination_ : request_.destination_, Item.source_.entry_.name_); Item.root_ = Frame.parent_.root_;
-                    Item.freshMetadata_ = Item.source_.reader_->SupportsFreshEnumerationMetadata();
+                    Item.verifiedReadAhead_ = Frame.verifiedChildren_;
+                    Item.freshMetadata_ = Frame.verifiedChildren_ || Item.source_.reader_->SupportsFreshEnumerationMetadata();
                     return prepareItem(std::move(Item), Context);
                 }
                 if (Frame.ended_) { enumerations_.pop_back(); return progress(); }
@@ -1300,8 +1309,11 @@ namespace hc::operations
                         return failed({ErrorCategory::InvalidRequest, "enumerated-child-outside-source"});
                 }
                 Frame.entries_ = std::move(Page.Value().entries_); Frame.next_ = 0; Frame.ended_ = Page.Value().end_;
-                if (!Frame.ended_ && deleteWorkers_ > 1 && prefetchAvailable()) {
-                    Frame.readAhead_ = Frame.cursor_->Next(Context.maxPageItems_, Context);
+                Frame.verifiedChildren_ = Page.Value().verifiedChildMetadata_;
+                if (!Frame.ended_ && (request_.operation_ == FileOperation::Copy || deleteWorkers_ > 1) && prefetchAvailable()) {
+                    auto AheadContext = Context;
+                    AheadContext.workerRead_ = false;
+                    Frame.readAhead_ = Frame.cursor_->Next(Context.maxPageItems_, AheadContext);
                 }
                 return progress();
             }
@@ -1469,8 +1481,12 @@ namespace hc::operations
                     if (!Existing.Value() && startTransfer(Item, Context, request_.operation_ == FileOperation::Copy ? TreeTransferMode::Copy : TreeTransferMode::Move))
                         return progress();
                 }
+                const bool RegularCopy = request_.operation_ == FileOperation::Copy && !Item.source_.entry_.directory_;
                 const auto Planned = [&] {
-                    if (streaming_ && index_ < items_.size() && !(incrementalDelete_ && Recycling)
+                    const bool FillCopyBatch = RegularCopy && Context.fileCopyWorkers_ != 1 && items_.size() - index_ < 64
+                        && ((!enumerations_.empty() && enumerations_.back().next_ < enumerations_.back().entries_.size())
+                            || (!pending_.empty() && !pending_.front().source_.entry_.directory_));
+                    if (streaming_ && index_ < items_.size() && !FillCopyBatch && !(incrementalDelete_ && Recycling)
                         && !(incrementalDelete_ && deleteWorkers_ > 1 && items_.size() - index_ < std::size_t{64})) phase_ = Phase::Begin;
                     return progress();
                 };
@@ -1489,14 +1505,16 @@ namespace hc::operations
                     auto Cursor = Item.source_.reader_->Enumerate(Item.source_.entry_.locator_, Context).get();
                     if (!Cursor.HasValue()) return request_.operation_ == FileOperation::Delete
                         ? preparationFailure(std::move(Item), Cursor.Failure(), false) : failed(Cursor.Failure());
-                    if (incrementalDelete_) {
+                    if (streaming_) {
                         enumerations_.push_back({std::move(Item), std::move(Cursor.Value())});
                         // Capture the next directory while deleting the previous
                         // directory's remaining files. Small folders otherwise
                         // serialize discovery and removal despite file workers.
-                        if (deleteWorkers_ > 1 && index_ < items_.size() && prefetchAvailable()) {
+                        if (incrementalDelete_ && deleteWorkers_ > 1 && index_ < items_.size() && prefetchAvailable()) {
                             auto& Frame = enumerations_.back();
-                            Frame.readAhead_ = Frame.cursor_->Next(Context.maxPageItems_, Context);
+                            auto AheadContext = Context;
+                            AheadContext.workerRead_ = false;
+                            Frame.readAhead_ = Frame.cursor_->Next(Context.maxPageItems_, AheadContext);
                             phase_ = Phase::Begin;
                         }
                     }

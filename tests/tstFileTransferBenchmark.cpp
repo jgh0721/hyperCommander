@@ -487,9 +487,9 @@ RunOutcome RunHyperCommander(hc::operations::FileOperation Operation, const QStr
     Request.confirmDelete_ = false;
     Request.sources_ = {{Entry.Value(), Reader, Writer}};
     Request.destination_ = To; Request.destinationWriter_ = Destination;
-    // FileJobUi::Submit with productDefaults.hpp: folder sizes first, lock
+    // FileJobUi::Submit with productDefaults.hpp: stream discovery, lock
     // prompts enabled, delayed file writes (no per-file flush).
-    Request.fileLockInteractions_ = true; Request.calculateSizeBefore_ = true;
+    Request.fileLockInteractions_ = true; Request.calculateSizeBefore_ = false;
     OperationContext Context;
     Context.flushFileContents_ = false; Context.fileCopyWorkers_ = Workers;
     if (qEnvironmentVariableIsSet("HC_TRANSFER_BENCH_STREAM_ONLY")) Context.directContent_ = false;

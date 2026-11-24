@@ -41,6 +41,7 @@ public:
     operations::JobStep Advance(operations::JobStepContext Context);
     std::vector<OutputPlan> Take();
 private:
+    operations::JobStep advanceOne(const operations::JobStepContext& Context);
     struct State;
     std::unique_ptr<State> state_;
 };

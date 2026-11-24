@@ -325,6 +325,15 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
         if (Code != S_OK || Shared->error_) return Shared->Result(Code);
     }
     Names.clear(); for (const auto& Item : Items) Names.insert(Item.name_.toCaseFolded());
+    QString PreviousParent, PreviousRoot, VolumeRoot;
+    QStringList Ancestors;
+    std::vector<HANDLE> ParentPins;
+    const auto ReleaseParents = [&] {
+        for (auto Pin : ParentPins) CloseHandle(Pin);
+        ParentPins.clear();
+    };
+    const auto CleanupParents = qScopeGuard(ReleaseParents);
+    bool PinSiblings = false, AttemptedPins = false;
     size_t SourceIndex = 0;
     for (const auto& Raw : Request.add_) {
         if (const auto Stop = Context.Check({"7zip"})) return *Stop;
@@ -348,17 +357,62 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
             if (Time.vt == VT_FILETIME) Item.modified_ = Time.filetime;
             Item.zipEncryption_ = CipherByName.at(Origins.at(Name)); Items.push_back(std::move(Item)); continue;
         }
-        // Check every ancestor, not only the final file, before pinning input.
-        for (auto Path = Item.path_;; Path = QFileInfo(Path).absolutePath()) {
-            const auto Attr = GetFileAttributesW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(Path).utf16()));
-            if (Attr == INVALID_FILE_ATTRIBUTES || (Attr & FILE_ATTRIBUTE_REPARSE_POINT)) return Failure("7zip-input-link-or-missing", ErrorCategory::Unsupported);
-            if (Path == InputRoot) break;
-            if (!Path.startsWith(InputRoot.endsWith('/') ? InputRoot : InputRoot + '/', Qt::CaseInsensitive)) return Failure("7zip-input-outside-root", ErrorCategory::InvalidRequest);
+        // Validate the full ancestor chain before opening each leaf.
+        const auto Parent = QFileInfo(Item.path_).absolutePath();
+        if (Parent != PreviousParent || InputRoot != PreviousRoot) {
+            ReleaseParents();
+            AttemptedPins = false;
+            Ancestors.clear();
+            const auto Prefix = InputRoot.endsWith('/') ? InputRoot : InputRoot + '/';
+            for (auto Path = Parent;; Path = QFileInfo(Path).absolutePath()) {
+                Ancestors.push_back(QDir::toNativeSeparators(Path));
+                if (Path == InputRoot) break;
+                if (!Path.startsWith(Prefix, Qt::CaseInsensitive)) return Failure("7zip-input-outside-root", ErrorCategory::InvalidRequest);
+            }
+            PreviousParent = Parent;
+            PreviousRoot = InputRoot;
+        } else if (!AttemptedPins && !Request.sourcePaths_.empty() && InputRoot.size() == 3 && InputRoot[1] == ':') {
+            AttemptedPins = true;
+            if (VolumeRoot != InputRoot) {
+                VolumeRoot = InputRoot;
+                const auto Drive = QDir::toNativeSeparators(InputRoot).toStdWString();
+                wchar_t FileSystem[32]{};
+                PinSiblings = GetDriveTypeW(Drive.c_str()) == DRIVE_FIXED
+                    && GetVolumeInformationW(Drive.c_str(), nullptr, 0, nullptr, nullptr, nullptr, FileSystem, DWORD(std::size(FileSystem)))
+                    && (!_wcsicmp(FileSystem, L"NTFS") || !_wcsicmp(FileSystem, L"ReFS"));
+            }
+            if (PinSiblings) {
+                // As in native removal, LIST_DIRECTORY with read-only sharing
+                // keeps each verified ancestor in place on these local volumes.
+                ParentPins.reserve(Ancestors.size());
+                for (auto It = Ancestors.crbegin(); It != Ancestors.crend(); ++It) {
+                    const auto Pin = CreateFileW(reinterpret_cast<LPCWSTR>(It->utf16()), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+                        FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                    if (Pin == INVALID_HANDLE_VALUE) { ReleaseParents(); break; }
+                    ParentPins.push_back(Pin);
+                    BY_HANDLE_FILE_INFORMATION Info{};
+                    if (!GetFileInformationByHandle(Pin, &Info) || !(Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                        || (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) { ReleaseParents(); break; }
+                }
+            }
         }
-        WIN32_FILE_ATTRIBUTE_DATA Info{};
-        if (!GetFileAttributesExW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(Item.path_).utf16()), GetFileExInfoStandard, &Info)
-            || bool(Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != Item.directory_) return Failure("7zip-input-kind", ErrorCategory::InvalidRequest);
-        Item.attributes_ = Info.dwFileAttributes; Item.modified_ = Info.ftLastWriteTime;
+        if (ParentPins.empty()) for (const auto& Path : Ancestors) {
+            const auto Attr = GetFileAttributesW(reinterpret_cast<const wchar_t*>(Path.utf16()));
+            if (Attr == INVALID_FILE_ATTRIBUTES || (Attr & FILE_ATTRIBUTE_REPARSE_POINT)) return Failure("7zip-input-link-or-missing", ErrorCategory::Unsupported);
+        }
+        if (Item.directory_) {
+            WIN32_FILE_ATTRIBUTE_DATA Info{};
+            if (!GetFileAttributesExW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(Item.path_).utf16()), GetFileExInfoStandard, &Info)
+                || !(Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return Failure("7zip-input-kind", ErrorCategory::InvalidRequest);
+            if (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return Failure("7zip-input-link-or-missing", ErrorCategory::Unsupported);
+            Item.attributes_ = Info.dwFileAttributes; Item.modified_ = Info.ftLastWriteTime;
+        } else {
+            BY_HANDLE_FILE_INFORMATION Info{};
+            Item.input_ = std::shared_ptr<Input>(new Input(Shared, !Original && VerifyContents), [](Input* Value) { Value->Release(); });
+            if (!Item.input_->Open(Item.path_, false, 1, &Info)) return Failure("7zip-input-pin");
+            Item.attributes_ = Info.dwFileAttributes; Item.modified_ = Info.ftLastWriteTime;
+            Item.size_ = Item.input_->Size();
+        }
         if (Origins.contains(Name)) {
             Item.metadata_ = OldNames.at(Origins.at(Name));
             Item.renamed_ = Origins.at(Name) != Name;
@@ -371,8 +425,6 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
         }
         if (Format == "zip") Item.zipEncryption_ = Origins.contains(Name) ? CipherByName.at(Origins.at(Name)) : Request.encrypt_ ? (Encryption.isEmpty() ? "AES256" : Encryption) : QString{};
         if (!Item.directory_) {
-            Item.input_ = std::shared_ptr<Input>(new Input(Shared, !Original && VerifyContents), [](Input* Value) { Value->Release(); });
-            if (!Item.input_->Open(Item.path_)) return Failure("7zip-input-pin"); Item.size_ = Item.input_->Size();
             // Bound plaintext retained across all members of this creation.
             if (Item.size_ && Item.size_ <= CaptureBudget && Item.input_->TryCaptureVerificationBytes())
                 CaptureBudget -= Item.size_;
@@ -388,6 +440,7 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
         } else Item.legacyMd5_ = QCryptographicHash::hash({}, QCryptographicHash::Md5);
         Items.push_back(std::move(Item));
     }
+    ReleaseParents();
     if (Items.size() > UINT32_MAX || Items.size() > Context.EnumerationLimit()) return Failure("7zip-sdk-item-count", ErrorCategory::BudgetExceeded);
     std::set<QString> Files; for (const auto& Item : Items) if (!Item.directory_) Files.insert(Item.name_.toCaseFolded());
     for (const auto& Item : Items) for (auto Parent = Item.name_.section('/', 0, -2); !Parent.isEmpty(); Parent = Parent.section('/', 0, -2))

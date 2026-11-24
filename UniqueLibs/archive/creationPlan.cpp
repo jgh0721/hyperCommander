@@ -86,7 +86,7 @@ Result<Unit> ValidateOutputLocation(const Locator& Output, const std::vector<Ope
     return Unit{};
 }
 struct CreationPlanner::State {
-    struct Pending { OperationSource source_; QString member_; size_t group_ = 0, depth_ = 0; };
+    struct Pending { OperationSource source_; QString member_; size_t group_ = 0, depth_ = 0; bool verified_ = false; };
     PlanRequest request_;
     bool selected_ = false, initialized_ = false, done_ = false;
     uint64_t selectionOffset_ = 0, discovered_ = 0;
@@ -136,6 +136,19 @@ Result<Locator> SeparateArchiveOutput(const EntrySnapshot& Entry, Locator Direct
     return Directory;
 }
 JobStep CreationPlanner::Advance(JobStepContext Context)
+{
+    Context.operation_.workerRead_ = true;
+    Context.operation_.incrementalEnumeration_ = true;
+    Context.operation_.freshEnumerationMetadata_ = true;
+    const auto Deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(10);
+    for (unsigned Count = 1; ; ++Count) {
+        auto Step = advanceOne(Context);
+        if (Step.next_ != JobState::Preparing || Step.nextLanes_ || Count == 64
+            || Context.pauseSignal_.stop_requested() || std::chrono::steady_clock::now() >= Deadline) return Step;
+        Context.answer_.reset();
+    }
+}
+JobStep CreationPlanner::advanceOne(const JobStepContext& Context)
 {
     auto& S = *state_; auto& R = S.request_;
     if (const auto Stop = Context.operation_.Check({"archive-create"})) return Failed(*Stop);
@@ -198,7 +211,7 @@ JobStep CreationPlanner::Advance(JobStepContext Context)
                 || !SameLocation(Child(S.directory_.source_.entry_.locator_, Entry.name_), Entry.locator_)) return Failed(Invalid("archive-create-child-container"));
             if (Entry.directory_ && !R.composition_.includeSubdirectories_) continue;
             const auto Member = !R.composition_.preservePaths_ || S.directory_.member_.isEmpty() ? Name : S.directory_.member_ + '/' + Name;
-            S.pending_.push_back({{std::move(Entry), S.directory_.source_.reader_, {}}, Member, S.directory_.group_, S.directory_.depth_ + 1});
+            S.pending_.push_back({{std::move(Entry), S.directory_.source_.reader_, {}}, Member, S.directory_.group_, S.directory_.depth_ + 1, Page.Value().verifiedChildMetadata_});
         }
         if (Page.Value().end_) S.cursor_.reset(); return S.progress();
     }
@@ -221,12 +234,12 @@ JobStep CreationPlanner::Advance(JobStepContext Context)
     }
     S.currentPath_ = Serialize(Next.source_.entry_.locator_);
     if (Next.source_.entry_.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) return Failed({ErrorCategory::Unsupported, "archive-create-source-link"});
-    auto Fresh = Next.source_.reader_->Stat(Next.source_.entry_.id_, Context.operation_).get(); if (!Fresh.HasValue()) return Failed(Fresh.Failure());
-    // Stat validates the supplied revision. Native listing revisions may be
-    // upgraded to a handle-based revision; retain that stronger snapshot.
-    if (Fresh.Value().id_.providerId_ != Next.source_.entry_.id_.providerId_ || Fresh.Value().id_.key_ != Next.source_.entry_.id_.key_
-        || Fresh.Value().directory_ != Next.source_.entry_.directory_) return Failed({ErrorCategory::StaleRevision, "archive-create-source-changed"});
-    Next.source_.entry_ = std::move(Fresh.Value());
+    if (!Next.verified_ || !Next.source_.entry_.id_.revision_) {
+        auto Fresh = Next.source_.reader_->Stat(Next.source_.entry_.id_, Context.operation_).get(); if (!Fresh.HasValue()) return Failed(Fresh.Failure());
+        if (Fresh.Value().id_.providerId_ != Next.source_.entry_.id_.providerId_ || Fresh.Value().id_.key_ != Next.source_.entry_.id_.key_
+            || Fresh.Value().directory_ != Next.source_.entry_.directory_) return Failed({ErrorCategory::StaleRevision, "archive-create-source-changed"});
+        Next.source_.entry_ = std::move(Fresh.Value());
+    }
     auto& Output = S.outputs_[Next.group_];
     if (!Next.member_.isEmpty() && (!Next.source_.entry_.directory_ || R.composition_.preservePaths_)) {
         if (!S.names_[Next.group_].insert(ArchivePathKey(Next.member_)).second) { S.collision_ = std::move(Next); return S.conflict(); }

@@ -131,10 +131,12 @@ public:
             Plan.inputPaths_.clear(); Plan.inputDirectory_.clear(); currentPaths_.clear(); activeInput_.clear();
             const auto Builtin = request_.creator_.descriptor_.kind_ == plugins::ArchiveCreatorKind::BuiltinSevenZip
                 || request_.creator_.descriptor_.kind_ == plugins::ArchiveCreatorKind::BuiltinIso;
+            bool AllNative = true;
             QString CommonRoot; bool NativeTree = request_.value_.composition_.includeSubdirectories_;
             for (const auto& Entry : Plan.entries_) {
                 const auto& At = Entry.source_.entry_.locator_;
                 const bool Native = At.nesting_.empty() && (At.kind_ == LocatorKind::Local || At.kind_ == LocatorKind::Smb);
+                AllNative = AllNative && Native;
                 const auto Path = QDir::cleanPath(QDir::fromNativeSeparators(QString::fromStdString(At.root_)));
                 auto Root = Path;
                 const auto Tail = '/' + Entry.member_;
@@ -151,6 +153,12 @@ public:
                 Plan.inputDirectory_ = CommonRoot;
                 for (size_t Index = 0; Index < Plan.entries_.size(); ++Index)
                     Plan.inputPaths_[Index] = QDir::fromNativeSeparators(QString::fromStdString(Plan.entries_[Index].source_.entry_.locator_.root_));
+            }
+            if ((Builtin && AllNative) || !Plan.inputDirectory_.isEmpty()) {
+                inputBytes_.clear();
+                index_ = 0;
+                phase_ = Phase::Build;
+                return progress("압축 생성");
             }
             bool NeedsInputDirectory = !Builtin && Plan.inputDirectory_.isEmpty();
             inputBytes_ = {0};
@@ -210,9 +218,14 @@ public:
         if (phase_ == Phase::Build) {
             // CreatePreparedArchive checks the manifest under the settings lease.
             auto Operation = Context.operation_;
-            Operation.reportProgress_ = [this, Publish = Context.publishProgress_, Previous = Operation.reportProgress_](const OperationContext::Progress& Value) {
+            Operation.reportProgress_ = [this, Publish = Context.publishProgress_, Previous = Operation.reportProgress_,
+                LastPublish = std::chrono::steady_clock::time_point{}, Verifying = false](const OperationContext::Progress& Value) mutable {
                 if (Previous) Previous(Value);
                 if (!Publish) return;
+                const auto Now = std::chrono::steady_clock::now();
+                if (Verifying == Value.verifying_ && Now - LastPublish < std::chrono::milliseconds(32)) return;
+                Verifying = Value.verifying_;
+                LastPublish = Now;
                 JobProgress Progress;
                 Progress.bytesDone_ = Value.bytesDone_; Progress.bytesTotal_ = Value.bytesTotal_;
                 if (Value.itemsTotal_) { Progress.phaseItemsDone_ = Value.itemsDone_; Progress.phaseItemsTotal_ = Value.itemsTotal_; }
@@ -273,6 +286,8 @@ public:
                 if (Checked && (Checked == 64 || Slice.elapsed() >= 10))
                     return progress("입력 변경 여부 확인");
                 if (auto Stop = ReadContext.Check({"archive-create"})) return failed(*Stop);
+                // Every directory is in directories_, including omitted roots.
+                if (index_ < Plan.entries_.size() && Plan.entries_[index_].source_.entry_.directory_) continue;
                 const auto& Source = index_ < Plan.entries_.size() ? Plan.entries_[index_].source_
                     : Plan.directories_[index_ - Plan.entries_.size()];
                 auto Fresh = Source.reader_->Stat(Source.entry_.id_, ReadContext).get();

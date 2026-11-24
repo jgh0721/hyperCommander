@@ -776,7 +776,7 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
     Context.providerInteractions_ = true;
     const bool RemoteCopy = Request.destination_.kind_ == LocatorKind::Smb || Request.selectionRoot_.kind_ == LocatorKind::Smb
         || std::ranges::any_of(Request.sources_, [](const auto& Source) { return Source.entry_.locator_.kind_ == LocatorKind::Smb; });
-    if (Request.operation_ == hc::operations::FileOperation::Copy && Request.calculateSizeBefore_
+    if (Request.operation_ == hc::operations::FileOperation::Copy
         && (RemoteCopy || (Request.selection_ && Request.selectionRoot_.kind_ == LocatorKind::Local && Request.destination_.kind_ == LocatorKind::Local))
         && !hc::settings::AppSettings().CommittedObject()["options"].toObject()["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()))
         Context.fileCopyWorkers_ = 0;
@@ -1415,7 +1415,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     const bool Create = Kind == JobKind::MakeLink || Kind == JobKind::MakeFile || Kind == JobKind::MakeDirectory || Kind == JobKind::ArchiveMakeDirectory;
     const bool Security = Kind == JobKind::SecurityChange || Kind == JobKind::SecurityRestore;
     const bool ArchiveCreation = Kind == JobKind::ArchiveCreate || Kind == JobKind::ArchiveSeparate || Kind == JobKind::IsoCreate;
-    const auto ActivePhase=ArchiveCreation&&Progress.phase_==JobPhase::PreparingInputs&&Progress.currentTotal_?tr("입력 파일 준비"):PhaseText(Progress.phase_, Kind);
+    const auto ActivePhase=ArchiveCreation&&Progress.phase_==JobPhase::PreparingInputs&&Progress.phaseItemsTotal_?tr("입력 파일 준비"):PhaseText(Progress.phase_, Kind);
     auto Operation = OperationText(Kind);
     if (Operation.isEmpty()) Operation = jobs_->currentText().section(QStringLiteral(" · "), 0, 0);
     if (Operation.isEmpty()) Operation = tr("파일 작업");

@@ -195,6 +195,7 @@ namespace hc::storage
             {
                 return Run<EntryPage>([this, MaxItems, Context]() -> Result<EntryPage> {
                     if (const auto Failure = Context.Check(provider_)) return *Failure;
+                    operations::OperationMetric Timing(started_ ? "native.enumerate.page" : "native.enumerate.first-page", 0, true);
                     const auto Limit = (std::min)(MaxItems, Context.maxPageItems_);
                     if (!Limit) return Error{ErrorCategory::InvalidRequest, "zero-page-size", provider_};
                     EntryPage Page;
@@ -249,8 +250,9 @@ namespace hc::storage
                         Page.entries_.push_back(std::move(Item)); ++count_;
                     }
                     Page.end_ = ended_;
+                    Page.verifiedChildMetadata_ = !Context.allowUnavailableChildMetadata_ && !Context.removalPreparation_;
                     return Page;
-                });
+                }, Context.workerRead_);
             }
         private:
             Locator at_; ProviderId provider_; std::string prefix_;
