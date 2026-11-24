@@ -5,6 +5,7 @@
 #include <QAction>
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "imageAsync.hpp"
+#include "imageColor.hpp"
 #include "imageResampler.hpp"
 #include "imageDisplayColor.hpp"
 #include "imageFramePlayer.hpp"
@@ -16,6 +17,7 @@
 #include <QContextMenuEvent>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
@@ -31,6 +33,7 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QScrollBar>
+#include <QSlider>
 #include <QWheelEvent>
 #include <QtConcurrent>
 #include <algorithm>
@@ -51,25 +54,34 @@ void Adjust(QImage &Image, double Brightness, double Contrast, double Gamma, boo
         return;
     Image = Image.convertToFormat(QImage::Format_RGBA8888);
     const auto Original = Sharp > 0 ? Image.copy() : QImage{};
+    const auto Tone = [=](double V) {
+        V = std::clamp((V - .5) * Contrast + .5 + Brightness, 0., 1.);
+        if (Gamma != 1) V = std::pow(V, 1. / Gamma);
+        return Invert ? 1 - V : V;
+    };
+    std::array<double, 256> ToneTable;
+    for (size_t V = 0; V < ToneTable.size(); ++V) ToneTable[V] = Tone(V / 255.);
     for (int Y = 0; Y < Image.height(); ++Y)
     {
         auto *Row = Image.scanLine(Y);
         for (int X = 0; X < Image.width(); ++X)
         {
+            const bool Sharpen = Sharp > 0 && X > 0 && Y > 0 && X + 1 < Image.width() && Y + 1 < Image.height();
             double Values[3];
             for (int C = 0; C < 3; ++C)
             {
-                double V = Row[4 * X + C] / 255.;
-                if (Sharp > 0 && X > 0 && Y > 0 && X + 1 < Image.width() && Y + 1 < Image.height())
+                const auto Channel = Row[4 * X + C];
+                if (Sharpen)
                 {
+                    const double V = Channel / 255.;
                     double Blur = 0;
                     for (int DY = -1; DY <= 1; ++DY)
                         for (int DX = -1; DX <= 1; ++DX)
                             Blur += Original.constScanLine(Y + DY)[4 * (X + DX) + C] / 255.;
-                    V += Sharp * (V - Blur / 9);
+                    Values[C] = Tone(V + Sharp * (V - Blur / 9));
                 }
-                V = std::pow(std::clamp((V - .5) * Contrast + .5 + Brightness, 0., 1.), 1. / Gamma);
-                Values[C] = Invert ? 1 - V : V;
+                else
+                    Values[C] = ToneTable[Channel];
             }
             if (Gray)
                 Values[0] = Values[1] = Values[2] = .2126 * Values[0] + .7152 * Values[1] + .0722 * Values[2];
@@ -79,6 +91,12 @@ void Adjust(QImage &Image, double Brightness, double Contrast, double Gamma, boo
     }
 }
 } // namespace
+const std::array<ImageReadingView::NumericAdjustment, 4> ImageReadingView::numericAdjustments_{{
+    {"brightness", &ImageReadingView::brightness_, -100, 100},
+    {"contrast", &ImageReadingView::contrast_, 10, 300},
+    {"gamma", &ImageReadingView::gamma_, 10, 500},
+    {"sharpness", &ImageReadingView::sharpness_, 0, 200},
+}};
 ImageReadingView::ImageReadingView(QWidget *Parent) : QAbstractScrollArea(Parent)
 {
     animation_ = new ImageFramePlayer(this);
@@ -255,10 +273,9 @@ void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First
         fit_ = qBound(0, Entry["fit"].toInt(hc::defaults::edit::ImageReading()["fit"].toInt()), 3);
         // Older records shared the comic fit, with only original size and fit to width in webtoon mode.
         webtoonFit_ = qBound(0, Entry["webtoonFit"].toInt(fit_ == 0 ? 0 : 2), 2);
-        brightness_ = qBound(-1., Entry["brightness"].toDouble(hc::defaults::edit::ImageReading()["brightness"].toDouble()), 1.);
-        contrast_ = qBound(.1, Entry["contrast"].toDouble(hc::defaults::edit::ImageReading()["contrast"].toDouble()), 3.);
-        gamma_ = qBound(.1, Entry["gamma"].toDouble(hc::defaults::edit::ImageReading()["gamma"].toDouble()), 5.);
-        sharpness_ = qBound(0., Entry["sharpness"].toDouble(hc::defaults::edit::ImageReading()["sharpness"].toDouble()), 2.);
+        const auto Defaults = hc::defaults::edit::ImageReading();
+        for (const auto &Field : numericAdjustments_)
+            this->*Field.value_ = qBound(Field.minimum_ / 100., Entry[Field.name_].toDouble(Defaults[Field.name_].toDouble()), Field.maximum_ / 100.);
         grayscale_ = Entry["grayscale"].toBool(hc::defaults::edit::ImageReading()["grayscale"].toBool());
         invert_ = Entry["invert"].toBool(hc::defaults::edit::ImageReading()["invert"].toBool());
         automaticNext_ = Entry["automaticNext"].toBool(hc::defaults::edit::ImageReading()["automaticNext"].toBool());
@@ -334,6 +351,7 @@ void ImageReadingView::RetryPage()
 
 void ImageReadingView::Cancel()
 {
+    adjustmentPreview_.reset();
     for (const auto& Stop : sourceStops_) Stop->request_stop();
     sourceStops_.clear();
     invalidateRenders();
@@ -402,22 +420,113 @@ void ImageReadingView::Zoom(double Factor)
 }
 void ImageReadingView::SetAdjustment(const QString &Name, double Value)
 {
-    if (Name == "brightness")
-        brightness_ = qBound(-1., Value, 1.);
-    else if (Name == "contrast")
-        contrast_ = qBound(.1, Value, 3.);
-    else if (Name == "gamma")
-        gamma_ = qBound(.1, Value, 5.);
-    else if (Name == "grayscale")
-        grayscale_ = Value != 0;
-    else if (Name == "invert")
-        invert_ = Value != 0;
-    else if (Name == "sharpness")
-        sharpness_ = qBound(0., Value, 2.);
+    const auto Field = std::find_if(numericAdjustments_.begin(), numericAdjustments_.end(),
+        [&Name](const NumericAdjustment &Field) { return Name == QLatin1String(Field.name_); });
+    if (Field != numericAdjustments_.end())
+    {
+        auto &Current = this->*Field->value_;
+        Value = qBound(Field->minimum_ / 100., Value, Field->maximum_ / 100.);
+        if (Current == Value) return;
+        Current = Value;
+    }
     else
-        return;
+    {
+        auto *Current = Name == "grayscale" ? &grayscale_ : Name == "invert" ? &invert_ : nullptr;
+        if (!Current || *Current == (Value != 0)) return;
+        *Current = Value != 0;
+    }
     invalidateRenders();
     changed();
+}
+QAction *ImageReadingView::addAdjustmentToggle(QMenu *Menu, const QString &Name, const QString &Label, bool ImageReadingView::*Value)
+{
+    auto *Action = Menu->addAction(Label);
+    Action->setObjectName(QStringLiteral("readingAdjustment.") + Name);
+    Action->setCheckable(true);
+    const auto Sync = [this, Action, Value] { Action->setChecked(this->*Value); };
+    connect(this, &ImageReadingView::Changed, Action, Sync);
+    Sync();
+    connect(Action, &QAction::triggered, this, [this, Name](bool On) { SetAdjustment(Name, On ? 1 : 0); });
+    return Action;
+}
+void ImageReadingView::AddAdjustmentActions(QMenu *Menu)
+{
+    addAdjustmentToggle(Menu, QStringLiteral("grayscale"), tr("회색조"), &ImageReadingView::grayscale_);
+    addAdjustmentToggle(Menu, QStringLiteral("invert"), tr("색 반전"), &ImageReadingView::invert_);
+    Menu->addSeparator();
+    const auto Labels = std::array{tr("밝기"), tr("대비"), tr("감마"), tr("선명화")};
+    for (size_t I = 0; I < numericAdjustments_.size(); ++I)
+    {
+        const auto &Field = numericAdjustments_[I];
+        const auto &Label = Labels[I];
+        auto *Action = Menu->addAction(Label + QChar(0x2026));
+        Action->setObjectName(QStringLiteral("readingAdjustment.") + QLatin1String(Field.name_));
+        connect(Action, &QAction::triggered, this, [this, Field, Label] { showAdjustmentDialog(Field, Label); });
+    }
+    Menu->addSeparator();
+    auto *Reset = Menu->addAction(tr("보정 초기화"));
+    Reset->setObjectName(QStringLiteral("readingAdjustment.reset"));
+    connect(Reset, &QAction::triggered, this, [this] {
+        const auto Defaults = hc::defaults::edit::ImageReading();
+        for (const auto &Field : numericAdjustments_)
+            this->*Field.value_ = Defaults[Field.name_].toDouble();
+        grayscale_ = Defaults["grayscale"].toBool();
+        invert_ = Defaults["invert"].toBool();
+        invalidateRenders();
+        changed();
+    });
+}
+void ImageReadingView::showAdjustmentDialog(const NumericAdjustment &Adjustment, const QString &Label)
+{
+    auto *Dialog = new QDialog(this);
+    Dialog->setObjectName(QStringLiteral("imageAdjustmentDialog"));
+    Dialog->setAttribute(Qt::WA_DeleteOnClose);
+    Dialog->setWindowTitle(Label);
+
+    auto *Slider = new QSlider(Qt::Horizontal, Dialog);
+    Slider->setAccessibleName(Label);
+    Slider->setRange(Adjustment.minimum_, Adjustment.maximum_);
+    Slider->setMinimumWidth(220);
+    Slider->setPageStep(10);
+    auto *Spin = new QDoubleSpinBox(Dialog);
+    Spin->setAccessibleName(Label);
+    Spin->setDecimals(2);
+    Spin->setRange(Slider->minimum() / 100., Slider->maximum() / 100.);
+    Spin->setSingleStep(.01);
+    const auto Initial = this->*Adjustment.value_;
+    Spin->setValue(Initial);
+    Slider->setValue(qRound(Spin->value() * 100));
+    const auto InitialDisplay = Spin->value();
+
+    auto *Row = new QHBoxLayout;
+    Row->addWidget(Slider, 1);
+    Row->addWidget(Spin);
+    auto *Buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Dialog);
+    auto *Layout = new QVBoxLayout(Dialog);
+    Layout->addLayout(Row);
+    Layout->addWidget(Buttons);
+    hc::ui::ApplyDialogFrame(Dialog, Buttons);
+    connect(Buttons, &QDialogButtonBox::accepted, Dialog, &QDialog::accept);
+    connect(Buttons, &QDialogButtonBox::rejected, Dialog, &QDialog::reject);
+    connect(Slider, &QSlider::valueChanged, Spin, [Spin](int Value) { Spin->setValue(Value / 100.); });
+    const auto Generation = bookGeneration_;
+    connect(Spin, &QDoubleSpinBox::valueChanged, Dialog, [this, Slider, Field = Adjustment.value_, Generation, InitialDisplay](double Value) {
+        const QSignalBlocker Block(Slider);
+        Slider->setValue(qRound(Value * 100));
+        if (Generation != bookGeneration_) return;
+        if (Value == InitialDisplay) adjustmentPreview_.reset();
+        else adjustmentPreview_ = std::pair{Field, Value};
+        viewport()->update();
+    });
+    connect(Dialog, &QDialog::finished, this, [this, Spin, Name = QString::fromLatin1(Adjustment.name_), Generation, InitialDisplay](int Result) {
+        if (Generation != bookGeneration_) return;
+        adjustmentPreview_.reset();
+        if (Result == QDialog::Accepted && Spin->value() != InitialDisplay) SetAdjustment(Name, Spin->value());
+        viewport()->update();
+    });
+    Spin->setFocus();
+    Spin->selectAll();
+    Dialog->open();
 }
 qreal ImageReadingView::scrollPosition() const
 {
@@ -772,6 +881,55 @@ void ImageReadingView::prefetch()
     }
 }
 
+bool ImageReadingView::paintAdjustmentPreview(QPainter &Painter)
+{
+    if (!adjustmentPreview_) return false;
+    const auto [Field, Value] = *adjustmentPreview_;
+    const auto PreviewValue = [this, Field, Value](double ImageReadingView::*Current) {
+        return Field == Current ? Value : this->*Current;
+    };
+    const auto Bright = PreviewValue(&ImageReadingView::brightness_);
+    const auto Contrast = PreviewValue(&ImageReadingView::contrast_);
+    const auto Gamma = PreviewValue(&ImageReadingView::gamma_);
+    const auto Sharp = PreviewValue(&ImageReadingView::sharpness_);
+    const QRectF Bounds = viewport()->rect();
+    if (Bounds.isEmpty()) return false;
+    // Limit the preview to visible pixels and cap its size independently of the
+    // source dimensions and screen DPI. Confirmed values use the normal tile renderer.
+    const auto Scale = qMin(1., 768. / qMax(Bounds.width(), Bounds.height()));
+    QList<PresentedTile> PreviewTiles;
+    for (const auto &Place : placements())
+    {
+        const auto Visible = Place.rect_.intersected(Bounds);
+        if (Visible.isEmpty()) continue;
+        const auto *Source = Place.page_ == index_ && !currentImage_.isNull() ? &currentImage_ : sources_.object(Place.page_);
+        if (!Source || Source->isNull() || pageErrors_.contains(Place.page_)) return false;
+
+        const auto X = Place.crop_.width() / Place.rect_.width();
+        const auto Y = Place.crop_.height() / Place.rect_.height();
+        const QRectF Crop(Place.crop_.x() + (Visible.x() - Place.rect_.x()) * X,
+                          Place.crop_.y() + (Visible.y() - Place.rect_.y()) * Y,
+                          Visible.width() * X, Visible.height() * Y);
+        const auto Size = (Visible.size() * Scale).toSize().expandedTo(QSize(1, 1));
+        QImage Preview(Size, QImage::Format_ARGB32_Premultiplied);
+        if (Preview.isNull()) return false;
+        Preview.fill(Qt::transparent);
+        {
+            QPainter Draw(&Preview);
+            Draw.setCompositionMode(QPainter::CompositionMode_Source);
+            Draw.setRenderHint(QPainter::SmoothPixmapTransform);
+            Draw.drawImage(QRectF(QPointF(), Size), *Source, Crop);
+        }
+        const auto Profile = Source->colorSpace();
+        Preview.setColorSpace(Profile.colorModel() == QColorSpace::ColorModel::Rgb ? Profile : QColorSpace(QColorSpace::SRgb));
+        const auto Target = ImageEncodedColorSpace(*Source, Preview.colorSpace(), displayColor_);
+        Preview.convertToColorSpace(Target);
+        Adjust(Preview, Bright, Contrast, Gamma, grayscale_, invert_, Sharp);
+        PreviewTiles.append({Visible, std::move(Preview)});
+    }
+    for (const auto &Tile : PreviewTiles) Painter.drawImage(Tile.rect_, Tile.image_);
+    return !PreviewTiles.isEmpty();
+}
 void ImageReadingView::paintEvent(QPaintEvent *)
 {
     QTimer::singleShot(0,this,&ImageReadingView::prefetch);
@@ -784,6 +942,7 @@ void ImageReadingView::paintEvent(QPaintEvent *)
         Painter.drawText(viewport()->rect(), Qt::AlignCenter, error_.isEmpty() ? tr("불러오는 중…") : error_);
         return;
     }
+    if (paintAdjustmentPreview(Painter)) return;
     if (mode_ != Webtoon) {
         paintGroup(Painter);
         if (!pageWarnings_.value(index_).isEmpty()) {
@@ -1393,15 +1552,10 @@ QMenu *ImageReadingView::CreateContextMenu(QWidget *Parent)
     retry_->setEnabled(book_ != nullptr);
     Menu->addAction(retry_);
     auto *Correct = Sub("correct", tr("화질 보정"));
-    Check(Correct, "grayscale", tr("회색조"), grayscale_, [this](bool On) { SetAdjustment(QStringLiteral("grayscale"), On ? 1 : 0); });
-    Check(Correct, "invert", tr("색 반전"), invert_, [this](bool On) { SetAdjustment(QStringLiteral("invert"), On ? 1 : 0); });
+    addAdjustmentToggle(Correct, QStringLiteral("grayscale"), tr("회색조"), &ImageReadingView::grayscale_)->setObjectName("readingContext.grayscale");
+    addAdjustmentToggle(Correct, QStringLiteral("invert"), tr("색 반전"), &ImageReadingView::invert_)->setObjectName("readingContext.invert");
     if (!Strip)
-        Add(Correct, "brightness", tr("밝기…"), {}, Later([this] {
-                bool Ok = false;
-                const double Value = hc::ui::InputDialog::getDouble(this, tr("밝기"), tr("밝기"), brightness_, -1, 1, 2, &Ok);
-                if (Ok)
-                    SetAdjustment(QStringLiteral("brightness"), Value);
-            }));
+        Add(Correct, "brightness", tr("밝기…"), {}, Later([this] { showAdjustmentDialog(numericAdjustments_.front(), tr("밝기")); }));
     // In full screen the same entry leaves it (F11 toggles).
     Add(Menu, "fullscreen", window()->isFullScreen() ? tr("전체 화면 해제") : tr("전체 화면"), Key("image.fullscreen"),
         Later([this] { emit FullscreenRequested(); }));

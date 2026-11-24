@@ -377,12 +377,6 @@ namespace hc::document
         const auto Scoped = [](QAction* Action, quint32 Kinds) { viewKinds::Set(Action, Kinds); return Action; };
         const auto Gap = [this, &Scoped](quint32 Kinds) { auto* Item = new QAction(chromeOwner_); Item->setSeparator(true); return Scoped(Item, Kinds); };
         const auto Book = [Reading] { return Reading->State(); };
-        const auto Adjust = [this, Reading](const QString& Name, const QString& Label) {
-            bool Ok = false;
-            const double Value = hc::ui::InputDialog::getDouble(this, Label, Label, Name == "contrast" || Name == "gamma" ? 1 : 0,
-                Name == "brightness" ? -1 : Name == "gamma" || Name == "contrast" ? .1 : 0, Name == "gamma" ? 5 : 3, 2, &Ok);
-            if (Ok) Reading->SetAdjustment(Name, Value);
-        };
         const auto SelectMode = [this](int Mode) {
             if (auto* Combo = findChild<QComboBox*>("imageReadingMode")) { Combo->setCurrentIndex(Mode); emit Combo->activated(Mode); }
         };
@@ -551,19 +545,7 @@ namespace hc::document
         })->menuAction(), Every);
         View << Gap(Books);
         auto* Correct = new QMenu(tr("화질 보정"), modeMenu_); Correct->menuAction()->setProperty("documentIconName", "adjust");
-        for (const auto& [Name, Label] : {std::pair{QString("grayscale"), tr("회색조")}, std::pair{QString("invert"), tr("색 반전")}}) {
-            auto* Row = Correct->addAction(Label); Row->setCheckable(true);
-            connect(Row, &QAction::triggered, Reading, [Reading, Name](bool On) { Reading->SetAdjustment(Name, On ? 1 : 0); });
-        }
-        Correct->addSeparator();
-        for (const auto& [Name, Label] : {std::pair{QString("brightness"), tr("밝기…")}, std::pair{QString("contrast"), tr("대비…")}, std::pair{QString("gamma"), tr("감마…")}, std::pair{QString("sharpness"), tr("선명화…")}})
-            connect(Correct->addAction(Label), &QAction::triggered, this, [Adjust, Name, Label] { Adjust(Name, QString(Label).remove(QStringLiteral("…"))); });
-        Correct->addSeparator();
-        connect(Correct->addAction(tr("보정 초기화")), &QAction::triggered, Reading, [Reading, Correct] {
-            for (const auto* Name : {"grayscale", "invert", "sharpness", "brightness"}) Reading->SetAdjustment(QString::fromLatin1(Name), 0);
-            for (const auto* Name : {"contrast", "gamma"}) Reading->SetAdjustment(QString::fromLatin1(Name), 1);
-            for (auto* Row : Correct->actions()) if (Row->isCheckable()) { const QSignalBlocker Block(Row); Row->setChecked(false); }
-        });
+        Reading->AddAdjustmentActions(Correct);
         View << Scoped(Correct->menuAction(), Books);
         View << Scoped(Quality()->menuAction(), Books);
         contribution_.viewActions_ = View;

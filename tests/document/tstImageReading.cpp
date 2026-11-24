@@ -3,6 +3,9 @@
 #include <QScrollArea>
 #include <QBuffer>
 #include <QComboBox>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -13,6 +16,7 @@
 #include <QToolButton>
 #include <QToolTip>
 #include <QSlider>
+#include <QStyleOptionSlider>
 #include <QLabel>
 #include <QListWidget>
 #include <QVBoxLayout>
@@ -1894,6 +1898,141 @@ private slots:
         QCOMPARE(Restored.State()["page"].toInt(), 2);
         QTRY_VERIFY_WITH_TIMEOUT(!Restored.CurrentImage().isNull(), 20000);
         QVERIFY(Restored.CurrentImage().pixelColor(0, 0) != QColor(Qt::red));
+    }
+    void readingAdjustmentPreview_data()
+    {
+        QTest::addColumn<int>("Mode");
+        QTest::newRow("comic") << int(ImageReadingView::Comic);
+        QTest::newRow("webtoon") << int(ImageReadingView::Webtoon);
+    }
+    void readingAdjustmentPreview()
+    {
+        QFETCH(int, Mode);
+        QTemporaryDir Root;
+        const auto Path = Root.filePath("book");
+        QVERIFY(QDir().mkpath(Path));
+        const auto Image = Picture(QColor(85, 120, 145));
+        QVERIFY(Image.save(Path + "/1.png"));
+        QVERIFY(Image.save(Path + "/2.png"));
+        const auto Book = OpenImageBook(Path);
+        QVERIFY(Book.HasValue());
+        const auto Fields = {std::tuple{"brightness", .05, -1., 1.}, std::tuple{"contrast", 1.12, .1, 3.},
+                             std::tuple{"gamma", .85, .1, 5.}, std::tuple{"sharpness", .21, 0., 2.}};
+        {
+            ImageReadingView Saved;
+            Saved.Load(Book.Value(), Image);
+            Saved.SetMode(ImageReadingView::Mode(Mode));
+            Saved.SetAdjustment("grayscale", 1);
+            Saved.SetAdjustment("invert", 1);
+            for (const auto &[Name, Initial, Minimum, Maximum] : Fields) Saved.SetAdjustment(Name, Initial);
+            Saved.SavePosition();
+        }
+
+        DocumentWorkspaceWidget Workspace(Root.filePath("recovery"));
+        Workspace.resize(850, 650);
+        Workspace.show();
+        Workspace.Handle({{"action", "open"}, {"path", Path}});
+        QTRY_VERIFY_WITH_TIMEOUT(Document(Workspace)["lifecycle"] == "ready", 20000);
+        auto *Pane = Workspace.findChild<DocumentViewPane *>();
+        QVERIFY(Pane);
+        auto *Reader = Pane->findChild<ImageReadingView *>();
+        auto *Correct = Pane->findChild<QAction *>("readingCorrectButton");
+        QVERIFY(Reader && Correct && Correct->menu());
+        auto *ViewMenu = Workspace.findChild<QMenu *>("documentViewMenu");
+        QVERIFY(ViewMenu);
+        QMenu *Menu = nullptr;
+        for (auto *Action : ViewMenu->actions())
+            if (Action->isVisible() && Action->menu() == Correct->menu()) Menu = Action->menu();
+        QVERIFY(Menu);
+        QCOMPARE(Reader->State()["mode"].toInt(), Mode);
+        auto *Gray = Menu->findChild<QAction *>("readingAdjustment.grayscale");
+        auto *Invert = Menu->findChild<QAction *>("readingAdjustment.invert");
+        QVERIFY(Gray && Gray->isChecked());
+        QVERIFY(Invert && Invert->isChecked());
+        Reader->SetAdjustment("invert", 0);
+        QVERIFY(!Invert->isChecked());
+
+        const auto Pixel = [&] {
+            const auto Viewport = Reader->viewport()->grab().toImage();
+            return Viewport.pixelColor(Viewport.rect().center());
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(Pixel().red() == Pixel().green() && Pixel().red() > 50 && Pixel().red() < 130, 20000);
+        for (const auto &[Name, Initial, Minimum, Maximum] : Fields)
+        {
+            auto *Action = Menu->findChild<QAction *>(QStringLiteral("readingAdjustment.") + QLatin1String(Name));
+            QVERIFY(Action);
+            Action->trigger();
+            auto *Dialog = Reader->findChild<QDialog *>("imageAdjustmentDialog");
+            QVERIFY(Dialog && Dialog->isVisible());
+            auto *Slider = Dialog->findChild<QSlider *>();
+            auto *Spin = Dialog->findChild<QDoubleSpinBox *>();
+            auto *Buttons = Dialog->findChild<QDialogButtonBox *>();
+            QVERIFY(Slider && Spin && Buttons);
+            QCOMPARE(Spin->value(), Initial);
+            QCOMPARE(Spin->minimum(), Minimum);
+            QCOMPARE(Spin->maximum(), Maximum);
+            QCOMPARE(Slider->value(), qRound(Initial * 100));
+            if (QString::fromLatin1(Name) == "brightness")
+            {
+                const auto Before = Pixel();
+                QStyleOptionSlider Option;
+                Option.initFrom(Slider);
+                Option.orientation = Qt::Horizontal;
+                Option.minimum = Slider->minimum();
+                Option.maximum = Slider->maximum();
+                Option.sliderPosition = Slider->sliderPosition();
+                const auto Handle = Slider->style()->subControlRect(QStyle::CC_Slider, &Option, QStyle::SC_SliderHandle, Slider);
+                QTest::mousePress(Slider, Qt::LeftButton, Qt::NoModifier, Handle.center());
+                const QPoint Target(Slider->width() * 3 / 4, Handle.center().y());
+                QMouseEvent Drag(QEvent::MouseMove, Target, Slider->mapToGlobal(Target), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(Slider, &Drag);
+                QVERIFY(Slider->isSliderDown());
+                QCOMPARE(Spin->value(), Slider->value() / 100.);
+                QVERIFY(Pixel().red() > Before.red() + 20);
+                QTest::mouseRelease(Slider, Qt::LeftButton, Qt::NoModifier, Target);
+
+                QStyleOptionSpinBox SpinOption;
+                SpinOption.initFrom(Spin);
+                SpinOption.buttonSymbols = Spin->buttonSymbols();
+                SpinOption.stepEnabled = QAbstractSpinBox::StepUpEnabled | QAbstractSpinBox::StepDownEnabled;
+                const auto Up = Spin->style()->subControlRect(QStyle::CC_SpinBox, &SpinOption, QStyle::SC_SpinBoxUp, Spin);
+                const auto BeforeStep = Pixel();
+                const auto StepValue = Slider->value() + 1;
+                QTest::mouseClick(Spin, Qt::LeftButton, Qt::NoModifier, Up.center());
+                QCOMPARE(Slider->value(), StepValue);
+                QVERIFY(Pixel().red() > BeforeStep.red());
+            }
+            else
+                Slider->setValue(Slider->value() + 5);
+            QCOMPARE(Reader->State()[Name].toDouble(), Initial);
+            const auto Applied = Spin->value();
+            QTest::mouseClick(Buttons->button(QDialogButtonBox::Ok), Qt::LeftButton);
+            QTRY_VERIFY(!Reader->findChild<QDialog *>("imageAdjustmentDialog"));
+            QCOMPARE(Reader->State()[Name].toDouble(), Applied);
+
+            Action->trigger();
+            Dialog = Reader->findChild<QDialog *>("imageAdjustmentDialog");
+            QVERIFY(Dialog && Dialog->isVisible());
+            Spin = Dialog->findChild<QDoubleSpinBox *>();
+            QCOMPARE(Spin->value(), Applied);
+            Spin->setValue(Minimum);
+            QTest::keyClick(Dialog, Qt::Key_Escape);
+            QTRY_VERIFY(!Reader->findChild<QDialog *>("imageAdjustmentDialog"));
+            QCOMPARE(Reader->State()[Name].toDouble(), Applied);
+        }
+        Reader->SavePosition();
+        ImageReadingView Reopened;
+        Reopened.Load(Book.Value(), Image);
+        QVERIFY(Reopened.State()["grayscale"].toBool());
+        for (const auto &[Name, Initial, Minimum, Maximum] : Fields)
+            QCOMPARE(Reopened.State()[Name].toDouble(), Reader->State()[Name].toDouble());
+
+        auto *Reset = Menu->findChild<QAction *>("readingAdjustment.reset");
+        QVERIFY(Reset);
+        Reset->trigger();
+        QVERIFY(!Gray->isChecked());
+        for (const auto &[Name, Initial, Minimum, Maximum] : Fields)
+            QCOMPARE(Reader->State()[Name].toDouble(), hc::defaults::edit::ImageReading()[Name].toDouble());
     }
     void privateReadingIsScopedToItsView()
     {

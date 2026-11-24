@@ -8,6 +8,7 @@
 #include <QSet>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <array>
 #include <optional>
 #include <stop_token>
 
@@ -39,6 +40,7 @@ class ImageReadingView final : public QAbstractScrollArea
     void SetCover(bool Enabled);
     void SetSplit(bool Enabled);
     void SetAdjustment(const QString &Name, double Value);
+    void AddAdjustmentActions(QMenu *Menu);
     void SetAutomaticNext(bool Enabled)
     {
         automaticNext_ = Enabled;
@@ -96,6 +98,16 @@ class ImageReadingView final : public QAbstractScrollArea
         QRectF rect_;
         QRect crop_;
     };
+    struct NumericAdjustment
+    {
+        const char *name_;
+        double ImageReadingView::*value_;
+        int minimum_, maximum_; // Hundredths, the common unit of the slider and spin box.
+    };
+    static const std::array<NumericAdjustment, 4> numericAdjustments_;
+    QAction *addAdjustmentToggle(QMenu *Menu, const QString &Name, const QString &Label, bool ImageReadingView::*Value);
+    void showAdjustmentDialog(const NumericAdjustment &Adjustment, const QString &Label);
+    bool paintAdjustmentPreview(QPainter &Painter);
     QSizeF webtoonPageSize(const QSize &SourceSize) const;
     QList<Placement> placements(int Index = -1, bool FullWidth = false) const;
     int groupCount(int Index) const;
@@ -165,6 +177,7 @@ class ImageReadingView final : public QAbstractScrollArea
     double sharpness_ = hc::defaults::edit::ImageReading()["sharpness"].toDouble();
     bool grayscale_ = hc::defaults::edit::ImageReading()["grayscale"].toBool();
     bool invert_ = hc::defaults::edit::ImageReading()["invert"].toBool();
+    std::optional<std::pair<double ImageReadingView::*, double>> adjustmentPreview_;
     qreal extent_ = 0;
     qreal width_ = 0;
     double relative_ = 0;

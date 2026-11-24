@@ -368,8 +368,6 @@ namespace hc::document
             auto* Auto=toolbar_->addAction(tr("다음 권 자동"));Auto->setObjectName("imageAutoNext");Auto->setCheckable(true);Auto->setChecked(true);connect(Auto,&QAction::toggled,reading_,&ImageReadingView::SetAutomaticNext);
             auto* NextVolume=toolbar_->addAction(tr("다음 권"));connect(NextVolume,&QAction::triggered,reading_,[this]{reading_->OpenVolume(1);});
             auto* EditCurrent=toolbar_->addAction(tr("현재 이미지 사본 편집"));connect(EditCurrent,&QAction::triggered,reading_,[this]{const auto Image=!reading_->isHidden()?reading_->CurrentImage():image_->Content();if(!Image.isNull())emit EditImageRequested(Image);});
-            for(const auto& Item:{std::pair{"grayscale",tr("회색조")},std::pair{"invert",tr("색 반전")}}){auto* A=toolbar_->addAction(Item.second);A->setCheckable(true);connect(A,&QAction::toggled,reading_,[this,Name=QString(Item.first)](bool On){reading_->SetAdjustment(Name,On?1:0);});}
-            for(const auto& Item:{std::pair{"brightness",tr("밝기")},std::pair{"contrast",tr("대비")},std::pair{"gamma",tr("감마")},std::pair{"sharpness",tr("선명화")}}){auto* A=toolbar_->addAction(Item.second);connect(A,&QAction::triggered,reading_,[this,Name=QString(Item.first),Label=Item.second]{bool Ok=false;const double V=hc::ui::InputDialog::getDouble(this,Label,Label,Name=="contrast"||Name=="gamma"?1:0,Name=="brightness"?-1:Name=="gamma"||Name=="contrast"?.1:0,Name=="gamma"?5:3,2,&Ok);if(Ok)reading_->SetAdjustment(Name,V);});}
             auto* ReadingOptions=new QMenu(tr("읽기 설정"),toolbar_);ReadingOptions->setObjectName("imageReadingOptions");
             auto* Navigator=reading_->findChild<ImageReadingNavigator*>();
             Navigator->SetOptionsMenu(ReadingOptions);
@@ -379,6 +377,9 @@ namespace hc::document
             });
             for(auto* A:toolbar_->actions())if(A->objectName().startsWith("imageFrame")){toolbar_->removeAction(A);ReadingOptions->addAction(A);}
             const auto AllActions=toolbar_->actions();for(int I=int(ReadingOptionsStart)-2;I<AllActions.size();++I){toolbar_->removeAction(AllActions[I]);ReadingOptions->addAction(AllActions[I]);}
+            ReadingOptions->addSeparator();
+            reading_->AddAdjustmentActions(ReadingOptions);
+            ReadingOptions->addSeparator();
             
             connect(image_,&QImageView::ContentChanged,this,&DocumentViewPane::ContentChanged);connect(image_,&QImageView::viewStateChanged,this,&DocumentViewPane::ViewStateChanged);
             auto* EditToolbar=new QToolBar(tr("이미지 편집"),this);EditToolbar->setObjectName("imageEditToolbar");
