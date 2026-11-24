@@ -1430,14 +1430,14 @@ namespace hc::operations
                 // A whole-tree rename avoids enumerating or copying any descendants.
                 // Only an absent destination qualifies; existing folders still merge.
                 if (request_.operation_ == FileOperation::Move && Item.source_.writer_
-                    && Item.source_.entry_.locator_.kind_ == LocatorKind::Local && Item.destination_.kind_ == LocatorKind::Local
+                    && NativeFileKind(Item.destination_.kind_) && Item.source_.entry_.locator_.kind_ == Item.destination_.kind_
                     && (request_.includePattern_ == "*" || request_.includePattern_ == "*.*")
                     && request_.maxBytes_ == std::numeric_limits<std::uint64_t>::max()
                     && request_.copyOptions_.metadata_ && !request_.copyOptions_.verify_ && !request_.bytesPerSecondLimit_) {
                     // Descendants share their root's volumes: links and mount
                     // points are denied above, so query the volumes once per root.
                     auto& Renamable = renameRoots_[Item.root_];
-                    if (!Renamable) {
+                    if (!Renamable || Item.destination_.kind_ == LocatorKind::Smb) {
                         const auto CanRename = Item.source_.writer_->CanRenameTo(Item.source_.entry_.locator_, Item.destination_, Context);
                         if (!CanRename.HasValue()) return failed(CanRename.Failure());
                         Renamable = CanRename.Value();
@@ -1777,7 +1777,7 @@ namespace hc::operations
                     return progress();
                 }
                 if ((request_.operation_ == FileOperation::Copy || request_.operation_ == FileOperation::Move)
-                    && !Removing && !current().source_.entry_.directory_ && !copyOptionsResolved_) {
+                    && !Removing && !Renaming && !current().source_.entry_.directory_ && !copyOptionsResolved_) {
                     effectiveCopyOptions_ = request_.copyOptions_;
                     if (effectiveCopyOptions_.acl_ || effectiveCopyOptions_.streams_) {
                         auto Input = current().source_.reader_->CopyExtrasAt(current().source_.entry_.locator_, Context).get();
@@ -1819,7 +1819,7 @@ namespace hc::operations
                         if (!Existing.HasValue()) return failed(Existing.Failure());
                         if (Existing.Value()) return failed({ErrorCategory::StaleRevision, "move-destination-appeared"});
                     }
-                    if (request_.fileLockInteractions_) {
+                    else if (request_.fileLockInteractions_) {
                         const auto Existing = Writer->Inspect(current().destination_, Context); if (!Existing.HasValue()) return failed(Existing.Failure());
                         if (Existing.Value() && Existing.Value()->id_ != current().source_.entry_.id_) {
                             phase_ = Phase::Conflict; replaceAllowed_ = false;

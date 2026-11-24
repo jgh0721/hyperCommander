@@ -2552,9 +2552,30 @@ namespace hc::storage
             Result<bool> CanRenameTo(Locator From, Locator To, OperationContext Context) override
             {
                 if (const auto Error = Context.Check(id_)) return *Error;
-                if (kind_ != LocatorKind::Local || From.kind_ != kind_ || To.kind_ != kind_) return false;
+                if (From.kind_ != kind_ || To.kind_ != kind_) return false;
                 const auto Source = Normalize(From, kind_, id_), Destination = Normalize(To, kind_, id_);
                 if (!Source.HasValue() || !Destination.HasValue()) return false;
+                const auto Parent = std::filesystem::path(Destination.Value().path_).parent_path();
+                const auto SourceParent = std::filesystem::path(Source.Value().path_).parent_path();
+                if (kind_ == LocatorKind::Smb || GetDriveTypeW(Source.Value().root_.c_str()) == DRIVE_REMOTE) {
+                    if (_wcsicmp(Source.Value().root_.c_str(), Destination.Value().root_.c_str()) != 0) return false;
+                    // A single share may span volumes. Keep copy/remove when the
+                    // server does not supply usable volume identities.
+                    const auto Serial = [](const std::wstring& Path) -> DWORD {
+                        Handle File(CreateFileW(Path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                        BY_HANDLE_FILE_INFORMATION Info{};
+                        return File.value_ != INVALID_HANDLE_VALUE && GetFileInformationByHandle(File.value_, &Info) ? Info.dwVolumeSerialNumber : 0;
+                    };
+                    const auto SourceVolume = Serial(Source.Value().path_);
+                    return SourceVolume && SourceVolume == Serial(Parent.native());
+                }
+                // For a move up one level only the intervening directory can be a
+                // mount point. prepareItem has already ruled out a reparse source.
+                if (SourceParent.parent_path() == Parent) {
+                    const auto Attributes = GetFileAttributesW(SourceParent.c_str());
+                    if (Attributes != INVALID_FILE_ATTRIBUTES && !(Attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return true;
+                }
                 const auto Volume = [](const std::wstring& Path) {
                     std::vector<wchar_t> Mount(32768), Name(32768);
                     if (!GetVolumePathNameW(Path.c_str(), Mount.data(), DWORD(Mount.size()))
@@ -2562,8 +2583,7 @@ namespace hc::storage
                     return std::wstring(Name.data());
                 };
                 const auto SourceVolume = Volume(Source.Value().path_);
-                const auto Parent = std::filesystem::path(Destination.Value().path_).parent_path().wstring();
-                return !SourceVolume.empty() && SourceVolume == Volume(Parent);
+                return !SourceVolume.empty() && SourceVolume == Volume(Parent.native());
             }
             Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) override
             {

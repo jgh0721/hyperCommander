@@ -173,6 +173,48 @@ private slots:
         writer_ = MakeNativeWritableStorage(LocatorKind::Local, reader_);
         target_ = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
     }
+    void moveMixedSelectionToParent_data()
+    {
+        QTest::addColumn<bool>("useSmb");
+        QTest::newRow("local") << false;
+        if (qEnvironmentVariableIsSet("HC_TEST_LOOPBACK_SMB")) QTest::newRow("loopback-smb") << true;
+    }
+    void moveMixedSelectionToParent()
+    {
+        QFETCH(bool, useSmb);
+        const QString Base = useSmb ? QStringLiteral("parent-smb") : QStringLiteral("parent-local");
+        buildTree(Base + "/current/folder");
+        QVERIFY(write(Base + "/current/file.txt", "selected"));
+        const auto Expected = Snapshot(path(Base + "/current/folder"));
+        const auto Kind = useSmb ? LocatorKind::Smb : LocatorKind::Local;
+        const auto Reader = MakeNativeReadProvider(Kind);
+        const auto Writer = MakeNativeWritableStorage(Kind, Reader);
+        const auto Location = [&](const QString& Name) {
+            auto Path = QDir::toNativeSeparators(path(Name));
+            if (useSmb) Path = QStringLiteral("\\\\localhost\\") + Path.left(1) + '$' + Path.mid(2);
+            return Locator{Kind, Path.toStdString()};
+        };
+        FileOperationRequest Request;
+        Request.operation_ = FileOperation::Move;
+        Request.destination_ = Location(Base);
+        Request.destinationWriter_ = Writer;
+        Request.fileLockInteractions_ = true;
+        for (const auto Name : {Base + "/current/folder", Base + "/current/file.txt"}) {
+            auto Entry = Reader->Resolve(Location(Name), {}).get();
+            QVERIFY(Entry.HasValue());
+            Request.sources_.push_back({Entry.Value(), Reader, Writer});
+        }
+        Request.copyOptions_.streams_ = true;
+        Request.calculateSizeBefore_ = true;
+        OperationMetrics::Instance().Reset(true);
+        const auto Result = run(std::move(Request), engine());
+        QCOMPARE(Result.snapshot_.state_, JobState::Completed);
+        QCOMPARE(Result.snapshot_.completedItems_, 2u);
+        QCOMPARE(Counts(path(Base))["native.inspect"], 4.0);
+        QCOMPARE(Snapshot(path(Base + "/folder")), Expected);
+        QVERIFY(QFileInfo::exists(path(Base + "/file.txt")));
+        QVERIFY(QDir(path(Base + "/current")).isEmpty());
+    }
     void copiesFolderLikeItemPath()
     {
         // The engine and the per-item path produce the same tree and ledger.
