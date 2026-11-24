@@ -717,10 +717,10 @@ namespace hc::plugins
                     if (!DirectBook && Hash.size() != 32) return Invalid("document-input-hash-required");
                     const auto ArchiveSource = std::dynamic_pointer_cast<ProviderContentSource>(Source);
                     const auto Writeback = ArchiveSource ? ArchiveSource->GetArchiveWriteback() : ProviderContentSource::ArchiveWriteback{};
-                    const auto Token = Document->Bind(*Entry, Writer, Lease, Hash, Writeback);
+                    const auto Token = Document->Bind(Source, Writer, Lease, Hash, Options.purpose_ != ViewerPurpose::QuickPreview);
                     if (Token.isEmpty()) return Invalid("document-source-binding");
                     auto Bound = UiCall([&](OperationContext Calls) { return Document->Call("OpenDocuments", {{"documents", QJsonArray{QJsonObject{{"path", QString::fromStdString(Lease->LocalPath())},
-                        {"displayName", QString::fromUtf8(Entry->name_)}, {"readingSource",ReadingSource(*Entry)}, {"sourceToken", Token}, {"broker", bool(Writer) || bool(Writeback)}, {"hostSlot", true}, {"bindExistingHost", true}, {"readOnlyBook",DirectBook}, {"sha256", QString::fromLatin1(Hash.toHex())}}}}}, {}, {}, Calls); });
+                        {"displayName", QString::fromUtf8(Entry->name_)}, {"readingSource",ReadingSource(*Entry)}, {"sourceToken", Token}, {"broker", bool(Writer) || bool(Writeback)}, {"hostSlot", true}, {"bindExistingHost", true}, {"archiveFolder", Document->HasArchiveFolder(Token)}, {"readOnlyBook",DirectBook}, {"sha256", QString::fromLatin1(Hash.toHex())}}}}}, {}, {}, Calls); });
                     if (!Bound.HasValue()) return Bound.Failure();
                     std::lock_guard Lock(State->mutex_); State->details_.documentChannel_ = true;
                 }
@@ -737,11 +737,11 @@ namespace hc::plugins
                 }
                 return true;
             };
-            bool Selected = false;
+            const PluginViewerOptions* Selected = nullptr;
             for (std::size_t Index = 0; Index < Candidates.size(); ++Index)
             {
                 auto Tried = Attempt(Candidates[Index], Index);
-                if (Tried.HasValue() && Tried.Value()) { Selected = true; break; }
+                if (Tried.HasValue() && Tried.Value()) { Selected = &Candidates[Index]; break; }
                 CloseHost();
                 if (ExternalDraft) {
                     const auto Hash = DraftHash(ExternalPath);
@@ -834,10 +834,11 @@ namespace hc::plugins
                                 Writer = MakeNativeWritableStorage(Entry.locator_.kind_, MakeNativeReadProvider(Entry.locator_.kind_));
                             const auto ArchiveSource = std::dynamic_pointer_cast<ProviderContentSource>(Input.source_);
                             const auto Writeback = ArchiveSource ? ArchiveSource->GetArchiveWriteback() : ProviderContentSource::ArchiveWriteback{};
-                            const auto Token = Document->Bind(Entry, Writer, Materialized.Value(), {}, Writeback);
+                            const auto Token = Document->Bind(Input.source_, Writer, Materialized.Value(), {}, Selected->purpose_ != ViewerPurpose::QuickPreview);
                             if (Token.isEmpty()) { Result = Invalid("document-source-binding"); break; }
                             Inputs.append(QJsonObject{{"path", QString::fromStdString(Materialized.Value()->LocalPath())},
-                                {"displayName", QString::fromUtf8(Entry.name_)}, {"readPrefix", ReadPrefix(Input.source_)}, {"readingSource",ReadingSource(Entry)}, {"sourceToken", Token}, {"broker", bool(Writer) || bool(Writeback)}});
+                                {"displayName", QString::fromUtf8(Entry.name_)}, {"readPrefix", ReadPrefix(Input.source_)}, {"readingSource",ReadingSource(Entry)}, {"sourceToken", Token}, {"broker", bool(Writer) || bool(Writeback)},
+                                {"archiveFolder", Document->HasArchiveFolder(Token)}});
                         }
                         if (Result.HasValue() && Command->parameter_ == 1) {
                             const auto Current = Document->Call("DocumentState", {}, {}, {}, Calls);
@@ -872,7 +873,7 @@ namespace hc::plugins
                     if (Result.HasValue() && Result.Value()["result"].toInt(-1) != 0) State->details_.commandError_ = Error{ErrorCategory::Unsupported, "host-viewer-command-rejected", {"wlx"}};
                 }
                 if (Document) {
-                    auto Current = Document->Poll(Calls); if (!Current.HasValue()) return Current.Failure();
+                    auto Current = Document->Poll(Calls, Materializer.get()); if (!Current.HasValue()) return Current.Failure();
                     const bool Empty = Current.Value()["documents"].toArray().isEmpty();
                     if (Empty && !ArchiveIdle && ArchiveBroker) ArchiveBroker->Clear();
                     ArchiveIdle = Empty;

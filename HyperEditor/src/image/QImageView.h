@@ -26,6 +26,7 @@ class QImageView : public QBaseView
 public:
     void LoadContent(const QImage& Image, const QString& Path, bool Traverse);
     void SetNavigationSource(const QString& Path);
+    void SetArchiveFolderNavigation(bool Enabled) { archiveFolderNavigation_ = Enabled; }
     void DisplayAnimationFrame(const QImage& Image);
     QImage Content() const { return m_displayImage; }
     QByteArray SerializeContent(const QByteArray& Format = "PNG", int Quality = -1) const;
@@ -124,6 +125,7 @@ public:
     void SetEditModeChecked(bool Checked);
 
 signals:
+    void ArchiveImageStepRequested(int Direction);
     // "image.editMode" or "image.fullscreen" chosen from the canvas menu.
     void ContextCommand(const QString& Id);
     void ContentChanged();
@@ -158,6 +160,7 @@ private:
     mutable QImage renderedImage_;
     std::uint64_t contentRevision_ = 0, navigationGeneration_ = 0;
     bool directoryLoading_ = false;
+    bool archiveFolderNavigation_ = false;
     int pendingDirectorySteps_ = 0;
     std::shared_ptr<std::stop_source> directoryStop_ = std::make_shared<std::stop_source>();
     void pushUndoImage();       // 현재 상태를 Undo 스택에 저장

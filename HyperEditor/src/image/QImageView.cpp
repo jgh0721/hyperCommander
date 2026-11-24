@@ -655,12 +655,14 @@ bool QImageView::StepImage(int Direction)
 }
 void QImageView::nextImage()
 {
+    if (archiveFolderNavigation_) { emit ArchiveImageStepRequested(1); return; }
     if(m_dirFiles.isEmpty()&&directoryLoading_){pendingDirectorySteps_=std::clamp(pendingDirectorySteps_+1,-1000000,1000000);return;}
     if (!m_dirFiles.isEmpty()) emit OpenRequested(m_dirFiles[(m_dirIndex+1)%m_dirFiles.size()]);
 }
 
 void QImageView::previousImage()
 {
+    if (archiveFolderNavigation_) { emit ArchiveImageStepRequested(-1); return; }
     if(m_dirFiles.isEmpty()&&directoryLoading_){pendingDirectorySteps_=std::clamp(pendingDirectorySteps_-1,-1000000,1000000);return;}
     if (!m_dirFiles.isEmpty()) emit OpenRequested(m_dirFiles[(m_dirIndex-1+m_dirFiles.size())%m_dirFiles.size()]);
 }
@@ -1672,7 +1674,7 @@ QMenu* QImageView::CreateContextMenu(QWidget* Parent)
     Flip->setEnabled(Idle);
     Menu->addSeparator();
 
-    const bool CanStep = Idle && (m_dirFiles.size() > 1 || directoryLoading_);
+    const bool CanStep = Idle && (m_dirFiles.size() > 1 || directoryLoading_ || archiveFolderNavigation_);
     Add(Menu, "imageContext.previous", tr("이전 이미지"), nullptr, "image.previous", [this] { StepImage(-1); })->setEnabled(CanStep);
     Add(Menu, "imageContext.next", tr("다음 이미지"), nullptr, "image.next", [this] { StepImage(1); })->setEnabled(CanStep);
     Menu->addSeparator();

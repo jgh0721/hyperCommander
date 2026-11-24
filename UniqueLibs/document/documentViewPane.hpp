@@ -69,7 +69,7 @@ namespace hc::document
         bool SqliteDirty() const;
         bool CommitSqlite();
         bool RequestClose();
-        void SetReadingSource(const QString& Path,const QString& Entry);
+        void SetReadingSource(const QString& Path, const QString& Entry, bool ArchiveFolder = false);
         QByteArray Content() const;
         QString SearchText() const;
         std::function<QJsonArray()> CaptureBookSearchSources(const QString& Document) const;
@@ -160,6 +160,7 @@ namespace hc::document
         void SearchRequested(const QString& Query);
         void ViewStateChanged();
         void OpenRequested(const QString& Path);
+        void ArchiveImageStepRequested(int Direction);
         // 다른 파일을 열고 그 줄로 간다( reST 개요 · 진단 · 참조 · 미리보기 클릭 ).
         void OpenAtRequested(const QString& Path, int Line);
         // 미리보기 전체 화면을 켜고 끈다( .md · .rst ).
@@ -265,6 +266,7 @@ namespace hc::document
         QByteArray originalImageBytes_, originalImageHash_;
         QString originalImagePath_;
         QString readingPath_,readingEntry_;
+        bool archiveFolderNavigation_ = false;
         ViewUiContribution contribution_;
     };
 }

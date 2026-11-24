@@ -24,6 +24,7 @@ namespace hc::storage
         }
         std::vector<std::byte> Prefix() const { std::lock_guard Lock(prefixMutex_); return prefix_; }
         EntrySnapshot Describe() const override { return entry_; }
+        std::shared_ptr<IStorageProvider> ReadProvider() const { return provider_; }
         Task<std::shared_ptr<IReadStream>> OpenRead(OperationContext Context) override
         {
             if (!provider_) return Ready<std::shared_ptr<IReadStream>>(Error{ErrorCategory::InvalidRequest, "content-provider-required"});

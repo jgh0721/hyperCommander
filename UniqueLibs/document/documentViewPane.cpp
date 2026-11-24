@@ -135,10 +135,14 @@ namespace hc::document
         connect(&Theme,&fm::style::ThemeManager::changed,this,&DocumentViewPane::applyTheme);
         connect(&Theme,&fm::style::ThemeManager::fontsChanged,this,&DocumentViewPane::applyTheme);
     }
-    void DocumentViewPane::SetReadingSource(const QString& Path,const QString& Entry){
+    void DocumentViewPane::SetReadingSource(const QString& Path, const QString& Entry, bool ArchiveFolder){
         readingPath_=Path;readingEntry_=Entry;
+        archiveFolderNavigation_ = ArchiveFolder;
         if(markdown_)markdown_->SetResourceSource(Path,Entry);
-        if(image_&&Entry.isEmpty())image_->SetNavigationSource(Path);
+        if (image_) {
+            image_->SetArchiveFolderNavigation(ArchiveFolder);
+            if (!ArchiveFolder && Entry.isEmpty()) image_->SetNavigationSource(Path);
+        }
         if(reading_&&!reading_->isHidden()&&reading_->State()["pageCount"].toInt()>0&&!Path.isEmpty()&&reading_->State()["book"].toString()!=Path)
             reading_->OpenPath(Path,Entry);
     }
@@ -285,7 +289,14 @@ namespace hc::document
         }
         bool Success=true;
         if(viewId_=="pdf") {pdf_=new QPDFView(this);view_=pdf_;Success=pdf_->LoadContent(Input.bytes_,Input.path_);}
-        else if(viewId_=="image") {image_=new QImageView(this);view_=image_;image_->LoadContent(Input.image_,Input.path_,Traverse);if(readingEntry_.isEmpty()&&!readingPath_.isEmpty())image_->SetNavigationSource(readingPath_);}
+        else if(viewId_=="image") {
+            image_=new QImageView(this);
+            view_=image_;
+            image_->SetArchiveFolderNavigation(archiveFolderNavigation_);
+            connect(image_, &QImageView::ArchiveImageStepRequested, this, &DocumentViewPane::ArchiveImageStepRequested);
+            image_->LoadContent(Input.image_, Input.path_, Traverse && !archiveFolderNavigation_);
+            if (!archiveFolderNavigation_ && readingEntry_.isEmpty() && !readingPath_.isEmpty()) image_->SetNavigationSource(readingPath_);
+        }
         else {text_=new QTextView(this);view_=text_;text_->LoadContent(Input.text_,Input.path_,Input.encoding_,Input.encoding_=="UTF-8"?(Input.bom_?Input.bytes_.mid(3):Input.bytes_):QByteArray{},Input.eol_);readOnly_=false;}
         if(!Success)return false;
         toolbar_=view_->createToolBar();

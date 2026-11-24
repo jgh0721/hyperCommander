@@ -10,6 +10,8 @@
 #include <QFileInfo>
 #include <QCoreApplication>
 #include <QDir>
+#include <algorithm>
+#include <iterator>
 #include "UniqueLibs/settings/appSettings.hpp"
 namespace hc::plugins
 {
@@ -33,6 +35,8 @@ namespace hc::plugins
             if (Message["messageType"].toString() != "Ready" || Message["workspaceId"].toString().size() != 32
                 || !Body["capabilities"].toArray().contains("saveStream")) return Error{ErrorCategory::Unsupported, "document-host-capabilities"};
             workspace_ = Message["workspaceId"].toString();
+            for (const auto& Extension : Body["imageExtensions"].toArray())
+                if (Extension.isString()) imageExtensions_.insert(Extension.toString());
         }
         if (Type == "OpenDocuments") for (const auto& Item : Body["documents"].toArray())
             if (Item.toObject().contains("error")) return Error{ErrorCategory::InvalidRequest, Item.toObject()["error"].toString().toStdString()};
@@ -50,9 +54,65 @@ namespace hc::plugins
         } while (std::chrono::steady_clock::now() < Deadline);
         return Error{ErrorCategory::Unavailable, "document-helper-startup-timeout"};
     }
-    QString DocumentViewerClient::Bind(EntrySnapshot Source, std::shared_ptr<IWritableStorage> Writer,
-        std::shared_ptr<IMaterializedFileLease> Lease, QByteArray Hash, storage::ProviderContentSource::ArchiveWriteback ArchiveWriteback)
-    { return broker_.Bind(std::move(Source), std::move(Writer), std::move(Lease), std::move(Hash), std::move(ArchiveWriteback)); }
+    QString DocumentViewerClient::Bind(const std::shared_ptr<IContentSource>& Source, std::shared_ptr<IWritableStorage> Writer,
+        std::shared_ptr<IMaterializedFileLease> Lease, QByteArray Hash, bool EnableArchiveNavigation)
+    {
+        const auto Entry = Source->Describe();
+        const auto Content = std::dynamic_pointer_cast<ProviderContentSource>(Source);
+        const auto Token = broker_.Bind(Entry, std::move(Writer), std::move(Lease), std::move(Hash),
+            Content ? Content->GetArchiveWriteback() : ProviderContentSource::ArchiveWriteback{});
+        if (!EnableArchiveNavigation || Token.isEmpty() || !Content || Entry.locator_.kind_ != LocatorKind::Archive
+            || Entry.locator_.nesting_.empty() || !imageExtensions_.contains(QFileInfo(QString::fromUtf8(Entry.name_)).suffix().toLower()))
+            return Token;
+        auto Folder = Entry.locator_;
+        auto& Path = Folder.nesting_.back().entry_;
+        const auto Slash = Path.rfind('/');
+        if (const auto Provider = Content->ReadProvider(); Provider && Slash != std::string::npos) {
+            Path.resize(std::max(std::size_t{1}, Slash));
+            archiveImages_.emplace(Token, ArchiveImage{std::make_shared<ArchiveFolder>(ArchiveFolder{Provider, std::move(Folder)}), Entry.id_});
+        }
+        return Token;
+    }
+
+    Result<QJsonObject> DocumentViewerClient::prepareArchiveImage(const QString& Token, int Direction, IMaterializer& Materializer, OperationContext Context)
+    {
+        const auto At = archiveImages_.find(Token);
+        if (At == archiveImages_.end() || (Direction != 1 && Direction != -1))
+            return Error{ErrorCategory::InvalidRequest, "document-archive-image-source"};
+        const auto& Folder = At->second.folder_;
+        Context.deadline_ = std::min(Context.deadline_, std::chrono::steady_clock::now() + std::chrono::seconds(30));
+        if (!Folder->images_) {
+            auto Cursor = Folder->provider_->Enumerate(Folder->location_, Context).get();
+            if (!Cursor.HasValue()) return Cursor.Failure();
+            std::vector<EntrySnapshot> Images;
+            for (;;) {
+                if (const auto Stop = Context.Check(Folder->provider_->Id())) return *Stop;
+                auto Page = Cursor.Value()->Next(Context.maxPageItems_, Context).get();
+                if (!Page.HasValue()) return Page.Failure();
+                for (auto& Entry : Page.Value().entries_)
+                    if (!Entry.directory_ && imageExtensions_.contains(QFileInfo(QString::fromUtf8(Entry.name_)).suffix().toLower()))
+                        Images.push_back(std::move(Entry));
+                if (Page.Value().end_) break;
+            }
+            std::stable_sort(Images.begin(), Images.end(), [](const EntrySnapshot& Left, const EntrySnapshot& Right) {
+                return QString::fromUtf8(Left.name_) < QString::fromUtf8(Right.name_);
+            });
+            Folder->images_ = std::move(Images);
+        }
+        const auto& Images = *Folder->images_;
+        const auto Current = std::find_if(Images.begin(), Images.end(), [&](const auto& Entry) { return Entry.id_ == At->second.id_; });
+        if (Current == Images.end()) return Error{ErrorCategory::StaleRevision, "document-archive-image-changed"};
+        if (Images.size() == 1) return QJsonObject{};
+        const auto Count = std::ssize(Images);
+        const auto& Entry = Images[(std::distance(Images.begin(), Current) + Direction + Count) % Count];
+        auto Lease = Materializer.Materialize({std::make_shared<ProviderContentSource>(Folder->provider_, Entry)}, Context).get();
+        if (!Lease.HasValue()) return Lease.Failure();
+        const auto NextToken = broker_.Bind(Entry, {}, Lease.Value());
+        if (NextToken.isEmpty()) return Error{ErrorCategory::InvalidRequest, "document-source-binding"};
+        archiveImages_.emplace(NextToken, ArchiveImage{Folder, Entry.id_});
+        return QJsonObject{{"path", QString::fromUtf8(Lease.Value()->LocalPath())}, {"displayName", QString::fromUtf8(Entry.name_)},
+            {"sourceToken", NextToken}, {"entry", QString::fromUtf8(Entry.locator_.nesting_.back().entry_)}};
+    }
     Result<QJsonObject> DocumentViewerClient::Execute(QJsonObject Request, OperationContext Context)
     {
         const auto Id = Request.take("documentId").toString();
@@ -63,16 +123,34 @@ namespace hc::plugins
         if (Result.HasValue() && Result.Value().contains("error")) return Error{ErrorCategory::InvalidRequest, Result.Value()["error"].toString().toStdString()};
         return Result;
     }
-    Result<QJsonObject> DocumentViewerClient::Poll(OperationContext Context)
+    Result<QJsonObject> DocumentViewerClient::Poll(OperationContext Context, IMaterializer* Materializer)
     {
         auto Current = Call("DocumentState", {}, {}, {}, Context); if (!Current.HasValue()) return Current.Failure();
         state_ = Current.Value();
         std::set<QString> Tokens;
         for (const auto& Item : state_["documents"].toArray()) {
-            const auto Token = Item.toObject()["sourceToken"].toString(); if (!Token.isEmpty()) Tokens.insert(Token);
-            if (!Item.toObject()["loading"].toBool()) broker_.CaptureLoadedHash(Token, QByteArray::fromHex(Item.toObject()["inputSha256"].toString().toLatin1()));
+            const auto Tab = Item.toObject();
+            const auto Token = Tab["sourceToken"].toString(); if (!Token.isEmpty()) Tokens.insert(Token);
+            const auto Archive = Tab["archiveNavigationToken"].toString(); if (!Archive.isEmpty()) Tokens.insert(Archive);
+            const auto Pending = Tab["navigationSourceToken"].toString(); if (!Pending.isEmpty()) Tokens.insert(Pending);
+            if (!Tab["loading"].toBool()) broker_.CaptureLoadedHash(Token, QByteArray::fromHex(Tab["inputSha256"].toString().toLatin1()));
         }
         broker_.Retain(Tokens);
+        std::erase_if(archiveImages_, [&](const auto& Binding) { return !Tokens.contains(Binding.first); });
+        for (const auto& Item : state_["documents"].toArray()) {
+            const auto Tab = Item.toObject();
+            const auto Step = Tab["archiveImageStep"].toObject();
+            if (Step.isEmpty()) continue;
+            auto Next = Materializer
+                ? prepareArchiveImage(Tab["archiveNavigationToken"].toString(), Step["direction"].toInt(), *Materializer, Context)
+                : Result<QJsonObject>(Error{ErrorCategory::Unavailable, "document-archive-image-materializer"});
+            auto Reply = Next.HasValue() ? std::move(Next.Value()) : QJsonObject{{"failure", QString::fromStdString(Next.Failure().code_)}};
+            Reply["action"] = "archiveImageResult";
+            Reply["request"] = Step["request"];
+            auto Completed = Call("Execute", Reply, Tab["documentId"].toString(), Tab["generation"].toString(), Context);
+            if (!Completed.HasValue() && Completed.Failure().code_ != "document-stale-id"
+                && Completed.Failure().code_ != "document-stale-generation") return Completed.Failure();
+        }
         const auto Edit=state_["editRequest"].toObject();
         // A new EPUB from HyperViewer's Ctrl+N: no document and no path cross this boundary.
         // HyperEditor shows the dialog and creates the file itself (--new-epub).

@@ -394,7 +394,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"environmentCommandsUi", "environmentViewUi", "registryRegDocumentUi", "registryImportUi", "registrySearchUi", "registryLinksUi", "registryRestartUi", "registryPolicyUi", "registryAutorunUi", "registryHistoryUi", "registryTreeUi", "registryMutationUi", "registryFocusUi", "registryEditorUi", "registryViewUi", "registryNavigationUi", "registryAsyncSelectionUi", "contentContainerNavigationUi", "flatViewUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "windowSwitchFocusUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "mainWindowEdgeResizeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "displayPreferencesPreserveStoredRulesUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "largeAutomaticRefreshPreservesViewUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"environmentCommandsUi", "environmentViewUi", "registryRegDocumentUi", "registryImportUi", "registrySearchUi", "registryLinksUi", "registryRestartUi", "registryPolicyUi", "registryAutorunUi", "registryHistoryUi", "registryTreeUi", "registryMutationUi", "registryFocusUi", "registryEditorUi", "registryViewUi", "registryNavigationUi", "registryAsyncSelectionUi", "contentContainerNavigationUi", "flatViewUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "windowSwitchFocusUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "archiveImageNavigationUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "mainWindowEdgeResizeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "displayPreferencesPreserveStoredRulesUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "largeAutomaticRefreshPreservesViewUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -14182,6 +14182,134 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(Window && Window->isVisible(),10000);QVERIFY(Window->windowTitle().contains(Error));
         Window->close();QTRY_VERIFY_WITH_TIMEOUT(Window.isNull(),15000);
     }
+    void archiveImageNavigationUi_data()
+    {
+        QTest::addColumn<QString>("Format");
+        QTest::addColumn<bool>("Edit");
+        QTest::newRow("zip-view") << QString("zip") << false;
+        QTest::newRow("7z-edit") << QString("7z") << true;
+        QTest::newRow("iso-view") << QString("iso") << false;
+        QTest::newRow("iso-edit") << QString("iso") << true;
+    }
+    void archiveImageNavigationUi()
+    {
+        QFETCH(QString, Format);
+        QFETCH(bool, Edit);
+        const QDir TestRoot(qEnvironmentVariable("HC_UI_LOCAL_ROOT", QDir::tempPath()));
+        QTemporaryDir Directory(TestRoot.filePath("archive-images-XXXXXX"));
+        QVERIFY(Directory.isValid());
+        auto& Settings = hc::settings::AppSettings();
+        const auto Before = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace();
+        auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host"));
+        QVERIFY(Host);
+        QPointer<QDialog> Window;
+        const auto Restore = qScopeGuard([&] {
+            if (Window && Window->objectName() == "hc.document.workspace") Window->close();
+            Settings.Replace(Before);
+            TyStCommandMgr::GetInstance()->Refresh();
+            main_->RestoreWorkspace(Workspace);
+        });
+        QVERIFY(Settings.Put(hc::settings::Section::Editors, QJsonArray{}));
+        QVERIFY(Settings.SetPlugins("wlx", {}));
+        QVERIFY(Settings.SetPlugins("dopusViewer", {}));
+
+        const auto Input = Directory.filePath("input");
+        QVERIFY(QDir().mkpath(Input + "/photos"));
+        const std::vector<std::string> Files{"outside.jpg", "photos/a.jpg", "photos/b.txt", "photos/c.jpg"};
+        QImage Image(48, 32, QImage::Format_RGB32);
+        Image.fill(Qt::red); QVERIFY(Image.save(Input + "/photos/a.jpg"));
+        Image.fill(Qt::blue); QVERIFY(Image.save(Input + "/photos/c.jpg"));
+        Image.fill(Qt::green); QVERIFY(Image.save(Input + "/outside.jpg"));
+        { QFile Text(Input + "/photos/b.txt"); QVERIFY(Text.open(QIODevice::WriteOnly)); QCOMPARE(Text.write("skip"), 4); }
+        const auto ArchiveName = "pictures." + Format;
+        const auto Archive = Directory.filePath(ArchiveName);
+        if (Format == "iso") {
+            hc::iso::RewriteRequest Request;
+            Request.profile_ = HC_ISO_UDF_BRIDGE;
+            Request.temporaryBase_ = Directory.path();
+            for (const auto& File : Files) Request.sources_.push_back({Input.toStdString() + '/' + File, File, false});
+            auto Result = hc::iso::PrepareRewrite(Request).get();
+            QVERIFY2(Result.HasValue(), Result.HasValue() ? "" : Result.Failure().code_.c_str());
+            QVERIFY(QFile::copy(Result.Value()->Path(), Archive));
+        } else {
+            hc::plugins::ArchiveUpdate Create{Archive.toStdString(), Input.toStdString(), Files};
+            Create.creation_ = hc::plugins::ArchiveCreationOptions{1, false};
+            auto Result = hc::plugins::MakeApprovedWcxBackend(hc::plugins::BuiltinSevenZipOptions())->Update(std::move(Create), {});
+            QVERIFY2(Result.HasValue(), Result.HasValue() ? "" : Result.Failure().code_.c_str());
+        }
+
+        auto* Panel = panels_.front();
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        Model->SetProviderEnabled(true);
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        QTRY_VERIFY(!Model->IsLoading() && names(Model).contains(ArchiveName));
+        auto* Grid = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QVERIFY(Grid);
+        const auto Select = [&](const QString& Name) {
+            for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row) {
+                Grid->BaseView()->setFocusedRowIndex(Row);
+                auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+                while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Model->GetName(Index) == Name) {
+                    Grid->EnsureKeyboardFocusOnView();
+                    Panel->sig_NotifyPanelActivated();
+                    return QApplication::focusWidget();
+                }
+            }
+            return static_cast<QWidget*>(nullptr);
+        };
+        auto* Focus = Select(ArchiveName); QVERIFY(Focus); QTest::keyClick(Focus, Qt::Key_Return);
+        QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("photos"));
+        Focus = Select("photos"); QVERIFY(Focus); QTest::keyClick(Focus, Qt::Key_Return);
+        QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("a.jpg"));
+        QTRY_VERIFY_WITH_TIMEOUT(!main_->findChild<QDialog*>("hc.document.workspace"), 15000);
+        QPointer<QDialog> Prepared;
+        if (Format == "7z") {
+            const auto Catalog = hc::document::BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath());
+            const auto Found = Catalog.targets_.find("builtin.hyperviewer");
+            QVERIFY(Found != Catalog.targets_.end() && Found->second.descriptor_.available_);
+            Host->PreparePlugin(Found->second.plugin_);
+            Prepared = main_->findChild<QDialog*>("hc.document.prepared");
+            QVERIFY(Prepared);
+            auto* Surface = Prepared->findChild<QtPluginViewerSurface*>();
+            QVERIFY(Surface);
+            QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 15000);
+        }
+        Focus = Select("a.jpg"); QVERIFY(Focus); QTest::keyClick(Focus, Edit ? Qt::Key_F4 : Qt::Key_F3);
+        QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.document.workspace"), 15000);
+        Window = main_->findChild<QDialog*>("hc.document.workspace");
+        if (Format == "7z") QCOMPARE(Window.data(), Prepared.data());
+        auto* Surface = Window->findChild<QtPluginViewerSurface*>(); QVERIFY(Surface);
+        const auto Document = [&] {
+            const auto Tabs = Surface->Details().documentState_["documents"].toArray();
+            return Tabs.size() == 1 ? Tabs[0].toObject() : QJsonObject{};
+        };
+        const auto Shows = [&](const QString& Name) {
+            const auto Tab = Document();
+            return Tab["displayName"] == Name && Tab["imagePresentationReady"].toBool() && !Tab["loading"].toBool();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(Shows("a.jpg"), 20000);
+        QTRY_COMPARE(Window->windowTitle(), Edit ? QString("HyperEditor") : QString("HyperViewer"));
+        const auto Initial = Document();
+        const auto Id = Initial["documentId"];
+        const auto Hash = Initial["inputSha256"];
+        QVERIFY(sendWlxKey(Window, VK_SPACE, false));
+        QTRY_VERIFY_WITH_TIMEOUT(Shows("c.jpg"), 20000);
+        QCOMPARE(Document()["documentId"], Id);
+        QVERIFY(Document()["inputSha256"] != Hash);
+        QVERIFY(!Document()["canSave"].toBool());
+        QVERIFY(sendWlxKey(Window, VK_SPACE, false));
+        QTRY_VERIFY_WITH_TIMEOUT(Shows("a.jpg"), 20000);
+        QVERIFY(sendWlxKey(Window, VK_BACK, false));
+        QTRY_VERIFY_WITH_TIMEOUT(Shows("c.jpg"), 20000);
+        QVERIFY(sendWlxKey(Window, VK_BACK, false));
+        QTRY_VERIFY_WITH_TIMEOUT(Shows("a.jpg"), 20000);
+        QCOMPARE(Document()["inputSha256"], Hash);
+        QVERIFY(sendWlxKey(Window, VK_ESCAPE, false));
+        QTRY_VERIFY_WITH_TIMEOUT(Window.isNull() || (Window->isHidden() && Window->objectName() == "hc.document.prepared"), 15000);
+    }
+
     void registryRegDocumentUi() { documentCommandsUi(); }
     void documentCommandsUi() {
         auto& Settings = hc::settings::AppSettings(); const auto Saved = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();

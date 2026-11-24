@@ -16,6 +16,7 @@
 #include <QMap>
 #include <QPointer>
 #include <memory>
+#include <variant>
 
 class QDialog;
 class QLockFile;
@@ -242,7 +243,10 @@ namespace hc::document
         void save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite = false, bool SaveEpubOriginal = false);
         void startSave(const std::shared_ptr<Tab>& Tab, std::shared_ptr<LocalSave> Request);
         void load(const std::shared_ptr<Tab>& Tab, bool Discard = false, const QString& RecoveryPath = {});
-        void navigateImage(const std::shared_ptr<Tab>& Tab, const QString& Path);
+        using ImageNavigation = std::variant<QString, int>;
+        void navigateImage(const std::shared_ptr<Tab>& Tab, ImageNavigation Target);
+        void loadAdjacentImage(const std::shared_ptr<Tab>& Tab, const QString& Path,
+            QString SourceToken = {}, QString DisplayName = {}, QString ReadingEntry = {});
         void retire(std::shared_ptr<Tab> Tab, bool Discard, bool PreserveRecovery = false);
         // Opens the popover of an active status field; a hidden field falls back to its command.
         void openStatusPicker(const QString& Id);

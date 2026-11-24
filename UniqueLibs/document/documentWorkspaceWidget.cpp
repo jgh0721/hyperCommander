@@ -304,7 +304,9 @@ namespace hc::document
         QString recoveryBaseline_;
         QJsonObject restorePosition_;
         QString readingPath_,readingEntry_, recoveryNotice_;
-        QString navigationAfterSave_;
+        std::optional<ImageNavigation> navigationAfterSave_;
+        QString archiveNavigationToken_, navigationSourceToken_;
+        QJsonObject archiveImageStep_;
         QByteArray pendingHash_;
         sqlite::ProtectedKey newSqliteKey_;
         std::shared_ptr<LocalSave> activeSave_, queuedSave_;
@@ -437,7 +439,7 @@ namespace hc::document
                     Tab->choosingSavePath_ = false;
                     if (Tab->closed_) return;
                     if (!Path.isEmpty()) save(Tab, Path, true);
-                    else { Tab->closeRequested_ = Tab->closeAfterSave_ = false; Tab->navigationAfterSave_.clear(); closingWorkspace_ = false; }
+                    else { Tab->closeRequested_ = Tab->closeAfterSave_ = false; Tab->navigationAfterSave_.reset(); closingWorkspace_ = false; }
                 });
             }
         });
@@ -1825,6 +1827,7 @@ namespace hc::document
             if(Tab->closed_ || Tab->loading_)return;
             Tab->path_=Path;Tab->input_.path_=Path;Tab->readingPath_=Path;Tab->readingEntry_.clear();
             Tab->displayName_.clear();Tab->recoveredName_.clear();Tab->sourceToken_.clear();
+            Tab->archiveNavigationToken_.clear();
             Tab->originalAuthority_=false;Tab->originalSave_=false;Tab->broker_=false;Tab->hostSlot_=false;
             const auto Started=Tab->session_->BeginOpen(true);
             if(Started.HasValue()){
@@ -1834,6 +1837,7 @@ namespace hc::document
             update();
         });
         connect(Pane,&DocumentViewPane::ReadingSelected,this,[this,Tab]{Tab->originalSave_=false;Tab->broker_=false;});
+        connect(Pane, &DocumentViewPane::ArchiveImageStepRequested, this, [this, Tab](int Direction) { navigateImage(Tab, Direction); });
         connect(Pane,&DocumentViewPane::OpenRequested,this,[this,Tab](const QString& Path) {
             if(Tab->closed_)return;
             if(Tab->pane_->CanEditEpub() && QFileInfo(Path).canonicalFilePath()==QFileInfo(Tab->path_).canonicalFilePath()) {
@@ -1865,29 +1869,45 @@ namespace hc::document
         docks_->addDockWidgetToCentral(Dock);
         activate(Tab); load(Tab, false, RecoveryPath); return {{"documentId", Tab->id_}, {"loading", true}};
     }
-    void DocumentWorkspaceWidget::navigateImage(const std::shared_ptr<Tab>& Tab, const QString& Path)
+    void DocumentWorkspaceWidget::navigateImage(const std::shared_ptr<Tab>& Tab, ImageNavigation Target)
     {
         if(Tab->closed_||Tab->loading_||Tab->navigating_||Tab->choosingSavePath_||Tab->saving_||Tab->checkpointing_||!Tab->pendingToken_.isEmpty()
-            ||Tab->pane_->IsEditing()||Tab->pane_->ViewId()!="image"||!QFileInfo(Path).isAbsolute())return;
+            ||Tab->pane_->IsEditing()||Tab->pane_->ViewId()!="image"||Tab->archivePending_)return;
+        const auto* Direction = std::get_if<int>(&Target);
+        if (Direction ? Tab->archiveNavigationToken_.isEmpty() : !QFileInfo(std::get<QString>(Target)).isAbsolute()) return;
         if(Tab->Dirty()){
             const auto Choice=closePrompt_?closePrompt_(Tab->id_):int(hc::ui::MessageDialog::question(this,tr("변경 내용 저장"),
                 tr("다음 이미지를 열기 전에 변경 내용을 저장하시겠습니까?"),QMessageBox::Save|QMessageBox::Discard|QMessageBox::Cancel));
             if(Choice==QMessageBox::Save){
-                Tab->navigationAfterSave_=Path;activate(Tab);findChild<QAction*>("saveDocument")->trigger();
-                if(!Tab->choosingSavePath_&&!Tab->saving_&&Tab->pendingToken_.isEmpty())Tab->navigationAfterSave_.clear();
+                Tab->navigationAfterSave_=Target;activate(Tab);findChild<QAction*>("saveDocument")->trigger();
+                if(!Tab->choosingSavePath_&&!Tab->saving_&&Tab->pendingToken_.isEmpty())Tab->navigationAfterSave_.reset();
                 return;
             }
             if(Choice!=QMessageBox::Discard)return;
         }
+        if (Direction) {
+            Tab->archiveImageStep_ = {{"request", QUuid::createUuid().toString(QUuid::Id128)}, {"direction", *Direction}};
+            Tab->navigating_ = true;
+            Tab->pane_->setEnabled(false);
+            Tab->error_.clear();
+            update();
+        } else loadAdjacentImage(Tab, std::get<QString>(Target));
+    }
+    void DocumentWorkspaceWidget::loadAdjacentImage(const std::shared_ptr<Tab>& Tab, const QString& Path,
+        QString SourceToken, QString DisplayName, QString ReadingEntry)
+    {
         // Decode before replacing source identity, so a failed transition keeps the old image and edits.
         const auto Revision=Tab->Revision();
         Tab->navigating_=true;Tab->pane_->setEnabled(false);Tab->error_.clear();
+        Tab->navigationSourceToken_ = SourceToken;
         Tab->cancellation_=std::make_shared<std::stop_source>();const auto Cancellation=Tab->cancellation_;
         auto* Watcher=new QFutureWatcher<storage::Result<TextInput>>(this);
-        connect(Watcher,&QFutureWatcherBase::finished,this,[this,Tab,Watcher,Revision]{
+        connect(Watcher,&QFutureWatcherBase::finished,this,[this,Tab,Watcher,Revision,DisplayName=std::move(DisplayName),ReadingEntry=std::move(ReadingEntry)]{
             auto Result=Watcher->result();DeleteCompletedImageWork(Watcher);
             if(Tab->closed_)return;
             Tab->navigating_=false;Tab->pane_->setEnabled(true);
+            const auto Token = std::exchange(Tab->navigationSourceToken_, {});
+            const bool Archive = !Token.isEmpty();
             if(!Result.HasValue()||Result.Value().viewId_!="image"||Result.Value().image_.isNull()||Result.Value().book_){
                 Tab->error_=Result.HasValue()?"document-image-navigation-format":QString::fromStdString(Result.Failure().code_);
             }else if(Tab->Revision()!=Revision||Tab->saving_||!Tab->pendingToken_.isEmpty()){
@@ -1899,15 +1919,19 @@ namespace hc::document
                     const auto Temporary=Tab->temporarySource_;
                     Tab->pane_->Cancel();
                     Tab->input_=std::move(Result.Value());Tab->path_=Tab->input_.path_;
-                    Tab->sourceToken_.clear();Tab->broker_=false;Tab->hostSlot_=false;
-                    Tab->originalAuthority_ = true;
-                    Tab->originalSave_ = !(Tab->input_.source_.attributes_ & 1u) && !IsCompositeOnlyImage(Tab->input_.bytes_);
-                    Tab->readingPath_.clear();Tab->readingEntry_.clear();Tab->displayName_.clear();Tab->recoveredName_.clear();
+                    Tab->sourceToken_=Token;Tab->archiveNavigationToken_=Token;Tab->broker_=false;Tab->hostSlot_=false;
+                    Tab->originalAuthority_ = !Archive;
+                    Tab->originalSave_ = !Archive && !(Tab->input_.source_.attributes_ & 1u) && !IsCompositeOnlyImage(Tab->input_.bytes_);
+                    if (!Archive) Tab->readingPath_.clear();
+                    Tab->readingEntry_ = ReadingEntry;
+                    Tab->displayName_ = DisplayName;
+                    Tab->recoveredName_.clear();
+                    Tab->pane_->setProperty("hc.previewPath", Tab->path_);
                     Tab->temporarySource_.clear();Tab->recovered_=false;Tab->closeAfterSave_=false;
                     Tab->checkpointedRevision_=(std::numeric_limits<std::uint64_t>::max)();
-                    Tab->loading_=true;Tab->pane_->SetReadingSource({},{});
-                    Tab->pane_->Load(Tab->input_,true,!hosted_);Tab->loading_=false;
-                    SourceIdentity Source{Tab->input_.source_,{},Tab->path_.toUtf8().toStdString(),{},Tab->originalSave_};
+                    Tab->loading_=true;Tab->pane_->SetReadingSource(Tab->readingPath_, Tab->readingEntry_, Archive);
+                    Tab->pane_->Load(Tab->input_,!Archive,!hosted_);Tab->loading_=false;
+                    SourceIdentity Source{Tab->input_.source_,{},Tab->path_.toUtf8().toStdString(),Token.toStdString(),Tab->originalSave_};
                     Tab->session_->SetBinaryContent(true);
                     {auto Serialized=Tab->pane_->SerializeSession();Tab->serializationError_=Serialized.error_;Tab->session_->CompleteOpen(Started.Value(),OpenedDocument{std::move(Source),Serialized.bytes_.toStdString()});}
                     if (Tab->pane_->ViewId()=="text") Tab->session_->AdoptTextSnapshot(Tab->pane_->CaptureTextSnapshot());
@@ -2011,7 +2035,7 @@ namespace hc::document
                 SourceIdentity Source{Tab->input_.source_, {}, Tab->path_.toUtf8().toStdString(), Tab->sourceToken_.toStdString(),
                     (Tab->originalSave_ || Tab->broker_) && !Tab->recovered_};
                 Tab->loading_=true;
-                Tab->pane_->SetReadingSource(Tab->readingPath_,Tab->readingEntry_);
+                Tab->pane_->SetReadingSource(Tab->readingPath_,Tab->readingEntry_,!Tab->archiveNavigationToken_.isEmpty());
                 Tab->pane_->ConfigureHwp(hwpRuntime_);
                 if (Tab->input_.viewId_ == "epub") Tab->pane_->ConfigureEpub(epubRuntime_ ? *epubRuntime_ : MakeProductEpubRuntime(QCoreApplication::applicationDirPath()),!hosted_);
                 const auto SqliteKey = std::exchange(Tab->newSqliteKey_, {});
@@ -2480,6 +2504,7 @@ namespace hc::document
                 {"savedRevision", QString::number(State.savedRevision_)}, {"generation", QString::number(State.generation_)},
                 {"lifecycle", Life(State.lifecycle_)}, {"saveState", SaveState(State.saveState_)}, {"error", Code},
                 {"errorCategory", State.error_ ? int(State.error_->category_) : -1}, {"cleanupWarnings", Cleanup},
+                {"archiveImageStep", Tab->archiveImageStep_}, {"archiveNavigationToken", Tab->archiveNavigationToken_}, {"navigationSourceToken", Tab->navigationSourceToken_},
                 {"preparation",Tab->preparation_}, {"sourceToken", Tab->sourceToken_}, {"canSave", Capability.save_}, {"canSaveAs", Capability.saveAs_}, {"hostSlot", Tab->hostSlot_}, {"view",Tab->pane_->ViewState()}});
             if (!Tab->pendingToken_.isEmpty()) Pending.append(QJsonObject{{"documentId", Tab->id_}, {"sourceToken", Tab->sourceToken_},
                 {"saveToken", Tab->pendingToken_}, {"generation", QString::number(Tab->pending_->generation_)},
@@ -2518,7 +2543,8 @@ namespace hc::document
             // on the parent side even when RHWP needs an unrestricted native UI.
             SetClipboardBroker(true);
             negotiated_ = true; return Reply({{"capabilities", QJsonArray{"mixedTabs", "saveStream", "clipboardBroker", "recovery"}},
-                {"maxDocumentBytes", hosted_?0:int(DocumentByteLimit)}, {"maxChunkBytes", int(HostChunkLimit)}, {"maxTabs", hosted_?0:16}}, "Ready");
+                {"maxDocumentBytes", hosted_?0:int(DocumentByteLimit)}, {"maxChunkBytes", int(HostChunkLimit)}, {"maxTabs", hosted_?0:16},
+                {"imageExtensions", QJsonArray::fromStringList(ImageExtensions())}}, "Ready");
         }
         if (Type == "Heartbeat") return Reply({{"alive", true}, {"idle", IsIdle()}});
         if (Type == "OpenDocuments") {
@@ -2561,8 +2587,12 @@ namespace hc::document
                 }
                 if(!Bound)Results.append(open(Item["path"].toString(),Item["hostSlot"].toBool(),Item["sourceToken"].toString(),Item["broker"].toBool(),{},Item["displayName"].toString(),Item["readPrefix"].toObject()));
                 const auto Origin=Item["readingSource"].toObject();
-                if(!Origin.isEmpty()&&QFileInfo(Origin["path"].toString()).isAbsolute())for(const auto& Tab:documents_)if(Tab->sourceToken_==Item["sourceToken"].toString()&&!Tab->sourceToken_.isEmpty()){
-                    Tab->readingPath_=Origin["path"].toString();Tab->readingEntry_=Origin["entry"].toString().replace('\\','/');Tab->pane_->SetReadingSource(Tab->readingPath_,Tab->readingEntry_);
+                const bool Archive = Item["archiveFolder"].toBool();
+                if (Archive || QFileInfo(Origin["path"].toString()).isAbsolute()) for (const auto& Tab : documents_) if (Tab->sourceToken_ == Item["sourceToken"].toString() && !Tab->sourceToken_.isEmpty()) {
+                    if (Archive) Tab->archiveNavigationToken_ = Tab->sourceToken_;
+                    Tab->readingPath_ = Origin["path"].toString();
+                    Tab->readingEntry_ = Origin["entry"].toString().replace('\\', '/');
+                    Tab->pane_->SetReadingSource(Tab->readingPath_, Tab->readingEntry_, Archive);
                 }
             }
             return Reply({{"documents", Results}});
@@ -2694,6 +2724,22 @@ namespace hc::document
         auto Tab = find(Request["documentId"].toString()); if (!Tab) return Error("document-stale-id");
         if (Request.contains("generation") && Request["generation"].toString() != QString::number(Tab->session_->Snapshot().generation_)) return Error("document-stale-generation");
         if (Request.contains("revision") && Action != "commitSave" && Action != "saveRead" && Request["revision"].toString() != QString::number(Tab->Revision())) return Error("document-stale-revision");
+        if (Action == "archiveImageResult") {
+            if (Tab->archiveImageStep_.isEmpty() || Request["request"] != Tab->archiveImageStep_["request"]) return {{"accepted", false}};
+            Tab->archiveImageStep_ = {};
+            const auto Path = Request["path"].toString(), Token = Request["sourceToken"].toString();
+            if (QFileInfo(Path).isAbsolute() && Token.size() == 32)
+                loadAdjacentImage(Tab, Path, Token, Request["displayName"].toString(), Request["entry"].toString());
+            else {
+                Tab->navigating_ = false;
+                Tab->pane_->setEnabled(true);
+                Tab->error_ = Request["failure"].toString();
+                if (active() == Tab) Tab->pane_->Focus();
+                update();
+                tryFinishClose();
+            }
+            return {{"accepted", true}};
+        }
         if (Action == "cancel") { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->queuedSave_.reset();Tab->composingSave_=false;Tab->pane_->Cancel(); return {{"accepted", true}}; }
         if (Action == "reload") { if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-reload-dirty"); load(Tab, Request["discard"].toBool()); return {{"accepted", true}}; }
         if(Tab->pane_->IsProcessDocument()&& !(Tab->pane_->CanEditEpub() && (Action=="saveAs" || Action=="save")) && (Action=="save"||Action=="saveAs"||Action=="prepareSave"))return Error(Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor");
@@ -3778,7 +3824,7 @@ namespace hc::document
     void DocumentWorkspaceWidget::tryFinishClose()
     {
         if(pendingActionsScheduled_)return;
-        if(!closingWorkspace_&&std::none_of(documents_.begin(),documents_.end(),[](const auto& Tab){return Tab->closeRequested_||Tab->reloadAfterClose_||!Tab->navigationAfterSave_.isEmpty();}))return;
+        if(!closingWorkspace_&&std::none_of(documents_.begin(),documents_.end(),[](const auto& Tab){return Tab->closeRequested_||Tab->reloadAfterClose_||Tab->navigationAfterSave_.has_value();}))return;
         pendingActionsScheduled_=true;
         QTimer::singleShot(0,this,[this]{
             pendingActionsScheduled_=false;
@@ -3788,10 +3834,10 @@ namespace hc::document
                 if(Tab->closed_)continue;
                 if(Tab->closeRequested_){const auto At=std::find(documents_.begin(),documents_.end(),Tab);if(At!=documents_.end())closeTab(int(std::distance(documents_.begin(),At)));}
                 else if(Tab->reloadAfterClose_&&Tab->pane_->ViewState()["closed"].toBool())load(Tab,true);
-                else if(!Tab->navigationAfterSave_.isEmpty()&&!Tab->saving_&&Tab->pendingToken_.isEmpty()&&!Tab->checkpointing_){
+                else if(Tab->navigationAfterSave_&&!Tab->saving_&&Tab->pendingToken_.isEmpty()&&!Tab->checkpointing_){
                     const auto State=Tab->session_->Snapshot();
-                    if(State.saveState_==DocumentSaveState::Failed||State.saveState_==DocumentSaveState::Conflict)Tab->navigationAfterSave_.clear();
-                    else if(!Tab->Dirty())navigateImage(Tab,std::exchange(Tab->navigationAfterSave_,{}));
+                    if(State.saveState_==DocumentSaveState::Failed||State.saveState_==DocumentSaveState::Conflict)Tab->navigationAfterSave_.reset();
+                    else if(!Tab->Dirty())navigateImage(Tab,*std::exchange(Tab->navigationAfterSave_,{}));
                 }
             }
         });
