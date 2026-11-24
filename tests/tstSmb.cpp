@@ -6540,12 +6540,19 @@ private slots:
         // Count role reads to catch comparison-time model queries independently
         // of VM load, and also verify every resulting row is correctly ordered.
         struct CountingModel final : QAbstractTableModel {
-            int rows_ = 0; mutable int reads_ = 0;
+            int rows_ = 0;
+            mutable int reads_ = 0, groupKeyReads_ = 0;
+            QString groupPrefix_ = "group/";
             int rowCount(const QModelIndex& Parent = {}) const override { return Parent.isValid() ? 0 : rows_; }
             int columnCount(const QModelIndex& Parent = {}) const override { return Parent.isValid() ? 0 : 1; }
             QVariant data(const QModelIndex& Index, int Role) const override {
                 if (!Index.isValid()) return {};
                 if (Role == Qt::UserRole + 1) { ++reads_; return rows_ - Index.row(); }
+                if (Role == hc::columns::GroupOrderRole) return Index.row() % 4;
+                if (Role == hc::columns::GroupKeyRole) {
+                    ++groupKeyReads_;
+                    return groupPrefix_ + QString::number(Index.row() % 4);
+                }
                 return Role == Qt::DisplayRole ? QVariant(QString::number(rows_ - Index.row())) : QVariant{};
             }
             void Reset(int Rows) { beginResetModel(); rows_ = Rows; reads_ = 0; endResetModel(); }
@@ -6568,6 +6575,36 @@ private slots:
         }
         Column->setSortOrder(Qtitan::SortDescending);
         for (int Row = 0; Row < Model.rows_; ++Row) QCOMPARE(View->getRow(Row).modelIndex(0).row(), Row);
+
+        Model.Reset(1200);
+        auto* Controller = View->modelController();
+        View->beginUpdate();
+        Column->dataBinding()->setGroupingRoles(hc::columns::GroupKeyRole, hc::columns::GroupOrderRole, hc::columns::GroupTextRole);
+        Column->setGroupIndex(0);
+        View->endUpdate();
+        Model.groupKeyReads_ = 0;
+        Controller->setGroupOrder(Column->dataBinding(), 0, Qtitan::SortAscending, false, false);
+        const int CachedReads = Model.groupKeyReads_;
+        QCOMPARE(Controller->groupRows().size(), 4);
+        for (const auto& Group : Controller->groupRows())
+            QCOMPARE(Group.lastRecord - Group.firstRecord + 1, Model.rows_ / 4);
+
+        // A sort-completed observer can change the values before group rows are built.
+        // Preserve live reads across that signal even when the group rank is unchanged.
+        const auto Observer = connect(Controller, &Qtitan::GridModelController::sortCompleted, &Widget,
+            [&] { Model.groupPrefix_ = "changed/"; });
+        const auto Disconnect = qScopeGuard([&] { disconnect(Observer); });
+        Model.groupKeyReads_ = 0;
+        Controller->setGroupOrder(Column->dataBinding(), 0, Qtitan::SortDescending, false, false);
+        const int LiveReads = Model.groupKeyReads_;
+        qInfo() << "grid-population grouped rows" << Model.rows_ << "cached-group-key-reads" << CachedReads
+                << "observer-group-key-reads" << LiveReads;
+        // Focus lookups may also read keys in the viewport. Compare equivalent
+        // sorts and demand that the cached path eliminates at least one full pass.
+        QVERIFY2(LiveReads - CachedReads >= Model.rows_, "Group construction re-read keys fetched by sorting");
+        QCOMPARE(Controller->groupRows().size(), 4);
+        for (int Group = 0; Group < 4; ++Group)
+            QCOMPARE(Controller->groupRows().at(Group)._groupValue.toString(), "changed/" + QString::number(3 - Group));
     }
     void downloadsBackgroundRefreshFocusUi()
     {
