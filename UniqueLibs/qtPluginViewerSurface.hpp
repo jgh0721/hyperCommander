@@ -87,6 +87,7 @@ private:
     QPointer<QtPluginViewerController> controller_;
     QPointer<QWidget> anchor_;
     QWidget* preparation_ = nullptr;
+    QLabel* preparationImage_ = nullptr;
     QLabel* status_ = nullptr;
     QLabel* preparationDetail_ = nullptr;
     QProgressBar* progress_ = nullptr;

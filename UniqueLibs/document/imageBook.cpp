@@ -283,7 +283,7 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
     QByteArray StreamBytes;
     ImagePartialDecoder Progressive;
     bool SizePublished = false;
-    const auto Publish=[&](const QByteArray& Bytes){
+    const auto Publish=[&](const QByteArray& Bytes, bool MoreInput){
         // Share the entry stream with decoding; metadata probing must not open
         // a second archive session or decode every page before showing a book.
         if (Metadata && !SizePublished && Page.subpage_ == 0 && !Context.stopToken_.stop_requested()) {
@@ -293,7 +293,7 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
                 SizePublished = true; Metadata(Size);
             }
         }
-        if(!Context.stopToken_.stop_requested())Progressive.Update(Bytes,Preview);
+        if(MoreInput && !Context.stopToken_.stop_requested())Progressive.Update(Bytes,Preview);
     };
     bool Streamed = false;
     QString Warning;
@@ -339,7 +339,7 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
                 }
                 const auto &Data = Chunk.Value().bytes_;
                 StreamBytes.append(reinterpret_cast<const char *>(Data.data()), Data.size());
-                Publish(StreamBytes);
+                Publish(StreamBytes, !Chunk.Value().eof_);
                 if (Chunk.Value().eof_)
                     break;
                 if (Data.empty())
@@ -374,7 +374,7 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
         const auto Chunk = File.read(256 * 1024);
         if (Chunk.isEmpty() && !File.atEnd())
             return Error("image-page-read");
-        Content.bytes_ += Chunk;Publish(Content.bytes_);
+        Content.bytes_ += Chunk;Publish(Content.bytes_, !File.atEnd());
     }
     if (File.error() != QFileDevice::NoError)
         return Error("image-page-read");

@@ -20,6 +20,9 @@
 #include <iostream>
 #include <QScrollBar>
 #include <QImageReader>
+#include <QImageWriter>
+#include <QRandomGenerator>
+#include <jxl/encode.h>
 #include <QDataStream>
 #include <QAction>
 #include <QMenu>
@@ -44,6 +47,7 @@
 #include "UniqueLibs/document/imageBook.hpp"
 #include "UniqueLibs/document/imageZipRecovery.hpp"
 #include "UniqueLibs/document/imagePartialDecoder.hpp"
+#include "UniqueLibs/document/loadingImageFrame.hpp"
 #include "UniqueLibs/document/imageReadingView.hpp"
 #include "UniqueLibs/document/imageReadingNavigator.hpp"
 #include "UniqueLibs/document/imageFullscreen.hpp"
@@ -436,6 +440,165 @@ class ImageReadingTests : public QObject
         B.open(QIODevice::ReadOnly);
         QImageReader Bad(&B);
         QVERIFY(Bad.read().isNull());
+    }
+    void jpeg2000OpensAsImage_data()
+    {
+        QTest::addColumn<QString>("Suffix");
+        QTest::newRow("jp2") << QStringLiteral("JP2");
+        QTest::newRow("j2k") << QStringLiteral("j2k");
+        QTest::newRow("jpf") << QStringLiteral("jpf");
+    }
+    void jpeg2000OpensAsImage()
+    {
+        QFETCH(QString, Suffix);
+        // Lossless 16×16 red JP2 encoded with FFmpeg's JPEG 2000 encoder.
+        const auto Jp2 = QByteArray::fromHex(
+            "0000000c6a5020200d0a870a00000014667479706a703220000000006a7032200000002d6a7032680000001669686472"
+            "00000010000000100003080700000000000f636f6c7201000000000010000000a36a703263ff4fff51002f000000000010"
+            "000000100000000000000000000001000000010000000000000000000003070101070101070101ff52000c000000010006"
+            "02020001ff5c00162040484850484850484850484850484850484850ff64001100014c61766336322e32382e313032ff9000"
+            "0a00000000002d0001ff93df6810008fff000807ff000807000000000000000000000000000000000000ffd9");
+        const QByteArray CodestreamMarker("\xff\x4f\xff\x51", 4);
+        const auto Codestream = Jp2.indexOf(CodestreamMarker);
+        QVERIFY(Codestream >= 0);
+        const auto Bytes = Suffix == "j2k" ? Jp2.mid(Codestream) : Jp2;
+        QTemporaryDir Root;
+        QVERIFY(Root.isValid());
+        const auto Name = "scan." + Suffix;
+        const auto Path = Root.filePath(Name);
+        QFile File(Path);
+        QVERIFY(File.open(QIODevice::WriteOnly));
+        QCOMPARE(File.write(Bytes), Bytes.size());
+        File.close();
+
+        QVERIFY(IsImageFile(Path));
+        QImage Preview;
+        const auto Document = ReadDocumentFile(Path, {}, false, [&](QImage Image) { Preview = std::move(Image); });
+        QVERIFY(Document.HasValue());
+        QCOMPARE(Document.Value().viewId_, QStringLiteral("image"));
+        QCOMPARE(Document.Value().image_.size(), QSize(16, 16));
+        QVERIFY(Document.Value().image_.pixelColor(0, 0).red() >= 250);
+        QCOMPARE(Preview, Document.Value().image_);
+
+        const auto ArchivePath = Root.filePath("scans.cbz");
+        QZipWriter Writer(ArchivePath);
+        Writer.addFile(Name, Bytes);
+        Writer.close();
+        QCOMPARE(Writer.status(), QZipWriter::NoError);
+        const auto Book = OpenImageBook(ArchivePath);
+        QVERIFY(Book.HasValue());
+        const auto Page = ReadImagePage(Book.Value(), 0);
+        QVERIFY(Page.HasValue());
+        QCOMPARE(Page.Value().image_, Document.Value().image_);
+    }
+    void jpeg2000ScaledPreviewUsesReducedResolution()
+    {
+        QImage Source(3073, 2049, QImage::Format_RGB32);
+        QVERIFY(!Source.isNull());
+        Source.fill(qRgb(192, 48, 24));
+        QByteArray Bytes;
+        QBuffer Output(&Bytes);
+        QVERIFY(Output.open(QIODevice::WriteOnly));
+        QImageWriter Writer(&Output, "jp2");
+        Writer.setQuality(100);
+        QVERIFY2(Writer.write(Source), qPrintable(Writer.errorString()));
+        Output.close();
+
+        QList<qint64> ScaledTimes, FullTimes;
+        for (auto Run = 0; Run < 3; ++Run) {
+            QElapsedTimer Timer;
+            Timer.start();
+            const auto Preview = ImagePartialDecoder::DecodeCompletePreview(Bytes, QSize(800, 600));
+            ScaledTimes.append(Timer.nsecsElapsed() / 1000000);
+            QVERIFY(!Preview.isNull());
+            QCOMPARE(Preview.size(), QSize(800, 533));
+            QCOMPARE(Preview.pixelColor(400, 200), Source.pixelColor(400, 200));
+            QBuffer Input(&Bytes);
+            QVERIFY(Input.open(QIODevice::ReadOnly));
+            QImageReader Reader(&Input, "jp2");
+            Timer.restart();
+            const auto Full = Reader.read();
+            FullTimes.append(Timer.nsecsElapsed() / 1000000);
+            QCOMPARE(Full.size(), Source.size());
+        }
+        std::sort(ScaledTimes.begin(), ScaledTimes.end());
+        std::sort(FullTimes.begin(), FullTimes.end());
+        qInfo() << "JP2 3073x2049 decode median ms, scaled" << ScaledTimes[1] << "full" << FullTimes[1];
+    }
+    void jpegxlProgressivePreviewBeforeEndOfInput()
+    {
+        constexpr int Width = 1024, Height = 1024;
+        std::unique_ptr<JxlEncoder, decltype(&JxlEncoderDestroy)> Encoder(JxlEncoderCreate(nullptr), JxlEncoderDestroy);
+        QVERIFY(Encoder);
+        JxlBasicInfo Info;
+        JxlEncoderInitBasicInfo(&Info);
+        Info.xsize = Width;
+        Info.ysize = Height;
+        Info.bits_per_sample = 8;
+        Info.num_color_channels = 3;
+        QCOMPARE(JxlEncoderSetBasicInfo(Encoder.get(), &Info), JXL_ENC_SUCCESS);
+        JxlColorEncoding Color;
+        JxlColorEncodingSetToSRGB(&Color, JXL_FALSE);
+        QCOMPARE(JxlEncoderSetColorEncoding(Encoder.get(), &Color), JXL_ENC_SUCCESS);
+        auto* Frame = JxlEncoderFrameSettingsCreate(Encoder.get(), nullptr);
+        QVERIFY(Frame);
+        QCOMPARE(JxlEncoderFrameSettingsSetOption(Frame, JXL_ENC_FRAME_SETTING_EFFORT, 3), JXL_ENC_SUCCESS);
+        QCOMPARE(JxlEncoderFrameSettingsSetOption(Frame, JXL_ENC_FRAME_SETTING_PROGRESSIVE_AC, 1), JXL_ENC_SUCCESS);
+        QCOMPARE(JxlEncoderFrameSettingsSetOption(Frame, JXL_ENC_FRAME_SETTING_PROGRESSIVE_DC, 1), JXL_ENC_SUCCESS);
+        QCOMPARE(JxlEncoderSetFrameDistance(Frame, 1.0f), JXL_ENC_SUCCESS);
+        const JxlPixelFormat Format{3, JXL_TYPE_UINT8, JXL_NATIVE_ENDIAN, 0};
+        QByteArray Pixels(Width * Height * 3, Qt::Uninitialized);
+        QRandomGenerator Random(1234);
+        for (auto& Pixel : Pixels) Pixel = char(Random.generate() & 255);
+        QCOMPARE(JxlEncoderAddImageFrame(Frame, &Format, Pixels.constData(), Pixels.size()), JXL_ENC_SUCCESS);
+        JxlEncoderCloseInput(Encoder.get());
+        QByteArray Bytes(Pixels.size() * 2, Qt::Uninitialized);
+        auto* Next = reinterpret_cast<uint8_t*>(Bytes.data());
+        size_t Available = Bytes.size();
+        QCOMPARE(JxlEncoderProcessOutput(Encoder.get(), &Next, &Available), JXL_ENC_SUCCESS);
+        Bytes.chop(qsizetype(Available));
+        QVERIFY(Bytes.size() > 768 * 1024);
+
+        QTemporaryDir Root;
+        QVERIFY(Root.isValid());
+        const auto Path = Root.filePath("progressive.JXL");
+        QFile File(Path);
+        QVERIFY(File.open(QIODevice::WriteOnly));
+        QCOMPARE(File.write(Bytes), Bytes.size());
+        File.close();
+        QVERIFY(IsImageFile(Path));
+
+        hc::storage::OperationContext Context;
+        quint64 Read = 0;
+        int Chunks = 0;
+        Context.reportProgress_ = [&](const hc::storage::OperationContext::Progress& Progress) {
+            Read = Progress.bytesDone_;
+            if (++Chunks == 2) QThread::msleep(125);
+        };
+        QImage Interim;
+        const auto Result = ReadDocumentFile(Path, Context, false, [&](QImage Image) {
+            if (Read < quint64(Bytes.size()) && Interim.isNull()) Interim = std::move(Image);
+        }, QSize(300, 300));
+        QVERIFY(Result.HasValue());
+        QCOMPARE(Result.Value().viewId_, QStringLiteral("image"));
+        QCOMPARE(Result.Value().image_.size(), QSize(Width, Height));
+        QVERIFY(!Interim.isNull());
+        QCOMPARE(Interim.size(), QSize(256, 256));
+        QVERIFY(Interim.pixelColor(128, 128).alpha() > 0);
+        auto WireFrame = EncodeLoadingImageFrame(Interim);
+        QCOMPARE(DecodeLoadingImageFrame(WireFrame).size(), QSize(192, 192));
+        WireFrame["height"] = 2;
+        QVERIFY(DecodeLoadingImageFrame(WireFrame).isNull());
+
+        QZipWriter Writer(Root.filePath("scans.cbz"));
+        Writer.addFile("progressive.jxl", Bytes);
+        Writer.close();
+        QCOMPARE(Writer.status(), QZipWriter::NoError);
+        const auto Book = OpenImageBook(Root.filePath("scans.cbz"));
+        QVERIFY(Book.HasValue());
+        const auto Page = ReadImagePage(Book.Value(), 0);
+        QVERIFY(Page.HasValue());
+        QCOMPARE(Page.Value().image_, Result.Value().image_);
     }
     void animatedFramesDoNotBlockOrModify()
     {

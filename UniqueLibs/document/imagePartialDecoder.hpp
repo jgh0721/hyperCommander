@@ -6,8 +6,10 @@
 #include <QImageReader>
 #include <QElapsedTimer>
 #include "imagePerformance.hpp"
+#include "cmake/JpegXl/jxlPreview.hpp"
 #include <functional>
 #include <algorithm>
+#include <memory>
 
 namespace hc::document
 {
@@ -15,6 +17,8 @@ namespace hc::document
     class ImagePartialDecoder
     {
     public:
+        explicit ImagePartialDecoder(QSize Bounds = {1024, 1024}) : bounds_(Bounds) {}
+
         static QImage DecodeCompletePreview(const QByteArray& Bytes, QSize Bounds=QSize(1024,1024))
         {
             QBuffer Input;Input.setData(Bytes);Input.open(QIODevice::ReadOnly);
@@ -85,17 +89,55 @@ namespace hc::document
         }
         void Update(const QByteArray& Bytes,const std::function<void(QImage)>& Publish)
         {
+            if (!Publish) return;
             if(!elapsed_.isValid())elapsed_.start();
+            if (Bytes.startsWith(QByteArrayView("\xff\x0a", 2))
+                || Bytes.startsWith(QByteArrayView("\0\0\0\x0cJXL \x0d\x0a\x87\x0a", 12))) {
+                updateJxl(Bytes, Publish);
+                return;
+            }
             // Fast local reads should reach EOF once; repeated partial decodes
             // at 512 KiB/1 MiB/... otherwise delay every supported codec.
             if(elapsed_.elapsed()<100)return;
-            if(!Publish || Bytes.size()<next_ || next_>32*1024*1024)return;
+            if(Bytes.size()<next_ || next_>32*1024*1024)return;
             next_=qMax(next_*2,Bytes.size()*2);
             elapsed_.restart();
             auto Image=Decode(Bytes);if(!Image.isNull())Publish(std::move(Image));
         }
     private:
+        void updateJxl(const QByteArray& Bytes, const std::function<void(QImage)>& Publish)
+        {
+            if (jxlDone_ || (!jxl_ && elapsed_.elapsed() < 100)) return;
+            struct Codec
+            {
+                QLibrary library_{QCoreApplication::applicationDirPath() + "/Libs/imageformats/kimg_jxl.dll"};
+                decltype(&HC_CreateJxlPreview) create_ = nullptr;
+                decltype(&HC_DestroyJxlPreview) destroy_ = nullptr;
+                decltype(&HC_UpdateJxlPreview) update_ = nullptr;
+                Codec()
+                {
+                    library_.setLoadHints(QLibrary::ResolveAllSymbolsHint | QLibrary::PreventUnloadHint);
+                    if (!library_.load()) return;
+                    create_ = reinterpret_cast<decltype(create_)>(library_.resolve("HC_CreateJxlPreview"));
+                    destroy_ = reinterpret_cast<decltype(destroy_)>(library_.resolve("HC_DestroyJxlPreview"));
+                    update_ = reinterpret_cast<decltype(update_)>(library_.resolve("HC_UpdateJxlPreview"));
+                }
+            };
+            static Codec Plugin;
+            if (!jxl_) {
+                if (Plugin.create_ && Plugin.destroy_ && Plugin.update_)
+                    jxl_ = decltype(jxl_)(Plugin.create_(&bounds_), Plugin.destroy_);
+                if (!jxl_) { jxlDone_ = true; return; }
+            }
+            QImage Image;
+            if (!Plugin.update_(jxl_.get(), &Bytes, &Image)) { jxl_.reset(); jxlDone_ = true; }
+            if (!Image.isNull()) Publish(std::move(Image));
+        }
+
+        QSize bounds_;
         QElapsedTimer elapsed_;
         qsizetype next_=512*1024;
+        std::unique_ptr<void, decltype(&HC_DestroyJxlPreview)> jxl_{nullptr, nullptr};
+        bool jxlDone_ = false;
     };
 }

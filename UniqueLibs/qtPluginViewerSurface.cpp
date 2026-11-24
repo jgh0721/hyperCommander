@@ -1,5 +1,6 @@
 ﻿#include "qtPluginViewerSurface.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
+#include "document/loadingImageFrame.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include <QMessageBox>
 #include "commonLibs/document/epub/epubAppearance.hpp"
@@ -195,6 +196,10 @@ QtPluginViewerSurface::QtPluginViewerSurface(QtPluginViewerController* Controlle
     preparation_->setAutoFillBackground(true);
     auto* PreparationLayout = new QVBoxLayout(preparation_);
     PreparationLayout->addStretch();
+    preparationImage_ = new QLabel(preparation_);
+    preparationImage_->setObjectName("viewerPreparationImage");
+    PreparationLayout->addWidget(preparationImage_, 0, Qt::AlignHCenter);
+    preparationImage_->hide();
     status_ = new QLabel(preparation_);
     status_->setObjectName("viewerPreparationStatus");
     status_->setTextFormat(Qt::PlainText);
@@ -292,6 +297,7 @@ void QtPluginViewerSurface::Close()
     lastSearch_.clear(); clipboardToken_.clear();
     timer_->stop(); ready_ = false; preparedSequence_ = 0;
     preparationElapsed_.invalidate(); progress_->hide(); preparationDetail_->clear();
+    preparationImage_->clear(); preparationImage_->hide();
     if (anchor_)
     {
         static_cast<WlxAnchor*>(anchor_.data())->closeRequested_ = {};
@@ -343,6 +349,7 @@ ViewerSnapshot QtPluginViewerSurface::Snapshot() const
 }
 void QtPluginViewerSurface::beginPreparation(const QString& Name)
 {
+    preparationImage_->clear(); preparationImage_->hide();
     status_->setText(tr("파일을 준비하는 중…\n%1").arg(Name));
     progress_->hide();
     progress_->setRange(0, 0);
@@ -460,6 +467,15 @@ void QtPluginViewerSurface::poll()
             }
             auto Sent = session_->SendDocument(Reply);
             if (!Sent.HasValue()) clipboardToken_.clear();
+        }
+    }
+    if (!ready_ && Details.documentChannel_ && Details.commandSequence_ >= preparedSequence_
+        && preparationImage_->isHidden()) {
+        const auto Image = hc::document::DecodeLoadingImageFrame(Details.documentState_["loadingImage"].toObject());
+        if (!Image.isNull()) {
+            preparationImage_->setPixmap(QPixmap::fromImage(Image));
+            preparationImage_->show();
+            hc::document::ImageTraceSpan FirstImage("viewer.first-image-preview");
         }
     }
     if (!ready_ && Details.documentChannel_ && !Details.child_.isEmpty()) {

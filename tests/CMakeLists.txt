@@ -1284,7 +1284,7 @@ add_test(NAME hc.document.chrome COMMAND hc_document_chrome_tests -o "${CMAKE_BI
 set_tests_properties(hc.document.chrome PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
 find_package(Qt6 6.12.0 REQUIRED COMPONENTS ZlibPrivate)
 qt_add_executable(hc_image_reading_tests document/tstImageReading.cpp)
-target_link_libraries(hc_image_reading_tests PRIVATE Qt6::ZlibPrivate hc_image_archive_broker hc_document_widgets Qt6::Test Qt6::Concurrent Qt6::GuiPrivate)
+target_link_libraries(hc_image_reading_tests PRIVATE Qt6::ZlibPrivate hc_image_archive_broker hc_document_widgets Qt6::Test Qt6::Concurrent Qt6::GuiPrivate jxl)
 target_compile_options(hc_image_reading_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 target_compile_definitions(hc_image_reading_tests PRIVATE HC_IMAGE_CODEC_SOURCES="${HC_IMAGE_CODEC_ROOT}/sources")
 add_dependencies(hc_image_reading_tests hc-plugin-host-x64 hc_sevenzip_package)

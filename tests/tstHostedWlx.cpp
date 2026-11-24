@@ -31,6 +31,7 @@
 #include <cstring>
 #include <thread>
 #include <QVBoxLayout>
+#include <QLabel>
 #include <QDateTime>
 #include <QSet>
 #include <oleacc.h>
@@ -369,12 +370,27 @@ private slots:
         Session->Close(); QTRY_VERIFY_WITH_TIMEOUT(Service.IsIdle(), 4000);
         QVERIFY(Leases(Directory.path()).isEmpty());
     }
+    void builtinImageDirectInputAndPresentation_data()
+    {
+        QTest::addColumn<QString>("Extension");
+        QTest::addColumn<bool>("QuickPreview");
+        QTest::newRow("png") << QStringLiteral("png") << false;
+        QTest::newRow("jp2-viewer") << QStringLiteral("jp2") << false;
+        QTest::newRow("jp2-quick-preview") << QStringLiteral("jp2") << true;
+    }
     void builtinImageDirectInputAndPresentation()
     {
+        QFETCH(QString, Extension);
+        QFETCH(bool, QuickPreview);
         const auto Package=QCoreApplication::applicationDirPath()+"/Addons/WLX/HyperViewer/hyperviewer.json";
         if(!QFileInfo::exists(Package))QSKIP("Build hc_hyperviewer_package for the built-in image integration test");
         auto Inspected=Worker([&]{return InspectManifestFile(Package);});QVERIFY(Inspected.HasValue());
-        QTemporaryDir Root;const auto Path=Root.filePath("direct.png");QImage Image(2400,1800,QImage::Format_RGB32);Image.fill(Qt::cyan);QVERIFY(Image.save(Path));
+        const bool Scaled = Extension == "jp2";
+        QTemporaryDir Root;
+        const auto Path = Root.filePath("direct." + Extension);
+        QImage Image(Scaled ? QSize(4097, 3073) : QSize(2400, 1800), QImage::Format_RGB32);
+        Image.fill(Qt::cyan);
+        QVERIFY(Image.save(Path, nullptr, 100));
         auto Provider=MakeNativeReadProvider(LocatorKind::Local);
         auto Entry=Worker([&]{return Provider->Resolve({LocatorKind::Local,Path.toUtf8().toStdString()},{}).get();});QVERIFY(Entry.HasValue());
         auto Source=std::make_shared<ProviderContentSource>(Provider,Entry.Value());
@@ -383,10 +399,16 @@ private slots:
         auto* Surface=new QtPluginViewerSurface(&Controller,&Main);Layout->addWidget(Surface);Main.show();
         const auto Drain=qScopeGuard([&]{Surface->Close();while(!Controller.IsIdle())QTest::qWait(10);});
         PluginViewerOptions Options;Options.executable_=host_;Options.manifestPath_=Package;Options.binaryPath_=Inspected.Value().binaryPath_;
+        if (QuickPreview) Options.purpose_ = hc::viewer::ViewerPurpose::QuickPreview;
         Options.approval_={Inspected.Value().manifest_,true,false,Inspected.Value().manifest_.permissions_};Options.defaultIniPath_=Root.filePath("plugin.ini");
         Surface->Open(Options,Source);
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() || Surface->Snapshot().status_==hc::viewer::ViewerStatus::Failed,20000);
         QVERIFY2(Surface->IsReady(),Surface->Snapshot().error_?Surface->Snapshot().error_->code_.c_str():"image not presented");
+        if (Scaled) {
+            const auto* Preview = Surface->findChild<QLabel*>("viewerPreparationImage");
+            QVERIFY(Preview && !Preview->pixmap().isNull());
+            QCOMPARE(Preview->pixmap().toImage().pixelColor(90, 60), QColor(Qt::cyan));
+        }
         QCOMPARE(Copies.load(),0);QVERIFY(Leases(Root.path()).isEmpty());
         const auto Documents=Surface->Details().documentState_["documents"].toArray();QCOMPARE(Documents.size(),1);
         QVERIFY(Documents[0].toObject()["imagePresentationReady"].toBool());

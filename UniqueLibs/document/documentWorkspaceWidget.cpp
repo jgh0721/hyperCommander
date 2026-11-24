@@ -9,6 +9,7 @@
 #include "documentFocusRestore.hpp"
 #include "UniqueLibs/document/sqlite/sqliteFormat.hpp"
 #include "documentProgressOverlay.hpp"
+#include "loadingImageFrame.hpp"
 #include "recentDocuments.hpp"
 #include "recentDocumentsDialog.hpp"
 #include "documentStartPage.hpp"
@@ -336,7 +337,7 @@ namespace hc::document
         std::optional<RecoverySnapshot> checkpointReceipt_;
         std::optional<TextRecoveryState> cleanRestoreState_;
         bool hotExitRestore_ = false;
-        QJsonObject preparation_;
+        QJsonObject preparation_, loadingImage_;
         QByteArray pendingBytes_;
         bool Dirty() const { return session_->Snapshot().dirty_; }
         std::uint64_t Revision() const { return session_->Snapshot().revision_; }
@@ -1933,6 +1934,7 @@ namespace hc::document
         auto Started = Tab->session_->BeginOpen(Discard); if (!Started.HasValue()) { Tab->error_ = QString::fromStdString(Started.Failure().code_); update(); return; }
         Tab->cancellation_->request_stop(); Tab->cancellation_ = std::make_shared<std::stop_source>();
         Tab->loading_ = true; Tab->pane_->SetReadOnly(true);Tab->pane_->ShowLoadingPreview({}); Tab->error_.clear();
+        Tab->loadingImage_ = {};
         const auto Generation = Started.Value(); auto Cancellation = Tab->cancellation_; const auto Path = Tab->path_;
         // A hosted viewer's first open is shown by the HyperCommander surface; only later reads use the overlay.
         if (!hosted_ || Tab->everReady_) {
@@ -1950,7 +1952,10 @@ namespace hc::document
         connect(PreviewTimer,&QTimer::timeout,this,[this,Tab,Generation,Cancellation,Progress]{
             if(Tab->closed_ || !Tab->loading_ || Cancellation->stop_requested() || Generation!=Tab->session_->Snapshot().generation_)return;
             QImage Image;QString Text;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;Text=Progress->text_;Tab->preparation_=Progress->preparation_;}
-            if(!Image.isNull())Tab->pane_->ShowLoadingPreview(Image);
+            if (!Image.isNull()) {
+                Tab->pane_->ShowLoadingPreview(Image);
+                if (hosted_ && Tab->loadingImage_.isEmpty()) Tab->loadingImage_ = EncodeLoadingImageFrame(Image);
+            }
             else if(!Text.isEmpty())Tab->pane_->ShowTextLoadingPreview(Text);
             if(Tab->progress_.kind_==DocumentProgress::Kind::Read) {
                 const auto Name=documentName(*Tab);const auto& State=Tab->preparation_;
@@ -1969,6 +1974,7 @@ namespace hc::document
             if(Result.HasValue()&&Result.Value().viewId_=="image")DeleteCompletedImageWork(Watcher);else Watcher->deleteLater();
             if (Tab->closed_ || Generation != Tab->session_->Snapshot().generation_) return;
             Tab->loading_ = false;Tab->pane_->ShowLoadingPreview({});
+            Tab->loadingImage_ = {};
             if(!Result.HasValue())finishProgress(Tab,false,Result.Failure().category_==storage::ErrorCategory::Cancelled?QString():QString::fromStdString(Result.Failure().code_));
             if (!Result.HasValue()) {
                 if(Result.Failure().category_!=storage::ErrorCategory::Cancelled){
@@ -2477,8 +2483,10 @@ namespace hc::document
                 {"revision", QString::number(Tab->pending_->revision_)}, {"byteLength", QString::number(Tab->pendingBytes_.size())},
                 {"sha256", QString::fromLatin1(Tab->pendingHash_)}});
         }
+        const auto Active = active();
         return {{"protocolVersion", int(HostVersion)}, {"workspaceId", workspaceId_}, {"documents", Tabs}, {"pendingSaves", Pending},
-            {"clipboard", clipboardRequest_}, {"editRequest",editRequest_}, {"recoveryList", recoveryList_}, {"activeDocumentId", active() ? active()->id_ : QString{}}, {"idle", IsIdle()},
+            {"clipboard", clipboardRequest_}, {"editRequest",editRequest_}, {"recoveryList", recoveryList_}, {"activeDocumentId", Active ? Active->id_ : QString{}}, {"idle", IsIdle()},
+            {"loadingImage", Active && Active->loading_ && !Active->closeRequested_ ? Active->loadingImage_ : QJsonObject{}},
             {"memoryPrivateBytes", QString::number(Memory.PrivateUsage)}, {"memoryPeakWorkingSetBytes", QString::number(Memory.PeakWorkingSetSize)}, {"memoryPeakPrivateBytes", QString::number(Memory.PeakPagefileUsage)},
             {"hotExitClosing", hotExitClosing_}, {"hotExitEnabled", hotExitEnabled()}, {"shellError", shellError_}, {"recoveryRoot", recoveryRoot_}, {"dpr", devicePixelRatioF()}, {"tabbed", tabbed_}, {"chrome", chrome_->Settings()},
             {"closeViewerOnEscape", closeViewerOnEscape_}, {"closeRequested", viewerCloseRequested_}, {"workspaceRoot", workspaceRoot_}};
