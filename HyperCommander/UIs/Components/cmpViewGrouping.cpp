@@ -260,7 +260,7 @@ bool CGridView::configureGrouping()
         if (Index.isValid()) view_->modelController()->setIndexPinnedPosition(Index, Active ? Qtitan::AtBeginning : Qtitan::AtNone);
         break;
     }
-    if (Model) Model->SetGroupingLevels(Effective);
+    if (Model) Model->SetGroupingLevels(Effective, publishingDirectoryColumns_);
     const auto Options = Profile.grouping_ && hc::columns::ValidateGrouping(Profile).isEmpty() ? *Profile.grouping_ : hc::columns::ProfileGrouping{};
     view_->options().setColumnHidingOnGroupingEnabled(hideGroupedColumn_);
     view_->options().setGroupsHeader(Options.groupsHeader_);

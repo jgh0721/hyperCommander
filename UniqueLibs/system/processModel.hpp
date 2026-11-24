@@ -40,7 +40,8 @@ struct ProcessNode
     int                       newCycles = 0, exitCycles = 0;
     bool                      exiting = false;
     bool                      pseudo = false;          // 인터럽트 행
-    bool                      dirty  = false;          // 이번 표본에서 보이는 값이 바뀌었다
+    quint32                   changedColumns = 0;
+    bool                      styleChanged = false;
     QVector<float>            cpuHistory, privateHistory, ioHistory;
 };
 

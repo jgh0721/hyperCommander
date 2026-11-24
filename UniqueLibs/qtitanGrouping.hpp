@@ -58,8 +58,8 @@ namespace hc::columns
                     // colors (zone, version, plugin values) do not, and are not re-counted.
                     connections_.append(connect(model_, &QAbstractItemModel::dataChanged, this,
                         [this](const QModelIndex&, const QModelIndex&, const QList<int>& Roles) {
-                            if (Roles.isEmpty() || Roles.contains(GroupKeyRole) || Roles.contains(GroupSizeRole)
-                                || Roles.contains(GroupLatestRole)) schedule(ValueDelayMs);
+                            if (Roles.isEmpty() || Roles.contains(GroupKeyRole) || (options_.sizeTotal_ && Roles.contains(GroupSizeRole))
+                                || (options_.latest_ && Roles.contains(GroupLatestRole))) schedule(ValueDelayMs);
                         }));
                 }
             }
@@ -81,10 +81,12 @@ namespace hc::columns
             }
             deferred_.invalidate(); structural_ = false;
             summaries_.clear();
-            if (model_ && !columns_.isEmpty()) for (int Row = 0; Row < model_->rowCount(); ++Row) {
+            if (model_ && !columns_.isEmpty() && (options_.count_ || options_.sizeTotal_ || options_.latest_))
+            for (int Row = 0; Row < model_->rowCount(); ++Row) {
                 const auto Index = model_->index(Row, 0);
                 if (!Index.data(GroupEntryRole).toBool()) continue;
-                const auto Size = Index.data(GroupSizeRole); const auto Date = Index.data(GroupLatestRole).toDateTime();
+                const auto Size = options_.sizeTotal_ ? Index.data(GroupSizeRole) : QVariant{};
+                const auto Date = options_.latest_ ? Index.data(GroupLatestRole).toDateTime() : QDateTime{};
                 QStringList Parts;
                 for (const int Column : columns_) {
                     Parts.append(model_->index(Row, Column).data(GroupKeyRole).toString());
@@ -115,7 +117,8 @@ namespace hc::columns
     {
         Column->dataBinding()->setGroupingRoles(GroupKeyRole, GroupOrderRole, GroupTextRole);
         Column->setGroupIndex(Level);
+        // Date groups use numeric ranks and canonical ASCII keys, including for adjacent-record equality.
         View->modelController()->setGroupOrder(Column->dataBinding(), Level,
-            State.order_ == Qt::AscendingOrder ? Qtitan::SortAscending : Qtitan::SortDescending, false, true);
+            State.order_ == Qt::AscendingOrder ? Qtitan::SortAscending : Qtitan::SortDescending, false, State.mode_ == "value");
     }
 }

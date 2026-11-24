@@ -431,6 +431,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnProfileGroupingUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnRealDownloadsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "downloadsGroupingInputUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "folderSizeIndexedInputUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "downloadsBackgroundRefreshFocusUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "historyListingReuseUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "remoteDirectoryChangesUi"
@@ -6834,17 +6835,30 @@ private slots:
         QCOMPARE(IdleRefreshes, 0);
         QCOMPARE(FolderOnlyJobs, quint64(0)); // the parent holds only a folder: no query at all
     }
+    void systemViewRefreshInputUi_data()
+    {
+        QTest::addColumn<int>("Kind");
+        QTest::addColumn<bool>("NumericSort");
+        QTest::newRow("process-tree") << int(CSystemView::Kind::Processes) << false;
+        QTest::newRow("process-cpu") << int(CSystemView::Kind::Processes) << true;
+        QTest::newRow("service-list") << int(CSystemView::Kind::Services) << false;
+    }
     void systemViewRefreshInputUi()
     {
-        // The process view refreshes every second. Each refresh relayouts the Qtitan rows under a
-        // steady cursor; real keyboard input after those refreshes must still move the cursor.
+        QFETCH(int, Kind);
+        QFETCH(bool, NumericSort);
         auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel"); QVERIFY(Panel);
-        auto* System = Panel->ShowSystemView(int(CSystemView::Kind::Processes)); QVERIFY(System);
+        auto* System = Panel->ShowSystemView(Kind); QVERIFY(System);
         const auto Hide = qScopeGuard([Panel] { Panel->HideSystemView(); });
         auto* Widget = System->findChild<Qtitan::TreeGrid*>("hc.system.grid"); QVERIFY(Widget);
         auto* View = Widget->view<Qtitan::GridTreeView>(); QVERIFY(View);
         auto* Control = dynamic_cast<Qtitan::GraphicControl*>(Widget->viewport()); QVERIFY(Control);
         QTRY_VERIFY_WITH_TIMEOUT(View->getRowCount() > 8, 15000);
+        if (NumericSort) {
+            auto* Cpu = static_cast<Qtitan::GridTableColumn*>(View->getColumnByModelColumn(hc::sys::ProcessTreeModel::Cpu)); QVERIFY(Cpu);
+            Cpu->setSortOrder(Qtitan::SortDescending);
+            QTRY_VERIFY(System->AutoFlat());
+        }
         main_->raise(); main_->activateWindow();
         if (!ActivateTestWindow(reinterpret_cast<HWND>(main_->winId()))) QSKIP("Another window keeps the foreground");
         Widget->setFocus(Qt::OtherFocusReason); View->setFocusedRowIndex(0);
@@ -6855,17 +6869,23 @@ private slots:
             return Parts.join('|');
         };
         int Lost = 0;
+        qint64 MaxMove = 0;
         for (int Press = 0; Press < 4; ++Press) {
-            QTest::qWait(2200); // At least two sample refreshes under the unchanged cursor.
+            System->Refresh();
+            QTest::qWait(Press * 55);
             const auto Before = Identity();
             const bool Target = Control->focusedGP() != nullptr;
             INPUT Inputs[2]{}; Inputs[0].type = Inputs[1].type = INPUT_KEYBOARD; Inputs[0].ki.wVk = Inputs[1].ki.wVk = VK_DOWN;
             Inputs[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY; Inputs[1].ki.dwFlags = KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY;
+            QElapsedTimer Time; Time.start();
             QCOMPARE(SendInput(2, Inputs, sizeof(INPUT)), UINT(2));
-            const bool Moved = QTest::qWaitFor([&] { return Identity() != Before; }, 2000);
+            const bool Moved = QTest::qWaitFor([&] { return Identity() != Before; }, 1000);
+            MaxMove = qMax(MaxMove, Time.elapsed());
             if (!Moved) ++Lost;
             qInfo() << "system-view key" << Press << "focusedGP-before" << Target << "moved" << Moved;
+            QTest::qWait(700);
         }
+        qInfo() << "system refresh input" << QTest::currentDataTag() << "max-move-ms" << MaxMove;
         QCOMPARE(Lost, 0);
     }
     void systemViewCloseTabUi()
@@ -8186,7 +8206,7 @@ private slots:
         Panel->findChild<QTabWidget*>("tabWidget")->setCurrentIndex(OldIndex); QTRY_VERIFY(!Busy->isHidden());
         if (Outcome == "cancel") { Model->CancelNavigation(); QVERIFY(Busy->isHidden()); }
         Provider->release_.set_value(); Released = true;
-        QTRY_VERIFY(!Model->IsLoading()); QVERIFY(Busy->isHidden());
+        QTRY_VERIFY(!Model->IsLoading()); QTRY_VERIFY(Busy->isHidden());
         if (Outcome == "failure") {
             QVERIFY(Model->LastNavigationError()); QTRY_VERIFY(Panel->findChild<QMessageBox*>("hc.navigationError"));
             Panel->findChild<QMessageBox*>("hc.navigationError")->button(QMessageBox::Cancel)->click();
@@ -9771,6 +9791,33 @@ private slots:
                 else QTRY_COMPARE(View->BaseView()->focusedRowIndex(), 0);
             }
         }
+        if (qEnvironmentVariableIsSet("HC_INPUT_NATIVE_VM")) {
+            auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+            auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+            Panel->ChangeCurrentPath(Root, {}); QTRY_VERIFY(!Model->IsLoading());
+            Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading() && hc::ui::IsDriveList(Model->WorkspaceLocation()));
+            QString Target;
+            for (int Row = 0; Row < Model->rowCount(); ++Row) {
+                const auto Item = Model->GetFileInfo(Model->index(Row, 0));
+                if (Item && Item->storageEntry_ && hc::ui::DriveLetterSortKey(*Item->storageEntry_) == Letter.unicode() - 'A') {
+                    Target = hc::workspace::SelectionKey(*Item->storageEntry_); break;
+                }
+            }
+            QVERIFY(!Target.isEmpty());
+            QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(main_->winId())));
+            Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView(); View->RestoreSelection({}, Target);
+            QCOMPARE(View->CaptureFocus(), Target);
+            INPUT Keys[4]{};
+            for (auto& Key : Keys) Key.type = INPUT_KEYBOARD;
+            Keys[0].ki.wVk = Keys[2].ki.wVk = VK_RETURN;
+            Keys[1].ki.wVk = Keys[3].ki.wVk = VK_DOWN;
+            Keys[1].ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
+            Keys[2].ki.dwFlags = KEYEVENTF_KEYUP;
+            Keys[3].ki.dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP;
+            QCOMPARE(SendInput(4, Keys, sizeof(INPUT)), UINT(4));
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && QDir::fromNativeSeparators(Panel->CurrentPath()) == Root, 10000);
+            QTRY_VERIFY_WITH_TIMEOUT(!View->CaptureFocus().isEmpty() && View->BaseView()->focusedRowIndex() > 0, 1000);
+        }
     }
 
     void driveListOrderUi()
@@ -10464,6 +10511,97 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(Item("alpha")->directorySize_.has_value() && Item("empty")->directorySize_.has_value() && Model->PendingDirectorySizes() == 0, 10000);
         QCOMPARE(*Item("alpha")->directorySize_, 7u); QCOMPARE(*Item("empty")->directorySize_, 0u); QCOMPARE(Model->GetTotalSize(), 7u);
     }
+    void folderSizeIndexedInputUi()
+    {
+        if (!qEnvironmentVariableIsSet("HC_EVERYTHING_SIZE_INPUT_UI")) QSKIP("Requires real Everything in the VM");
+        using namespace hc::settings;
+        using namespace hc::columns;
+        constexpr int Folders = 512, Files = 10000, Payload = 16384;
+        const auto Downloads = hc::shell::ResolveKnownFolderPath(QUuid("{374DE290-123F-4565-9164-39C4925E467B}"));
+        QVERIFY(!Downloads.isEmpty());
+        QTemporaryDir Fixture(QDir(Downloads).filePath("hc-folder-size-input-XXXXXX")); QVERIFY(Fixture.isValid());
+        const QDir Directory(Fixture.path());
+        for (int At = 0; At < Folders; ++At) {
+            const auto Name = QString("folder-%1").arg(At, 4, 10, QChar('0'));
+            QVERIFY(Directory.mkdir(Name));
+            QFile File(Directory.filePath(Name + "/payload.bin")); QVERIFY(File.open(QIODevice::WriteOnly));
+            QCOMPARE(File.write(QByteArray(Payload, 'x')), Payload);
+        }
+        for (int At = 0; At < Files; ++At) {
+            QFile File(Directory.filePath(QString("file-%1.txt").arg(At, 6, 10, QChar('0'))));
+            QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("x"), 1);
+            if (At % 3) QVERIFY(File.setFileTime(QDateTime::currentDateTimeUtc().addDays(-1 - At % 35), QFileDevice::FileModificationTime));
+        }
+        const auto Indexed = [&] {
+            QProcess Helper; Helper.start(QCoreApplication::applicationDirPath() + "/hc-search-index.exe", {"--folder-sizes", Fixture.path()});
+            if (!Helper.waitForFinished(5000) || Helper.exitCode()) return false;
+            const auto Sizes = QJsonDocument::fromJson(Helper.readAllStandardOutput()).object()["sizes"].toArray();
+            return Sizes.size() == Folders && std::all_of(Sizes.begin(), Sizes.end(), [](const auto& Row) {
+                return Row.toObject()["bytes"].toString().toInt() == Payload;
+            });
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(Indexed(), 15000);
+        auto& Settings = AppSettings(); const auto Saved = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.Replace(Saved); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QJsonObject Columns; QVERIFY(MigrateDownloadsColumnSet(Columns, Downloads)); QVERIFY(Settings.Put(Section::Columns, Columns));
+        auto Options = Settings.Read(Section::Options).toObject();
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel"); QVERIFY(Panel);
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        auto* Model = qobject_cast<CFSModel*>(View->BaseModel()); QVERIFY(Model);
+        auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
+        qint64 WorstGap = 0;
+        for (const auto [Automatic, Calculate] : {std::pair{false, true}, std::pair{true, true}, std::pair{true, false}}) {
+            Options["folderSizeMode"] = Calculate ? "everything" : "manual";
+            Options["folderSizeUseEverything"] = true;
+            QVERIFY(Settings.Put(Section::Options, Options)); QVERIFY(Settings.Commit());
+            View->SetAutomaticColumns(false); QVERIFY(View->ApplyColumnProfile(DefaultProfile()));
+            Panel->ChangeCurrentPath(qEnvironmentVariable("HC_UI_LOCAL_ROOT"), {});
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+            View->SetAutomaticColumns(Automatic);
+            Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+            QElapsedTimer Clock; Clock.start();
+            qint64 Published = -1, LastSize = -1, LastBeat = 0, MaxGap = 0;
+            int Pending = 0, Batches = 0, Presses = 0;
+            QTimer Input; Input.setInterval(38);
+            connect(&Input, &QTimer::timeout, this, [&] {
+                QKeyEvent Event(QEvent::KeyPress, (Presses++ % 2) ? Qt::Key_Up : Qt::Key_Down, Qt::NoModifier);
+                QApplication::sendEvent(Grid->viewport(), &Event);
+            });
+            QTimer Beat; Beat.setTimerType(Qt::PreciseTimer); Beat.setInterval(5);
+            connect(&Beat, &QTimer::timeout, this, [&] {
+                const auto Now = Clock.elapsed(); MaxGap = qMax(MaxGap, Now - LastBeat); LastBeat = Now;
+            });
+            const auto PublishedSignal = connect(Model, &CFsModelT::sigRefreshCompleted, this, [&] {
+                if (Model->rowCount() == Folders + Files + 1) { Published = Clock.elapsed(); Pending = Model->PendingDirectorySizes(); }
+            });
+            const auto SizeSignal = connect(Model, &CFSModel::DirectorySizesChanged, this, [&] { LastSize = Clock.elapsed(); ++Batches; });
+            const auto Disconnect = qScopeGuard([&] { disconnect(PublishedSignal); disconnect(SizeSignal); });
+            Input.start(); Beat.start();
+            Panel->ChangeCurrentPath(Fixture.path(), {});
+            QTRY_VERIFY_WITH_TIMEOUT(Published >= 0 && !Model->IsLoading(), 15000);
+            if (Calculate) {
+                QTRY_VERIFY_WITH_TIMEOUT(Model->PendingDirectorySizes() == 0 && LastSize >= Published, 12000);
+            } else {
+                QTest::qWait(100);
+                QCOMPARE(Model->PendingDirectorySizes(), 0);
+                QCOMPARE(LastSize, -1);
+            }
+            Input.stop(); Beat.stop();
+            QCOMPARE(Pending, Calculate ? Folders : 0);
+            QCOMPARE(View->ColumnProfile().id_, Automatic ? DownloadsProfileId : DefaultProfile().id_);
+            QCOMPARE(View->GroupingActive(), Automatic);
+            QCOMPARE(Model->GetTotalSize(), quint64(Files + (Calculate ? Folders * Payload : 0)));
+            QVERIFY(Presses > 1);
+            qInfo() << "Everything folder input" << (Automatic ? "downloads" : "default")
+                    << (Calculate ? "auto-size" : "manual-size")
+                    << "listing-ms" << Published << "sizes-after-list-ms" << (Calculate ? LastSize - Published : -1)
+                    << "max-ui-gap-ms" << MaxGap << "size-batches" << Batches;
+            WorstGap = qMax(WorstGap, MaxGap);
+            if (Calculate) QVERIFY2(LastSize - Published < 4000, "Ready batches waited repeatedly for the keyboard idle interval");
+        }
+        QVERIFY2(WorstGap <= 300, "The file listing blocked event processing for more than 300 ms");
+    }
+
     void folderSizesUi()
     {
         using namespace hc::settings;
@@ -10489,16 +10627,35 @@ private slots:
         const auto IndexFor = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
         const auto Item = [&](const QString& Name) { return Model->GetFileInfo(IndexFor(Name)); };
         const auto Focus = [&](const QString& Name = "alpha") {
-            View->RestoreSelection({}, hc::workspace::SelectionKey(*Item(Name)->storageEntry_));
-            main_->activateWindow(); SetForegroundWindow(reinterpret_cast<HWND>(main_->winId()));
-            Panel->sig_NotifyPanelActivated(); Grid->setFocus(); QCoreApplication::processEvents();
+            QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(main_->winId())));
+            Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+            QCoreApplication::processEvents();
+            const auto Key = hc::workspace::SelectionKey(*Item(Name)->storageEntry_);
+            View->RestoreSelection({}, Key);
+            QTRY_COMPARE(View->CaptureFocus(), Key);
+        };
+        const auto MarkFolder = [&](const QString& Name = "alpha") {
+            Focus(Name);
+            bool Selected = false;
+            const auto Marked = View->SelectRowOnCurrentTab(View->BaseView()->focusedRow().modelIndex(0), false, Selected);
+            return Selected && Marked == Item(Name);
         };
         QVERIFY(!Item("alpha")->directorySize_); QCOMPARE(Model->PendingDirectorySizes(), 0);
-        Focus(); QTest::keyClick(Grid, Qt::Key_Space);
-        QTRY_VERIFY(View->CaptureSelection().contains(hc::workspace::SelectionKey(*Item("alpha")->storageEntry_)));
+        QVERIFY(MarkFolder());
+        QVERIFY(View->CaptureSelection().contains(hc::workspace::SelectionKey(*Item("alpha")->storageEntry_)));
         QCOMPARE(Model->PendingDirectorySizes(), 0); QVERIFY(!Item("alpha")->directorySize_);
         Options["folderSizeOnSpace"] = true; QVERIFY(Settings.Put(Section::Options, Options));
-        Focus(); QTest::keyClick(Grid, Qt::Key_Space);
+        const auto AlphaRow = IndexFor("alpha").row();
+        QSignalSpy Indicators(Model, &QAbstractItemModel::dataChanged);
+        QVERIFY(MarkFolder());
+        bool NotifiedAlpha = false;
+        for (const auto& Signal : Indicators) {
+            if (Signal[2].value<QList<int>>() != QList<int>{Qt::DisplayRole}) continue;
+            QCOMPARE(Signal[0].toModelIndex().row(), AlphaRow);
+            QCOMPARE(Signal[1].toModelIndex().row(), AlphaRow);
+            NotifiedAlpha = true;
+        }
+        QVERIFY(NotifiedAlpha);
         QTRY_VERIFY_WITH_TIMEOUT(Item("alpha")->directorySize_.has_value(), 10000); QCOMPARE(*Item("alpha")->directorySize_, 8u);
         QVERIFY(View->CaptureSelection().contains(hc::workspace::SelectionKey(*Item("alpha")->storageEntry_)));
         QTRY_VERIFY2(Panel->findChild<QLabel*>("lblStatus")->text().contains("8 bytes / 8 bytes"), qPrintable(Panel->findChild<QLabel*>("lblStatus")->text()));
@@ -10508,9 +10665,9 @@ private slots:
         // Space marks reuse a measured value, including a measured zero. They
         // must neither clear totals nor publish a new calculation result.
         for (const auto& Name : {QString("alpha"), QString("empty")}) {
-            Focus(Name); const auto Bytes = *Item(Name)->directorySize_; const auto Total = Model->GetTotalSize();
+            const auto Bytes = *Item(Name)->directorySize_; const auto Total = Model->GetTotalSize();
             QSignalSpy Recalculated(Model, &CFSModel::DirectorySizesChanged);
-            QTest::keyClick(Grid, Qt::Key_Space);
+            QVERIFY(MarkFolder(Name));
             QVERIFY(View->CaptureSelection().contains(hc::workspace::SelectionKey(*Item(Name)->storageEntry_)));
             QCOMPARE(Model->PendingDirectorySizes(), 0); QVERIFY(Item(Name)->directorySize_.has_value());
             QCOMPARE(*Item(Name)->directorySize_, Bytes); QCOMPARE(Model->GetTotalSize(), Total);

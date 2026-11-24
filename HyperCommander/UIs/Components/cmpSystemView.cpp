@@ -9,6 +9,7 @@
 /// 내부 라이브러리
 #include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/commandUiBridge.hpp"
+#include "UniqueLibs/inputGate.hpp"
 #include "UniqueLibs/permissionService.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/system/systemCommands.hpp"
@@ -276,6 +277,8 @@ CSystemView::CSystemView( Kind Value, QWidget* Parent )
         if( auto* B = Bridge() ) B->ExecuteCommand( kind_ == Kind::Processes ? "hc.process.properties" : "hc.service.properties" );
     } );
 
+    refreshApplyTimer_.setInterval( 16 );
+    connect( &refreshApplyTimer_, &QTimer::timeout, this, &CSystemView::applyRefresh );
     if( kind_ == Kind::Processes )
     {
         collector_ = std::make_shared<hc::system::ProcessCollector>();
@@ -330,6 +333,7 @@ void CSystemView::CloseView()
 {
     timer_.stop();
     servicesTimer_.stop();
+    clearPendingRefresh();
     if( monitor_ ) monitor_->Stop();
 }
 
@@ -529,6 +533,7 @@ void CSystemView::SetShown( bool Shown )
     if( shown_ == Shown )
         return;
     shown_ = Shown;
+    if( !Shown && settings_.pauseWhenHidden ) clearPendingRefresh();
     if( kind_ == Kind::Services && monitor_ )
     {
         if( !Shown && settings_.pauseWhenHidden ) monitor_->Stop();
@@ -560,6 +565,31 @@ void CSystemView::ApplySettings()
     updateBar();
 }
 
+void CSystemView::queueRefresh( std::function<void()> Apply )
+{
+    // The service monitor and process collector return full snapshots. During
+    // keyboard input only the newest one needs to reach the grid.
+    pendingRefresh_ = std::move( Apply );
+    if( refreshApplyTimer_.isActive() ) return;
+    refreshWait_.start();
+    refreshApplyTimer_.start();
+}
+
+void CSystemView::applyRefresh()
+{
+    const bool RecentInput = lastInput_.isValid() && lastInput_.elapsed() < hc::ui::InputGate::DefaultQuietMs;
+    if( refreshWait_.elapsed() < 250 && ( RecentInput || hc::ui::InputGate::Busy() ) ) return;
+    refreshApplyTimer_.stop();
+    if( auto Apply = std::exchange( pendingRefresh_, {} ) ) Apply();
+}
+
+void CSystemView::clearPendingRefresh()
+{
+    ++refreshGeneration_;
+    refreshApplyTimer_.stop();
+    pendingRefresh_ = {};
+}
+
 void CSystemView::sample()
 {
     if( kind_ != Kind::Processes || sampling_ || paused_ || ( !shown_ && settings_.pauseWhenHidden ) || !collector_ )
@@ -574,21 +604,22 @@ void CSystemView::sample()
                            Collector->Sample( Value );
                            return Value;
                        },
-                       [this]( const hc::system::Snapshot& Value ) {
+                       [this, Generation = refreshGeneration_]( hc::system::Snapshot Value ) {
                            sampling_ = false;
-                           if( Value.processes.empty() )
-                               return;
-                           processes_->Apply( Value );
-                           if( !expandedOnce_ && processes_->ProcessCount() > 0 )
-                           {
-                               view_->expandAll();
-                               expandedOnce_ = true;
-                               if( view_->focusedRowIndex() < 0 && view_->getRowCount() > 0 )
-                                   view_->setFocusedRowIndex( 0 );
-                           }
-                           updateBar();
-                           updateNotice();
-                           emit sigSummaryChanged();
+                           if( Generation != refreshGeneration_ || Value.processes.empty() ) return;
+                           queueRefresh( [this, Value = std::move( Value )] {
+                               processes_->Apply( Value );
+                               if( !expandedOnce_ && processes_->ProcessCount() > 0 )
+                               {
+                                   view_->expandAll();
+                                   expandedOnce_ = true;
+                                   if( view_->focusedRowIndex() < 0 && view_->getRowCount() > 0 )
+                                       view_->setFocusedRowIndex( 0 );
+                               }
+                               updateBar();
+                               updateNotice();
+                               emit sigSummaryChanged();
+                           } );
                        } );
 }
 
@@ -632,6 +663,7 @@ void CSystemView::updateBar()
 
 void CSystemView::SetSearch( const QString& Text )
 {
+    lastInput_.start();
     if( processProxy_ )
     {
         processProxy_->SetText( Text );
@@ -802,17 +834,27 @@ void CSystemView::SetIncludeDrivers( bool Include )
 {
     includeDrivers_ = Include;
     if( drivers_ ) { QSignalBlocker Block( drivers_ ); drivers_->setChecked( Include ); }
-    if( monitor_ ) monitor_->SetIncludeDrivers( Include );
+    if( monitor_ )
+    {
+        refreshApplyTimer_.stop();
+        pendingRefresh_ = {};
+        monitor_->SetIncludeDrivers( Include );
+    }
     emit sigSummaryChanged();
 }
 
 void CSystemView::startMonitor()
 {
     // 감시 스레드의 알림은 GUI 스레드로 옮겨 적용한다. 보기가 사라졌으면 버린다.
+    clearPendingRefresh();
     const QPointer<CSystemView> Self( this );
-    monitor_->Start( includeDrivers_, [Self]( std::vector<hc::system::ServiceStatusInfo> List ) {
-        QMetaObject::invokeMethod( qApp, [Self, List = std::move( List )]() mutable {
-            if( Self && Self->services_ ) Self->services_->Apply( std::move( List ) );
+    monitor_->Start( includeDrivers_, [Self, Generation = refreshGeneration_]( std::vector<hc::system::ServiceStatusInfo> List ) {
+        QMetaObject::invokeMethod( qApp, [Self, Generation, List = std::move( List )]() mutable {
+            if( !Self || Generation != Self->refreshGeneration_ ) return;
+            Self->queueRefresh( [Self, List = std::move( List )]() mutable {
+                if( !Self->includeDrivers_ ) std::erase_if( List, []( const auto& Item ) { return Item.driver; } );
+                Self->services_->Apply( std::move( List ) );
+            } );
         }, Qt::QueuedConnection );
     } );
 }
@@ -820,6 +862,7 @@ void CSystemView::startMonitor()
 void CSystemView::TogglePause()
 {
     paused_ = !paused_;
+    if( paused_ ) clearPendingRefresh();
     if( !paused_ && collector_ )
     {
         resetPending_ = true;
@@ -1281,6 +1324,8 @@ bool CSystemView::handleKey( QKeyEvent* Event )
 
 bool CSystemView::eventFilter( QObject* Watched, QEvent* Event )
 {
+    if( Event->type() == QEvent::KeyPress || Event->type() == QEvent::MouseButtonPress || Event->type() == QEvent::Wheel )
+        lastInput_.start();
     if( Watched == grid_->viewport() && Event->type() == QEvent::Resize )
         fitTimer_.start();
     // Ctrl+클릭은 커서를 옮기며 그 행의 표시를 바꾼다(파일 목록과 같다).

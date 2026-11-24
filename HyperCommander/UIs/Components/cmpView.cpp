@@ -529,10 +529,17 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     selectionKeyTimer_.setSingleShot(true); selectionKeyTimer_.setInterval(10);
     connect(&selectionKeyTimer_, &QTimer::timeout, this, &CGridView::drainSelectionKeys);
     connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) {
-        if (State != Qt::ApplicationActive) finishSelectionInput();
+        if (State != Qt::ApplicationActive) {
+            pendingNavigationKey_ = 0;
+            finishSelectionInput();
+        }
     });
     connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* Focus) {
-        if (Focus && Focus != grid_ && !grid_->isAncestorOf(Focus)) finishSelectionInput();
+        if (Focus && Focus != grid_ && !grid_->isAncestorOf(Focus)) {
+            if (!thumbnails_ || (Focus != thumbnails_->listView() && !thumbnails_->listView()->isAncestorOf(Focus)))
+                pendingNavigationKey_ = 0;
+            finishSelectionInput();
+        }
     });
     columnAdapter_->SetViewportHandlers([this] { return CaptureScrollState(); }, [this](const auto& State) { RestoreScrollState(State); });
     recordPainter_ = new ProductRecordPainter(this); view_->setRecordPainter(recordPainter_);
@@ -1073,6 +1080,7 @@ void CGridView::captureListingReset(bool ChangingColumns)
 
 void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnView* Columns )
 {
+    pendingNavigationKey_ = 0;
     pendingSelectionKeys_.clear(); selectionHeldKey_ = 0;
     if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->SetSelectionInputActive(false);
     CancelRename();
@@ -1127,6 +1135,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     automaticRemoveScroll_ = connect(Source, &QAbstractItemModel::rowsAboutToBeRemoved, this, CaptureAutomaticScroll);
     disconnect(selectionRestore_);
     selectionRestore_ = connect(Source, &CFsModelT::sigRefreshCompleted, this, [this] {
+        if (pendingNavigationKey_) QTimer::singleShot(0, this, &CGridView::applyNavigationKey);
         if (!automaticScroll_.isEmpty()) RestoreScrollState(std::exchange(automaticScroll_, {}));
         const auto Path = model_->property("hc.snapshotLocation").toString();
         const bool ChangedDirectory = !resetPath_.isEmpty() && resetPath_ != Path;
@@ -1462,7 +1471,7 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
 
 void CGridView::SetPanelActive(bool Active)
 {
-    if (!Active) { resetRenameClicks(); finishSelectionInput(); }
+    if (!Active) { pendingNavigationKey_ = 0; resetRenameClicks(); finishSelectionInput(); }
     if (panelActive_ != Active) startupPaints_.clear();
     panelActive_ = Active;
     if (thumbnails_) thumbnails_->setPaneActive(Active);
@@ -2192,6 +2201,21 @@ void CGridView::drainSelectionKeys()
     selectionKeyTimer_.stop();
 }
 
+void CGridView::applyNavigationKey()
+{
+    const auto Key = std::exchange(pendingNavigationKey_, 0);
+    const auto* Native = qobject_cast<CFSModel*>(model_);
+    if (!Key || !panelActive_ || IsEditing() || !Native || Native->IsLoading() || Native->LastNavigationError()
+        || Native->HasPlaceholder() || Native->DirectoryGeneration() != navigationKeyGeneration_) return;
+
+    // Navigation completion has already positioned the cursor in the new list.
+    if (IsThumbnailMode()) {
+        QKeyEvent Event(QEvent::KeyPress, Key, Qt::NoModifier);
+        QApplication::sendEvent(thumbnails_->listView(), &Event);
+    } else if (Key == Qt::Key_Down) view_->navigateDown(Qt::NoModifier);
+    else view_->navigateUp(Qt::NoModifier);
+}
+
 void CGridView::finishSelectionInput()
 {
     selectionHeldKey_ = 0;
@@ -2734,6 +2758,16 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
     if (Event->type() == QEvent::KeyPress && FileSurface && !IsEditing()) {
         const auto* Key = static_cast<QKeyEvent*>(Event);
         const auto Modifiers = Key->modifiers() & ~Qt::KeypadModifier;
+        if (Modifiers == Qt::NoModifier && (Key->key() == Qt::Key_Up || Key->key() == Qt::Key_Down)) {
+            if (const auto* Native = qobject_cast<CFSModel*>(model_); Native && !Native->CanUseSnapshot()) {
+                // Repeats on the old snapshot coalesce into one move in the destination.
+                pendingNavigationKey_ = Key->key();
+                navigationKeyGeneration_ = Native->DirectoryGeneration();
+                Event->accept();
+                return true;
+            }
+            pendingNavigationKey_ = 0;
+        }
         const bool ControlBoundary = (Key->key() == Qt::Key_Home || Key->key() == Qt::Key_End)
             && Modifiers == (Qt::ShiftModifier | Qt::ControlModifier);
         const bool ShiftNavigation = ((Modifiers == Qt::ShiftModifier)
@@ -3550,14 +3584,27 @@ void CGridView::connectAutomaticColumns(CFSModel* Model)
                     auto Binding = View;
                     Binding.profile_.sorts_ = Model->ColumnSorts();
                     setColumnProfilePresentation(View.profile_);
-                    bindGridColumns(Binding);
-                    columnAdapter_->UseProfileWidths();
-                    columnAdapter_->Apply();
+                    {
+                        hc::startup::Span Bind("listing.columns.bind");
+                        bindGridColumns(Binding);
+                        columnAdapter_->UseProfileWidths();
+                        columnAdapter_->Apply();
+                    }
                     applyColumnProfileGrouping(Previous, View.profile_);
                     groupedSelection_.clear();
-                    const bool Grouped = configureGrouping();
-                    view_->endUpdate();
-                    if (Grouped) applyGroupExpansion();
+                    bool Grouped;
+                    {
+                        hc::startup::Span Group("listing.grouping.configure");
+                        Grouped = configureGrouping();
+                    }
+                    {
+                        hc::startup::Span Layout("listing.columns.layout");
+                        view_->endUpdate();
+                    }
+                    if (Grouped) {
+                        hc::startup::Span Expand("listing.grouping.expand");
+                        applyGroupExpansion();
+                    }
                     automaticColumnsSignature_ = Signature;
                     automaticColumnsStop_.request_stop();
                     ++automaticColumnsGeneration_;

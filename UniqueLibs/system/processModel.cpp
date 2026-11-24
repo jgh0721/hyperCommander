@@ -347,10 +347,18 @@ void ProcessTreeModel::Apply( const hc::system::Snapshot& Value )
             Node = Found->second.get();
             // 보이는 값이 바뀐 행만 알린다. 대부분의 프로세스는 한 표본 동안 그대로다.
             const auto& Old = Node->sample;
-            Node->dirty = Node->newCycles > 0 || std::abs( Node->cpu - Entry.cpu ) >= 0.05 || std::abs( Node->io - Entry.ioPerSec ) >= 1.0
-                          || Old.privateBytes != Entry.sample.privateBytes || Old.workingSet != Entry.sample.workingSet
-                          || Old.threadCount != Entry.sample.threadCount || Old.handleCount != Entry.sample.handleCount
-                          || Old.suspended != Entry.sample.suspended || Old.basePriority != Entry.sample.basePriority;
+            const auto Mark = [Node]( Column Key, bool Changed ) {
+                if( Changed ) Node->changedColumns |= quint32( 1 ) << Key;
+            };
+            Mark( Cpu, std::abs( Node->cpu - Entry.cpu ) >= 0.05 );
+            Mark( Io, std::abs( Node->io - Entry.ioPerSec ) >= 1.0 );
+            Mark( PrivateBytes, Old.privateBytes != Entry.sample.privateBytes );
+            Mark( WorkingSet, Old.workingSet != Entry.sample.workingSet );
+            Mark( Threads, Old.threadCount != Entry.sample.threadCount );
+            Mark( Handles, Old.handleCount != Entry.sample.handleCount );
+            Mark( Session, Old.sessionId != Entry.sample.sessionId );
+            Mark( Priority, !Node->priorityClass && Old.basePriority != Entry.sample.basePriority );
+            Node->styleChanged = Node->newCycles == 1 || Old.suspended != Entry.sample.suspended;
             if( Node->newCycles > 0 )
                 --Node->newCycles;
         }
@@ -375,7 +383,8 @@ void ProcessTreeModel::Apply( const hc::system::Snapshot& Value )
             continue;
         if( !Node->exiting )
         {
-            Node->dirty = true;
+            Node->changedColumns |= quint32( 1 ) << Cpu;
+            Node->styleChanged = true;
             Node->exiting = true;
             Node->exitCycles = settings_.highlightCycles;
             Node->cpu = -1.0;
@@ -406,8 +415,9 @@ void ProcessTreeModel::Apply( const hc::system::Snapshot& Value )
             interrupts_->row = -1;
             interrupts_->description = tr( "하드웨어 인터럽트·DPC" );
         }
-        interrupts_->dirty = true;
-        interrupts_->cpu = Value.baseline ? -1.0 : totals_.interruptCpu;
+        const double CpuValue = Value.baseline ? -1.0 : totals_.interruptCpu;
+        if( std::abs( interrupts_->cpu - CpuValue ) >= 0.05 ) interrupts_->changedColumns |= quint32( 1 ) << Cpu;
+        interrupts_->cpu = CpuValue;
         if( !Value.baseline )
             Push( interrupts_->cpuHistory, float( totals_.interruptCpu ) );
         if( !interrupts_->parent && byPid_.value( 0 ) )
@@ -433,20 +443,26 @@ void ProcessTreeModel::emitDirty( const ProcessNode* Parent )
     const auto& List = siblings( Parent );
     for( int First = 0; First < List.size(); )
     {
-        if( !List[First]->dirty )
-        {
-            ++First;
-            continue;
-        }
+        const auto Mask = List[First]->changedColumns;
+        if( !Mask ) { ++First; continue; }
         int Last = First;
-        while( Last + 1 < List.size() && List[Last + 1]->dirty )
-            ++Last;
-        emit dataChanged( createIndex( First, 0, List[First] ), createIndex( Last, ColumnCount - 1, List[Last] ) );
+        while( Last + 1 < List.size() && List[Last + 1]->changedColumns == Mask ) ++Last;
+        // Numeric samples do not invalidate the process name or unrelated sort keys.
+        for( int Col = 0; Col < ColumnCount; )
+        {
+            if( !( Mask & ( quint32( 1 ) << Col ) ) ) { ++Col; continue; }
+            const int Start = Col++;
+            while( Col < ColumnCount && ( Mask & ( quint32( 1 ) << Col ) ) ) ++Col;
+            emit dataChanged( createIndex( First, Start, List[First] ), createIndex( Last, Col - 1, List[Last] ), { Qt::DisplayRole, SortRole } );
+        }
         First = Last + 1;
     }
     for( auto* Child : List )
     {
-        Child->dirty = false;
+        Child->changedColumns = 0;
+        if( std::exchange( Child->styleChanged, false ) )
+            emit dataChanged( indexOfNode( Child, 0 ), indexOfNode( Child, ColumnCount - 1 ),
+                              { Qt::ForegroundRole, Qt::BackgroundRole, CategoryRole } );
         if( !Child->children.isEmpty() )
             emitDirty( Child );
     }

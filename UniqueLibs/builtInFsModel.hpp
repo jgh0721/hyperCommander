@@ -77,7 +77,7 @@ public:
     void SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts);
     const QVector<hc::columns::SortDefinition>& ColumnSorts() const { return columnSorts_; }
     void SetGrouping(const hc::columns::GroupingState& State);
-    void SetGroupingLevels(const QVector<hc::columns::GroupingState>& Levels);
+    void SetGroupingLevels(const QVector<hc::columns::GroupingState>& Levels, bool RebindingColumns = false);
     void RefreshGroupingDate();
     static constexpr int GroupKeyRole = hc::columns::GroupKeyRole;
     static constexpr int GroupOrderRole = hc::columns::GroupOrderRole;
@@ -440,11 +440,15 @@ private:
     QVector<int>                    nameSortRanks_, columnSortRanks_;
     hc::columns::GroupingState grouping_;
     QHash<QUuid, QString> groupingModes_;
+    mutable QHash<qint64, hc::columns::GroupValue> relativeDateGroups_;
+    hc::columns::GroupValue groupValue(const hc::columns::ColumnDefinition& Definition, const nsHC::TySpFileSource& Item) const;
     QDate groupingDate_ = QDate::currentDate();
     QTimeZone groupingZone_ = QTimeZone::systemTimeZone();
     QVector<hc::columns::SortDefinition> columnSorts_, completedSorts_, pageSorts_;
     // Sort rules of the last GridSortRole notification; with them unchanged only moved ranks are sent.
     QVector<hc::columns::SortDefinition> notifiedRankSorts_;
+    bool publishingProvider_ = false;
+    bool usesProjectedSortRanks() const;
     void refreshColumnSortRanks(int First = 0);
     QJsonObject                     displaySettings_;
     quint64                         iconGeneration_ = 0;
@@ -460,7 +464,9 @@ private:
     bool                            forceIconRefresh_ = false;
     QString                         forceIconLocation_;
     std::stop_source                directorySizeStop_;
-    QSet<QString>                   directorySizePending_;
+    QHash<QString, QPersistentModelIndex> directorySizePending_;
+    std::pair<QVector<int>, bool> directorySizePresentation() const;
+    void notifyDirectorySizeRows(QVector<int> Rows, const QVector<int>& Columns, const QList<int>& Roles);
     // Sizes carried over a refresh of the same folder: shown until re-measured, not "calculating".
     QSet<QString>                   directorySizeStale_;
     bool                            carryDirectorySizes_ = false;

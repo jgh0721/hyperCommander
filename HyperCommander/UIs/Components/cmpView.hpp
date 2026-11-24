@@ -240,6 +240,9 @@ private:
     void drainSelectionKeys();
     bool invertSelectionAlongNavigation(QKeyCombination Key);
     bool forwardingSelectionNavigation_ = false;
+    int pendingNavigationKey_ = 0;
+    quint64 navigationKeyGeneration_ = 0;
+    void applyNavigationKey();
     void finishSelectionInput();
     void syncSelectionInputActivity();
     QList<QKeyCombination> pendingSelectionKeys_;

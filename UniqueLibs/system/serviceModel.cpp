@@ -85,6 +85,7 @@ void ServiceListModel::Apply( std::vector<hc::system::ServiceStatusInfo> List )
         return;
     }
     emit sigBatchStarted();
+    bool Changed = false;
     QHash<QString, int> Incoming;
     for( int Index = 0; Index < int( List.size() ); ++Index )
         Incoming.insert( QString::fromStdWString( List[Index].name ).toLower(), Index );
@@ -93,6 +94,7 @@ void ServiceListModel::Apply( std::vector<hc::system::ServiceStatusInfo> List )
     {
         if( Incoming.contains( QString::fromStdWString( rows_[Row].status.name ).toLower() ) )
             continue;
+        Changed = true;
         beginRemoveRows( {}, Row, Row );
         rows_.removeAt( Row );
         endRemoveRows();
@@ -108,11 +110,26 @@ void ServiceListModel::Apply( std::vector<hc::system::ServiceStatusInfo> List )
         if( Row >= 0 )
         {
             auto& Current = rows_[Row].status;
-            const bool Changed = Current.state != Info.state || Current.pid != Info.pid || Current.win32ExitCode != Info.win32ExitCode
-                                 || Current.controlsAccepted != Info.controlsAccepted || Current.displayName != Info.displayName;
+            const bool NameChanged = Current.displayName != Info.displayName;
+            const bool StateChanged = Current.state != Info.state || Current.win32ExitCode != Info.win32ExitCode;
+            const bool PidChanged = Current.pid != Info.pid;
+            const bool TypeChanged = Current.type != Info.type;
+            const bool DriverChanged = Current.driver != Info.driver;
+            Changed |= NameChanged || StateChanged || PidChanged || TypeChanged || DriverChanged
+                || Current.controlsAccepted != Info.controlsAccepted || Current.serviceExitCode != Info.serviceExitCode;
             Current = std::move( Info );
-            if( Changed )
-                emit dataChanged( index( Row, 0 ), index( Row, ColumnCount - 1 ) );
+            if( NameChanged )
+                emit dataChanged( index( Row, DisplayName ), index( Row, DisplayName ), { Qt::DisplayRole, SortRole, SearchRole } );
+            if( StateChanged )
+                emit dataChanged( index( Row, State ), index( Row, State ), { Qt::DisplayRole, Qt::ToolTipRole, Qt::ForegroundRole, SortRole, StateRole, ProblemRole } );
+            if( PidChanged )
+                emit dataChanged( index( Row, Pid ), index( Row, Pid ), { Qt::DisplayRole, SortRole } );
+            if( TypeChanged )
+                emit dataChanged( index( Row, Type ), index( Row, Type ), { Qt::DisplayRole, SortRole } );
+            if( DriverChanged ) {
+                emit dataChanged( index( Row, Name ), index( Row, Name ), { Qt::DecorationRole } );
+                emit dataChanged( index( Row, Account ), index( Row, Account ), { Qt::DisplayRole, SortRole } );
+            }
             continue;
         }
         const int Insert = int( rows_.size() );
@@ -127,7 +144,7 @@ void ServiceListModel::Apply( std::vector<hc::system::ServiceStatusInfo> List )
     emit sigBatchFinished();
     if( !Added.isEmpty() )
         ReloadConfig( Added );
-    emit sigCountsChanged();
+    if( Changed || !Added.isEmpty() ) emit sigCountsChanged();
 }
 
 void ServiceListModel::ReloadMissingConfig()
@@ -195,6 +212,7 @@ void ServiceListModel::startConfig()
 
 void ServiceListModel::applyConfig( const QVector<QPair<QString, hc::system::ServiceConfig>>& Configs )
 {
+    bool Changed = false;
     emit sigBatchStarted();
     for( const auto& [Name, Config] : Configs )
     {
@@ -202,18 +220,27 @@ void ServiceListModel::applyConfig( const QVector<QPair<QString, hc::system::Ser
         if( Row < 0 )
             continue;
         auto& Item = rows_[Row];
+        const auto Account = QString::fromStdWString( Config.account );
+        const auto Description = QString::fromStdWString( Config.description );
+        const auto Image = QString::fromStdWString( Config.resolvedImage );
+        const auto Binary = QString::fromStdWString( Config.binaryPath );
+        if( Item.configLoaded && Item.start == Config.start && Item.trigger == Config.triggerStart
+            && Item.account == Account && Item.description == Description && Item.image == Image && Item.binaryPath == Binary ) continue;
+        Changed = true;
         Item.configLoaded = true;
         Item.start = Config.start;
         Item.trigger = Config.triggerStart;
-        Item.account = QString::fromStdWString( Config.account );
-        Item.description = QString::fromStdWString( Config.description );
-        Item.image = QString::fromStdWString( Config.resolvedImage );
-        Item.binaryPath = QString::fromStdWString( Config.binaryPath );
-        emit dataChanged( index( Row, 0 ), index( Row, ColumnCount - 1 ) );
+        Item.account = Account;
+        Item.description = Description;
+        Item.image = Image;
+        Item.binaryPath = Binary;
+        emit dataChanged( index( Row, State ), index( Row, ImagePath ), { Qt::DisplayRole, Qt::ToolTipRole, Qt::ForegroundRole, SortRole, SearchRole, StartTypeRole, ProblemRole } );
     }
     emit sigBatchFinished();
-    emit sigCountsChanged();
-    emit sigConfigLoaded();
+    if( Changed ) {
+        emit sigCountsChanged();
+        emit sigConfigLoaded();
+    }
 }
 
 QVariant ServiceListModel::headerData( int Section, Qt::Orientation Orientation, int Role ) const

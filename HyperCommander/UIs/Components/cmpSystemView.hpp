@@ -3,11 +3,13 @@
 // 패널 탭을 덮는 시스템 보기(프로세스 트리·서비스 목록)와 반대 패널 상세 보기.
 // 탭의 파일 보기는 숨긴 채 유지하고 이 보기가 페이지를 대신한다(빠른 보기와 같은 방식).
 
+#include <QElapsedTimer>
 #include <QJsonObject>
 #include <QPointer>
 #include <QTimer>
 #include <QWidget>
 
+#include <functional>
 #include <optional>
 
 #include "cmpView.hpp"
@@ -125,6 +127,9 @@ private:
     void applyCursorColors();
     void sample();
     void startMonitor();
+    void queueRefresh( std::function<void()> Apply );
+    void applyRefresh();
+    void clearPendingRefresh();
     void updateBar();
     void updateNotice();
     bool handleKey( QKeyEvent* Event );
@@ -143,6 +148,10 @@ private:
     std::unique_ptr<hc::system::ServiceMonitor>   monitor_;
     QTimer                             timer_;
     QTimer                             servicesTimer_;
+    QTimer                             refreshApplyTimer_;
+    QElapsedTimer                      refreshWait_, lastInput_;
+    std::function<void()>              pendingRefresh_;
+    quint64                            refreshGeneration_ = 0;
     bool                               sampling_ = false;
     // 수집기는 표본 작업자만 만진다. 기준점 초기화는 다음 표본을 시작할 때 GUI 스레드에서 한다.
     bool                               resetPending_ = false;

@@ -19,6 +19,7 @@
 #include <QPointer>
 #include <QThreadPool>
 #include <QScopeGuard>
+#include <QScopedValueRollback>
 #include <QPainter>
 #include <QStyle>
 #include "columnPluginFields.hpp"
@@ -249,6 +250,41 @@ void CFSModel::SetNowPlaying(const QString& Key, int State)
     }
 }
 
+hc::columns::GroupValue CFSModel::groupValue(const hc::columns::ColumnDefinition& Definition, const nsHC::TySpFileSource& Item) const
+{
+    using namespace hc::columns;
+    const auto& Field = Definition.fieldId_;
+    const auto Mode = groupingModes_.value(Definition.id_, QStringLiteral("value"));
+    GroupValue Value;
+    if (IsGroupingDate(Field)) {
+        // These dates are already in the published row, including for non-native providers.
+        // Group sort and group construction read them repeatedly without needing the row's path.
+        const bool Modified = Field == "file.modified";
+        const auto& Timestamp = Modified ? Item->Modified_ : Item->Created_;
+        if (Mode == "relativeDate" && Timestamp.isValid()) {
+            const auto* Entry = Item->storageEntry_ ? &*Item->storageEntry_ : nullptr;
+            const auto SnapshotTime = Entry ? (Modified ? Entry->modifiedUtcMs_ : Entry->createdUtcMs_) : 0;
+            const qint64 Epoch = SnapshotTime ? SnapshotTime : Timestamp.toMSecsSinceEpoch();
+            if (const auto Existing = relativeDateGroups_.constFind(Epoch); Existing != relativeDateGroups_.cend())
+                return Existing.value();
+            Value = MakeGroupValue(Field, Mode, CellValue::Ready(Timestamp), groupingDate_, groupingZone_);
+            // Each published timestamp feeds multiple grid roles. Keep repeated reads cheap and memory bounded.
+            if (relativeDateGroups_.size() < 32768) relativeDateGroups_.insert(Epoch, Value);
+            return Value;
+        }
+        const auto Cell = Timestamp.isValid() ? CellValue::Ready(Timestamp) : CellValue::Missing(ValueState::Empty);
+        return MakeGroupValue(Field, Mode, Cell, groupingDate_, groupingZone_);
+    }
+
+    Value = MakeGroupValue(Field, Mode, readField(Item, Field, false), groupingDate_, groupingZone_);
+    if (IsFlatListing() && Field == "file.relativePath" && Definition.template_.isEmpty()) {
+        const auto Folder = Value.order_.toString();
+        if (flatGroupLeaf_ && !Folder.isEmpty()) Value.text_ = Value.text_.mid(Value.text_.lastIndexOf('\\') + 1);
+        if (flatGroupRecent_) Value.order_ = -flatFolderLatest_.value(Folder);
+    }
+    return Value;
+}
+
 void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataSpan ) const
 {
     if( index.isValid() == false )
@@ -271,7 +307,7 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
     });
     if (GroupOnly) {
         const auto& Definition = columnView_.VecColumns[Col].definition_;
-        const auto Value = hc::columns::MakeGroupValue(Definition.fieldId_, groupingModes_.value(Definition.id_, "value"), readField(vecNode_[Row], Definition.fieldId_, false), groupingDate_, groupingZone_);
+        const auto Value = groupValue(Definition, vecNode_[Row]);
         for (auto& Role : roleDataSpan) Role.setData(Role.role() == GroupKeyRole ? QVariant(Value.key_)
             : Role.role() == GroupOrderRole ? Value.order_ : QVariant(Value.text_));
         return;
@@ -295,13 +331,7 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
             case hc::columns::GroupLatestRole: RoleWith.setData(readField(Item, "file.modified", false).Raw()); break;
             case GroupKeyRole: case GroupOrderRole: case GroupTextRole: {
                 const auto& Definition = columnView_.VecColumns[Col].definition_;
-                auto Value = hc::columns::MakeGroupValue(Definition.fieldId_, groupingModes_.value(Definition.id_, "value"), readField(Item, Definition.fieldId_, false), groupingDate_, groupingZone_);
-                // 평면 보기의 폴더별 그룹: 제목을 마지막 폴더 이름으로, 순서를 그 폴더의 최근 수정 먼저로 바꿀 수 있다.
-                if (IsFlatListing() && Definition.fieldId_ == "file.relativePath" && Definition.template_.isEmpty()) {
-                    const auto Folder = Value.order_.toString();
-                    if (flatGroupLeaf_ && !Folder.isEmpty()) Value.text_ = Value.text_.mid(Value.text_.lastIndexOf('\\') + 1);
-                    if (flatGroupRecent_) Value.order_ = -flatFolderLatest_.value(Folder);
-                }
+                const auto Value = groupValue(Definition, Item);
                 RoleWith.setData(Role == GroupKeyRole ? QVariant(Value.key_) : Role == GroupOrderRole ? Value.order_ : QVariant(Value.text_));
             } break;
             case GridSortRole: {
@@ -1549,6 +1579,21 @@ void CFSModel::refreshProvider()
     }));
 }
 
+namespace {
+QStringView StaticSortField(const Column& Binding)
+{
+    const auto& Definition = Binding.definition_;
+    if (!Definition.sortField_.isEmpty()) return Definition.sortField_;
+    return Definition.template_.isEmpty() ? QStringView(Definition.fieldId_) : QStringView{};
+}
+
+bool IsNameOrModifiedSort(const Column& Binding)
+{
+    const auto Field = StaticSortField(Binding);
+    return Field == u"file.name" || Field == u"file.modified";
+}
+}
+
 hc::storage::Result<hc::storage::PagedEntryIndex::Less> CFSModel::pageComparison(const QString& ParentPath, bool NameOnly, const ColumnView* Columns) const
 {
     if (appendOrder_ && ParentPath.isEmpty() && !NameOnly) return hc::refresh::ArrivalOrder();
@@ -1568,19 +1613,25 @@ hc::storage::Result<hc::storage::PagedEntryIndex::Less> CFSModel::pageComparison
         }
     }
     if (Bindings.isEmpty()) { Column Name; Name.definition_.fieldId_ = "file.name"; Bindings.push_back(Name); Orders.push_back(Qt::AscendingOrder); }
-    const auto& First = Bindings.front().definition_;
-    if (Bindings.size() == 1 && (First.sortField_ == "file.name" ||
-        (First.sortField_.isEmpty() && First.template_.isEmpty() && First.fieldId_ == "file.name"))) {
-        const auto TextOrder = TextCompare(displaySettings_["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool()), displaySettings_["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool()),
-            displaySettings_["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool()) ? Qt::CaseSensitive : Qt::CaseInsensitive);
-        const auto Direction = Orders.front();
-        // Name sorting needs no display object, template evaluation or identity
-        // encoding except on a tie. Keep the exact shared text comparison rules.
-        return hc::storage::PagedEntryIndex::Less([TextOrder, Direction](const auto& A, const auto& B) {
+    if (std::all_of(Bindings.begin(), Bindings.end(), IsNameOrModifiedSort)) {
+        const auto Options = sortTextOptions();
+        const auto TextOrder = TextCompare(Options.locale_, Options.numeric_, Options.case_);
+        QVector<bool> Modified;
+        for (const auto& Binding : Bindings) Modified.append(StaticSortField(Binding) == u"file.modified");
+        // Downloads uses modified time then name. Both values are in the native
+        // snapshot; compare them without constructing display and sort rows.
+        return hc::storage::PagedEntryIndex::Less([TextOrder, Modified, Orders](const auto& A, const auto& B) {
             if (A.hints_.contains("virtualArchiveRoot") != B.hints_.contains("virtualArchiveRoot")) return A.hints_.contains("virtualArchiveRoot");
             if (A.directory_ != B.directory_) return A.directory_;
-            const auto Order = TextOrder(QString::fromStdString(A.name_), QString::fromStdString(B.name_));
-            if (Order) return Direction == Qt::AscendingOrder ? Order < 0 : Order > 0;
+            for (int At = 0; At < Orders.size(); ++At) {
+                int Order = 0;
+                if (Modified[At]) {
+                    const bool KnownA = A.modifiedUtcMs_ != 0, KnownB = B.modifiedUtcMs_ != 0;
+                    if (KnownA != KnownB) return KnownA;
+                    Order = (A.modifiedUtcMs_ > B.modifiedUtcMs_) - (A.modifiedUtcMs_ < B.modifiedUtcMs_);
+                } else Order = TextOrder(QString::fromStdString(A.name_), QString::fromStdString(B.name_));
+                if (Order) return Orders[At] == Qt::AscendingOrder ? Order < 0 : Order > 0;
+            }
             return QString::compare(hc::workspace::SelectionKey(A), hc::workspace::SelectionKey(B), Qt::CaseSensitive) < 0;
         });
     }
@@ -2487,6 +2538,7 @@ void CFSModel::applyListingDelta(std::vector<hc::storage::EntrySnapshot> Entries
 void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles,
     PreparedListing Prepared, const DirectoryColumns* Columns, bool CancelSort)
 {
+    QScopedValueRollback Publishing(publishingProvider_, true);
     hc::startup::Span Trace("listing.publish");
     const auto IconIdentity = [](const hc::storage::EntrySnapshot& Entry) {
         return hc::workspace::SelectionKey(Entry) + ':' + QString::number(Entry.modifiedUtcMs_) + ':' + QString::number(Entry.size_) + ':' + QString::number(Entry.attributes_);
@@ -2611,6 +2663,7 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
     // before endResetModel so descending grid order keeps the worker's order.
     if (UsesIndexedOrder() || appendOrder_) {
         columnSortRanks_.resize(vecNode_.size()); std::iota(columnSortRanks_.begin(), columnSortRanks_.end(), 0);
+        if (usesProjectedSortRanks()) notifiedRankSorts_ = columnSorts_;
     }
     endResetModel();
     }
@@ -2646,8 +2699,50 @@ void CFSModel::ApplyDisplaySettings()
 
 void CFSModel::ApplyDirectorySizeSettings()
 {
-    directorySizeStop_.request_stop(); directorySizeStop_ = std::stop_source{}; directorySizePending_.clear();
+    const auto Pending = std::exchange(directorySizePending_, {});
+    directorySizeStop_.request_stop(); directorySizeStop_ = std::stop_source{};
     RequestDirectorySizes({}, true);
+    QVector<int> Cleared;
+    for (auto It = Pending.cbegin(); It != Pending.cend(); ++It)
+        if (It->isValid() && !directorySizePending_.contains(It.key()) && !vecNode_[It->row()]->directorySize_)
+            Cleared.append(It->row());
+    if (!Cleared.isEmpty()) notifyDirectorySizeRows(std::move(Cleared), directorySizePresentation().first, {Qt::DisplayRole});
+}
+
+std::pair<QVector<int>, bool> CFSModel::directorySizePresentation() const
+{
+    QVector<int> Columns;
+    QHash<QString, bool> Dependencies;
+    const std::function<bool(const QString&)> UsesField = [&](const QString& Field) {
+        if (Field == "file.size") return true;
+        if (const auto Found = Dependencies.constFind(Field); Found != Dependencies.cend()) return *Found;
+        Dependencies.insert(Field, false);
+        bool Uses = false;
+        if (const auto* Script = hc::columns::FindScript(columnView_.profile_, Field))
+            Uses = std::any_of(Script->dependencies_.begin(), Script->dependencies_.end(), UsesField);
+        Dependencies.insert(Field, Uses); return Uses;
+    };
+    const auto UsesSize = [&](const Column& Binding) {
+        const auto Fields = Binding.definition_.template_.isEmpty() ? QStringList{Binding.definition_.fieldId_} : Binding.compiled_.dependencies_;
+        return std::any_of(Fields.begin(), Fields.end(), UsesField);
+    };
+    for (int Col = 0; Col < columnView_.VecColumns.size(); ++Col) if (UsesSize(columnView_.VecColumns[Col])) Columns.append(Col);
+    bool Sorts = false;
+    for (const auto& Sort : columnSorts_) for (const auto& Binding : columnView_.VecColumns)
+        if (Binding.definition_.id_ == Sort.columnId_ && (UsesSize(Binding) || UsesField(Binding.definition_.sortField_))) Sorts = true;
+    return {Columns, Sorts};
+}
+
+void CFSModel::notifyDirectorySizeRows(QVector<int> Rows, const QVector<int>& Columns, const QList<int>& Roles)
+{
+    if (Rows.isEmpty() || Columns.isEmpty()) return;
+    std::sort(Rows.begin(), Rows.end());
+    Rows.erase(std::unique(Rows.begin(), Rows.end()), Rows.end());
+    for (int At = 0; At < Rows.size();) {
+        const int First = Rows[At]; int Last = First; ++At;
+        while (At < Rows.size() && Rows[At] == Last + 1) Last = Rows[At++];
+        for (const int Col : Columns) emit dataChanged(index(First, Col), index(Last, Col), Roles);
+    }
 }
 
 void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automatic)
@@ -2655,8 +2750,11 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
     using namespace hc::storage;
     const auto Provider = SnapshotProvider();
     if (loading_ || !providerEnabled_ || !Provider) return;
+    QVector<int> Indicators;
     // An explicit request takes priority over an automatic index-only batch.
     if (!Automatic && !directorySizePending_.isEmpty()) {
+        for (const auto& Index : std::as_const(directorySizePending_))
+            if (Index.isValid() && !vecNode_[Index.row()]->directorySize_) Indicators.append(Index.row());
         directorySizeStop_.request_stop(); directorySizeStop_ = std::stop_source{}; directorySizePending_.clear();
     }
     const auto Options = hc::settings::AppSettings().CommittedObject()["options"].toObject();
@@ -2669,13 +2767,12 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
     const bool IndexOnly = Automatic && Mode == "everything";
     if (IndexOnly && !UseIndex) return;
     std::vector<EntrySnapshot> Targets;
-    QHash<QString, int> Rows;
+    QVector<int> ClearedSizes;
     QVector<int> RequestedRows;
     RequestedRows.reserve(Entries.size());
     for (const auto& Entry : Entries)
         if (Entry.model() == this && Entry.row() >= 0 && Entry.row() < rowCount()) RequestedRows.append(Entry.row());
     const auto IsNetwork = [this](const Locator& At) { return isNetworkLocation(At); };
-    bool HadSizes = false;
     for (int Position = 0; Position < (Entries.isEmpty() ? rowCount() : RequestedRows.size()); ++Position) {
         const int Row = Entries.isEmpty() ? Position : RequestedRows[Position];
         const auto& Item = vecNode_[Row];
@@ -2688,39 +2785,25 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
         if ((Automatic && Item->directorySize_ && !Refresh) || directorySizePending_.contains(Key)) continue;
         if (Item->directorySize_ && !Refresh) {
             totalSize_ -= *Item->directorySize_; Item->directorySize_.reset(); Item->Size_ = 0;
-            createBuiltFsValues(Item, -1); HadSizes = true;
+            createBuiltFsValues(Item, -1);
+            ClearedSizes.append(Row);
+        } else if (!Item->directorySize_) Indicators.append(Row);
+        directorySizePending_.insert(Key, index(Row, 0));
+        Targets.push_back(*Item->storageEntry_);
+    }
+    if (!Indicators.isEmpty() || !ClearedSizes.isEmpty()) {
+        const auto Columns = directorySizePresentation().first;
+        notifyDirectorySizeRows(std::move(Indicators), Columns, {Qt::DisplayRole});
+        if (!ClearedSizes.isEmpty()) {
+            notifyDirectorySizeRows(std::move(ClearedSizes), Columns, {Qt::DisplayRole, Qt::ToolTipRole, ColumnStateRole, hc::columns::GroupSizeRole});
+            emit DirectorySizesChanged();
         }
-        directorySizePending_.insert(Key); Targets.push_back(*Item->storageEntry_); Rows.insert(Key, Row);
     }
     if (Targets.empty()) return;
     // Poll ready results in bounded batches. A fast index can finish thousands
     // of folders at once; per-result queued signals otherwise monopolize input.
     const auto Generation = generation_;
     const auto Token = directorySizeStop_.get_token();
-    const auto SizePresentation = [this] {
-        QVector<int> Columns;
-        QHash<QString, bool> Dependencies;
-        const std::function<bool(const QString&)> UsesField = [&](const QString& Field) {
-            if (Field == "file.size") return true;
-            if (const auto Found = Dependencies.constFind(Field); Found != Dependencies.cend()) return *Found;
-            Dependencies.insert(Field, false);
-            bool Uses = false;
-            if (const auto* Script = hc::columns::FindScript(columnView_.profile_, Field))
-                Uses = std::any_of(Script->dependencies_.begin(), Script->dependencies_.end(), UsesField);
-            Dependencies.insert(Field, Uses); return Uses;
-        };
-        const auto UsesSize = [&](const Column& Binding) {
-            const auto Fields = Binding.definition_.template_.isEmpty() ? QStringList{Binding.definition_.fieldId_} : Binding.compiled_.dependencies_;
-            return std::any_of(Fields.begin(), Fields.end(), UsesField);
-        };
-        for (int Col = 0; Col < columnView_.VecColumns.size(); ++Col) if (UsesSize(columnView_.VecColumns[Col])) Columns.append(Col);
-        bool Sorts = false;
-        for (const auto& Sort : columnSorts_) for (const auto& Binding : columnView_.VecColumns)
-            if (Binding.definition_.id_ == Sort.columnId_ && (UsesSize(Binding) || UsesField(Binding.definition_.sortField_))) Sorts = true;
-        return std::pair{Columns, Sorts};
-    };
-    if (rowCount()) for (const int Col : SizePresentation().first) emit dataChanged(index(0, Col), index(rowCount() - 1, Col), {Qt::DisplayRole, hc::columns::GroupSizeRole});
-    if (HadSizes) emit DirectorySizesChanged();
     struct SizeResult { ResourceId id_; Result<std::uint64_t> bytes_; };
     const auto Parent = QString::fromStdString(Location.root_);
     auto Future = QtConcurrent::run(DirectorySizePool(), [Targets = std::move(Targets), Provider, Parent, Token, UseIndex, IndexOnly, Automatic](QPromise<SizeResult>& Promise) {
@@ -2740,51 +2823,49 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
         }
     });
     auto* Apply = new QTimer(this); Apply->setInterval(16);
-    connect(Apply, &QTimer::timeout, this, [this, Apply, Future, Next = 0, Generation, Token, Rows, SizePresentation, Automatic, Deferred = QElapsedTimer{}]() mutable {
+    connect(Apply, &QTimer::timeout, this, [this, Apply, Future, Next = 0, Generation, Token, Automatic, Deferred = QElapsedTimer{}]() mutable {
         if (Generation != generation_ || Token.stop_requested()) { Apply->stop(); Apply->deleteLater(); return; }
-        // Measured sizes wait, for a bounded time, while the user types or clicks.
-        if (Next < Future.resultCount() && hc::ui::InputGate::Busy()) {
-            if (!Deferred.isValid()) Deferred.start();
-            if (Deferred.elapsed() < hc::columns::QueryEngine::MaxDeferMs) return;
-        }
-        Deferred.invalidate();
         const int Ready = Future.resultCount();
+        // Apply the grace period once while ready results remain queued.
+        if (Next < Ready) {
+            if (!Deferred.isValid()) Deferred.start();
+            if (hc::ui::InputGate::Busy() && Deferred.elapsed() < hc::columns::QueryEngine::MaxDeferMs) return;
+        }
         const int End = std::min(Ready, Next + 32);
         if (Next < End) {
             // Profiles and sort rules can change while the worker is running.
-            const auto [SizeColumns, SortSizes] = SizePresentation();
+            const auto [SizeColumns, SortSizes] = directorySizePresentation();
             QElapsedTimer Budget; Budget.start();
-            QVector<int> Changed;
-            if (SortSizes) emit ColumnValuesChanging();
+            QVector<int> Changed, FinishedUnknown;
             for (; Next < End; ++Next) {
                 const auto Result = Future.resultAt(Next);
                 const auto Key = QString::fromStdString(Serialize(Result.id_));
-                directorySizePending_.remove(Key); directorySizeStale_.remove(Key);
-                const auto Row = Rows.value(Key, -1);
-                if (Row < 0 || Row >= vecNode_.size()) continue;
+                const auto Index = directorySizePending_.take(Key);
+                directorySizeStale_.remove(Key);
+                if (!Index.isValid()) continue;
+                const int Row = Index.row();
                 const auto& Item = vecNode_[Row];
                 if (!Item->storageEntry_ || Item->storageEntry_->id_ != Result.id_) continue;
-                Changed.append(Row);
-                if (Result.bytes_.HasValue()) {
+                if (Result.bytes_.HasValue() && Item->directorySize_ != Result.bytes_.Value()) {
+                    if (SortSizes && Changed.isEmpty()) emit ColumnValuesChanging();
+                    Changed.append(Row);
                     totalSize_ -= Item->directorySize_.value_or(0);
                     Item->directorySize_ = Result.bytes_.Value();
                     totalSize_ += qMin<quint64>(Result.bytes_.Value(), (std::numeric_limits<quint64>::max)() - totalSize_);
                     Item->Size_ = qint64(qMin<quint64>(Result.bytes_.Value(), (std::numeric_limits<qint64>::max)()));
                     for (const int Col : SizeColumns) createBuiltFsValues(Item, Col);
-                }
+                } else if (!Item->directorySize_) FinishedUnknown.append(Row);
                 if (Budget.elapsed() >= 4) { ++Next; break; }
             }
+            notifyDirectorySizeRows(std::move(FinishedUnknown), SizeColumns, {Qt::DisplayRole});
             if (!Changed.isEmpty()) {
-                for (int At = 0; At < Changed.size();) {
-                    const int First = Changed[At]; int Last = First; ++At;
-                    while (At < Changed.size() && Changed[At] == Last + 1) Last = Changed[At++];
-                    for (const int Col : SizeColumns) emit dataChanged(index(First, Col), index(Last, Col), {Qt::DisplayRole, Qt::ToolTipRole, ColumnStateRole, hc::columns::GroupSizeRole});
-                }
+                notifyDirectorySizeRows(std::move(Changed), SizeColumns, {Qt::DisplayRole, Qt::ToolTipRole, ColumnStateRole, hc::columns::GroupSizeRole});
                 if (SortSizes) refreshColumnSortRanks();
                 emit DirectorySizesChanged();
+                if (SortSizes) emit ColumnValuesChanged();
             }
-            if (SortSizes) emit ColumnValuesChanged();
         }
+        if (Next == Future.resultCount()) Deferred.invalidate();
         if (Future.isFinished() && Next == Future.resultCount()) {
             Apply->stop(); Apply->deleteLater();
             if (!Automatic && Generation == generation_ && !Token.stop_requested()) RequestDirectorySizes({}, true);
@@ -3709,13 +3790,18 @@ void CFSModel::SetGrouping(const hc::columns::GroupingState& State)
 {
     SetGroupingLevels(State.enabled_ ? QVector<hc::columns::GroupingState>{State} : QVector<hc::columns::GroupingState>{});
 }
-void CFSModel::SetGroupingLevels(const QVector<hc::columns::GroupingState>& Levels)
+void CFSModel::SetGroupingLevels(const QVector<hc::columns::GroupingState>& Levels, bool RebindingColumns)
 {
     QHash<QUuid, QString> Modes; for (const auto& Level : Levels) Modes[Level.columnId_] = Level.mode_;
     const auto State = Levels.isEmpty() ? hc::columns::GroupingState{} : Levels.front();
     if (grouping_ == State && groupingModes_ == Modes) return;
-    emit ColumnValuesChanging();
+    const bool NewBindings = RebindingColumns && usesProjectedSortRanks();
+    if (!NewBindings) emit ColumnValuesChanging();
     grouping_ = State; groupingModes_ = Modes; groupingDate_ = QDate::currentDate(); groupingZone_ = QTimeZone::systemTimeZone();
+    relativeDateGroups_.clear();
+    // New grid bindings have no cached group keys. Their initial update also
+    // reads the correct ranks from the newly published index.
+    if (NewBindings) return;
     refreshColumnSortRanks();
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {GroupKeyRole, GroupOrderRole, GroupTextRole, GridSortRole});
     emit ColumnValuesChanged();
@@ -3730,6 +3816,7 @@ void CFSModel::RefreshGroupingDate()
     const auto Today = QDate::currentDate(); const auto Zone = QTimeZone::systemTimeZone();
     if (groupingDate_ == Today && groupingZone_ == Zone) return;
     emit ColumnValuesChanging(); groupingDate_ = Today; groupingZone_ = Zone;
+    relativeDateGroups_.clear();
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {GroupKeyRole, GroupOrderRole, GroupTextRole});
     emit ColumnValuesChanged();
 }
@@ -3740,6 +3827,20 @@ void CFSModel::SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts)
     if (Sorts != columnSorts_) appendOrder_ = false;
     if (UsesIndexedOrder() && !grouping_.enabled_) { if (Sorts != columnSorts_) { columnSorts_ = Sorts; if (!loading_) requestPage(0, true); } return; }
     columnQueries_->Resume(); columnSorts_ = Sorts; refreshColumnSortRanks();
+}
+
+bool CFSModel::usesProjectedSortRanks() const
+{
+    // Reuse the index during publication. Later edits to the sort or column
+    // definitions can require different ranks even if the column IDs match.
+    if (!publishingProvider_ || !UsesIndexedOrder() || searchResults_ || appendOrder_
+        || columnSorts_ != pageSorts_ || columnSorts_.isEmpty()) return false;
+    return std::all_of(columnSorts_.begin(), columnSorts_.end(), [this](const auto& Sort) {
+        const auto It = std::find_if(columnView_.VecColumns.begin(), columnView_.VecColumns.end(), [&](const auto& Binding) {
+            return Binding.definition_.id_ == Sort.columnId_;
+        });
+        return It != columnView_.VecColumns.end() && IsNameOrModifiedSort(*It);
+    });
 }
 
 void CFSModel::refreshColumnSortRanks(int First)
@@ -3756,6 +3857,15 @@ void CFSModel::refreshColumnSortRanks(int First)
     }
     if ((UsesIndexedOrder() || appendOrder_) && !grouping_.enabled_) {
         columnSortRanks_.resize(vecNode_.size()); std::iota(columnSortRanks_.begin(), columnSortRanks_.end(), 0);
+        return;
+    }
+    if (usesProjectedSortRanks()) {
+        const auto Previous = columnSortRanks_;
+        columnQueries_->EndSnapshot();
+        columnSortRanks_.resize(vecNode_.size());
+        std::iota(columnSortRanks_.begin(), columnSortRanks_.end(), 0);
+        completedSorts_ = columnSorts_;
+        notifySortRanks(Previous);
         return;
     }
     if (columnSorts_.isEmpty()) {
