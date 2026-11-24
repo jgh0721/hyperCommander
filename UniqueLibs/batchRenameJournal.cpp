@@ -278,7 +278,11 @@ private:
     int candidate_ = 0, pinned_ = 0, phase_ = 0, move_ = 0, outcome_ = 0;
 };
 PreparedJob Job(const QString& Directory, RenameRecord Record, bool Recovery, bool Restore) {
-    PreparedJob Out; Out.request_.resourceLanes_ = {FileOperationLane({NativeFolder(Record.folder_) && !LocalFolder(Record.folder_) ? LocatorKind::Smb : LocatorKind::Local, Record.folder_.toStdString()})};
+    PreparedJob Out;
+    const auto Kind = LocalFolder(Record.folder_) ? LocatorKind::Local : LocatorKind::Smb;
+    const auto Reserve = [&](const QString& Path) { Out.request_.resourceLanes_.push_back(FileOperationLane({Kind, Path.toStdString()})); };
+    for (const auto& Row : Record.rows_) { Reserve(Row.source_.path_); Reserve(Row.target_); }
+    for (const auto& Temporary : Record.temporary_) Reserve(Temporary);
     Out.request_.metadata_.source_ = Record.folder_.toStdString(); Out.request_.metadata_.destination_ = Record.folder_.toStdString();
     Out.request_.metadata_.options_ = "rename-record=" + Record.id_.toStdString(); Out.request_.maxItemResults_ = 200;
     Out.request_.metadata_.kind_ = Recovery ? (Restore ? JobKind::RenameRestore : JobKind::RenameResume)

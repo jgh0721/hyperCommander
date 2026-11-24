@@ -190,7 +190,6 @@ namespace hc::operations
                 || (Request.selectionRoot_.kind_ == LocatorKind::Archive && Request.selectionRoot_.nesting_.empty()))
                 return Error{ErrorCategory::InvalidRequest, "invalid-move-selection"};
             JobRequest Job; Job.operation_ = Context; Job.correlationId_ = Request.correlationId_; Job.maxItemResults_ = Request.maxEntries_;
-            Job.resourceLanes_ = {ResourceLane(Request.selectionRoot_), ResourceLane(Request.destination_)};
             auto Selection = Request.selection_; auto Root = Request.selectionRoot_; auto Limit = Request.maxEntries_; Request.selection_.reset();
             return PreparedJob{std::move(Job), std::make_unique<SelectionPlan>(Selection, Root,
                 [Request = std::move(Request)](std::vector<EntrySnapshot> Entries, OperationContext Operation) mutable -> Result<PreparedJob> {

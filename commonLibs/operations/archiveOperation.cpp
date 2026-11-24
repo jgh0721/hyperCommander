@@ -281,7 +281,6 @@ namespace hc::operations
                 || (Request.selectionRoot_.kind_ == LocatorKind::Archive && Request.selectionRoot_.nesting_.empty()))
                 return Error{ErrorCategory::InvalidRequest, "invalid-archive-selection"};
             JobRequest Job; Job.operation_ = Context; Job.correlationId_ = Request.correlationId_; Job.maxItemResults_ = Request.limits_.maxEntries_;
-            Job.resourceLanes_ = {ResourceLane(Request.archive_), ResourceLane(Request.selectionRoot_)};
             auto Selection = Request.selection_; auto Root = Request.selectionRoot_; auto Limit = Request.limits_.maxEntries_;
             auto Reader = Selection->Provider(); Request.selection_.reset();
             return PreparedJob{std::move(Job), std::make_unique<SelectionPlan>(Selection, Root,
@@ -314,8 +313,11 @@ namespace hc::operations
         }
         JobRequest Job; Job.correlationId_ = Request.correlationId_; Job.operation_ = Context; Job.maxItemResults_ = Request.limits_.maxEntries_;
         Job.resourceLanes_.push_back(Lane(Request.archive_.root_));
-        for (const auto& Source : Request.sources_)
-            Job.resourceLanes_.push_back(ResourceLane(Source.entry_.locator_));
+        for (const auto& Source : Request.sources_) {
+            auto& Lanes = Request.operation_ == FileOperation::Copy && !Request.beginRemoval_ && Source.entry_.locator_.kind_ != LocatorKind::Plugin
+                ? Job.readLanes_ : Job.resourceLanes_;
+            Lanes.push_back(ResourceLane(Source.entry_.locator_));
+        }
         return PreparedJob{std::move(Job), std::make_unique<ArchiveTask>(std::move(Request))};
     }
     Result<JobHandle> SubmitArchiveOperation(JobScheduler& Scheduler, ArchiveOperationRequest Request, OperationContext Context)

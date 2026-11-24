@@ -2228,13 +2228,14 @@ namespace hc::operations
                     selectedSources_.push_back({Entry, Reader, request_.selectionWriter_});
                 }
                 offset_ += Page.Value().entries_.size();
+                JobStep Step{JobState::Preparing}; Step.progress_ = JobProgress{};
                 if (offset_ == request_.selection_->Count()) {
                     auto Request = request_; Request.selection_.reset(); Request.confirmDelete_ = false; Request.sources_ = std::move(selectedSources_);
                     auto Prepared = PrepareFileOperation(std::move(Request), Context.operation_);
                     if (!Prepared.HasValue()) return failed(Prepared.Failure());
+                    Step.nextLanes_ = TakeJobLanes(Prepared.Value().request_);
                     inner_ = std::move(Prepared.Value().task_); unifiedPrepared_ = true;
                 }
-                JobStep Step{JobState::Preparing}; Step.progress_ = JobProgress{};
                 if (request_.operation_ == FileOperation::Delete) Step.progress_->deletedFiles_ = 0;
                 return Step;
             }
@@ -2244,10 +2245,8 @@ namespace hc::operations
                 return Step;
             }
             if (request_.operation_ != FileOperation::Delete && !selectionSummarized_) {
-                // Read only bounded pages of the immutable selection metadata.
-                // No network Stat or recursive directory walk is needed for a
-                // flat file selection. Folders require one recursive plan when
-                // preflight is enabled; flat files retain their paged copy path.
+                // Use the immutable metadata to reserve all selected roots.
+                // The later copy/move pages can still execute independently.
                 auto Page = request_.selection_->Read(summaryOffset_, 256, Context.operation_);
                 if (!Page.HasValue()) return failed(Page.Failure());
                 if (Page.Value().entries_.empty() || Page.Value().entries_.size() > 256
@@ -2258,10 +2257,26 @@ namespace hc::operations
                         || Child(request_.selectionRoot_, Entry.name_) != Entry.locator_)
                         return failed({ErrorCategory::InvalidRequest, "selection-container-mismatch"});
                     AddListedFileBytes(listedBytes_, Entry, request_.includePattern_);
+                    auto& Sources = request_.operation_ == FileOperation::Copy && Entry.locator_.kind_ != LocatorKind::Plugin
+                        ? selectionLanes_.reads_ : selectionLanes_.writes_;
+                    Sources.push_back(LaneFor(Entry.locator_));
+                    if (!NativeFileKind(request_.destination_.kind_) || (!request_.preservePaths_ && Entry.directory_))
+                        destinationRootLane_ = true;
+                    else if (!destinationRootLane_)
+                        selectionLanes_.writes_.push_back(LaneFor(Child(request_.destination_, Entry.name_)));
                 }
                 summaryOffset_ += Page.Value().entries_.size();
-                selectionSummarized_ = !listedBytes_ || summaryOffset_ == request_.selection_->Count();
                 JobStep Step{JobState::Preparing}; Step.progress_ = JobProgress{}; Step.progress_->phase_ = JobPhase::Preparing;
+                if (request_.operation_ == FileOperation::Copy && request_.calculateSizeBefore_ && !listedBytes_) {
+                    selectionSummarized_ = true;
+                    selectionLanes_ = {}; // The unified recursive plan will claim the paths.
+                    return Step;
+                }
+                selectionSummarized_ = summaryOffset_ == request_.selection_->Count();
+                if (selectionSummarized_) {
+                    if (destinationRootLane_) selectionLanes_.writes_.push_back(LaneFor(request_.destination_));
+                    Step.nextLanes_ = std::move(selectionLanes_);
+                }
                 if (selectionSummarized_ && listedBytes_) {
                     Step.progress_->bytesTotal_ = listedBytes_; Step.progress_->plannedItems_ = request_.selection_->Count();
                 }
@@ -2382,7 +2397,9 @@ namespace hc::operations
         uint64_t completedExtraBytes_ = 0, innerExtraBytes_ = 0;
         std::optional<uint64_t> listedBytes_ = 0;
         std::optional<uint64_t> innerListedBytes_;
+        JobLanes selectionLanes_;
         bool selectionSummarized_ = false;
+        bool destinationRootLane_ = false;
         size_t emitted_ = 0, outcomeBase_ = 0;
         bool confirmed_ = false;
         std::vector<Error> cleanup_;
@@ -2438,10 +2455,6 @@ namespace hc::operations
                 || (Request.operation_ != FileOperation::Delete && !Request.destinationWriter_))
                 return Error{ErrorCategory::InvalidRequest, "invalid-selection-batch"};
             JobRequest Job; Job.correlationId_ = Request.correlationId_; Job.operation_ = Context;
-            auto& Sources = Request.operation_ == FileOperation::Copy && Request.selectionRoot_.kind_ != LocatorKind::Plugin
-                ? Job.readLanes_ : Job.resourceLanes_;
-            Sources.push_back(LaneFor(Request.selectionRoot_));
-            if (Request.operation_ != FileOperation::Delete) Job.resourceLanes_.push_back(LaneFor(Request.destination_));
             return PreparedJob{std::move(Job), std::make_unique<SelectionTask>(std::move(Request))};
         }
         if ((!Request.preservePaths_ && Request.operation_ != FileOperation::Copy)
@@ -2470,7 +2483,8 @@ namespace hc::operations
                         return Error{ErrorCategory::InvalidRequest, "overlapping-selection"};
         }
         const bool Transfer = Request.operation_ == FileOperation::Copy || Request.operation_ == FileOperation::Move;
-        const bool FixedOutputs = Transfer && Request.preservePaths_
+        const bool FixedOutputs = Transfer && (Request.preservePaths_
+            || std::ranges::none_of(Request.sources_, [](const auto& Source) { return Source.entry_.directory_; }))
             && (Request.destination_.kind_ == LocatorKind::Local || Request.destination_.kind_ == LocatorKind::Smb);
         if (Request.operation_ != FileOperation::Delete && !FixedOutputs) Job.resourceLanes_.push_back(LaneFor(Request.destination_));
         for (const auto& Source : Request.sources_)

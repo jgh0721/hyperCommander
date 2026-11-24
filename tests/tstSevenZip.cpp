@@ -76,6 +76,124 @@ class SevenZipTests : public QObject {
     QJsonArray cases_;
     QString root_;
 private slots:
+    void extractAndOtherJobsUnderSameParent_data() {
+        QTest::addColumn<bool>("Separate");
+        QTest::newRow("separate-folder") << true;
+        QTest::newRow("shared-folder") << false;
+    }
+    void extractAndOtherJobsUnderSameParent() {
+        using namespace hc::operations;
+        QFETCH(bool, Separate);
+        QTemporaryDir Input, Directory;
+        QVERIFY(Input.isValid() && Directory.isValid());
+        const auto Archive = Directory.filePath("[series] show.zip");
+        const auto Output = Directory.filePath(Separate ? "[series] show/episode" : "episode");
+        const auto Extra = Directory.filePath(Separate ? "[series] show/EXTRA" : "other-series/EXTRA");
+        QVERIFY(QDir().mkpath(Input.filePath("episode")) && QDir().mkpath(Output) && QDir().mkpath(Extra));
+        QVERIFY(Put(Input.filePath("episode/item.txt"), "extracted") && Put(Output + "/item.txt", "existing"));
+        QVERIFY(Put(Extra + "/bonus.txt", "delete me"));
+        const auto Binary = QDir::toNativeSeparators(BuiltinSevenZipOptions().binaryPath_);
+        const auto Module = LoadLibraryExW(reinterpret_cast<const wchar_t*>(Binary.utf16()), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        QVERIFY(Module);
+        const auto Unload = qScopeGuard([&] { FreeLibrary(Module); });
+        auto Backend = MakeSevenZipBackend(Module);
+        auto Created = Backend->Update({Archive.toStdString(), Input.path().toStdString(), {"episode/item.txt"}}, {});
+        QVERIFY2(Created.HasValue(), Created.HasValue() ? "" : Created.Failure().code_.c_str());
+
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        const auto At = [](const QString& Path) { return Locator{LocatorKind::Local, QDir::toNativeSeparators(Path).toStdString()}; };
+        auto Source = Reader->Resolve(At(Archive), {}).get();
+        QVERIFY(Source.HasValue());
+        ExtractRequest Request;
+        Request.archives_ = {{Source.Value(), Reader, {}}};
+        Request.sourceRoot_ = Request.destination_ = At(Directory.path());
+        Request.writer_ = Writer;
+        Request.separateFolders_ = Separate;
+        auto ArchiveReader = MakeWcxReadProvider({}, {LocatorKind::Archive, Source.Value().locator_.root_, {{"wcx", "/"}}},
+            Directory.path().toStdString(), Backend);
+        Request.readers_ = [ArchiveReader](const auto&) { return std::vector{ArchiveReader}; };
+        auto Prepared = PrepareExtract(std::move(Request));
+        QVERIFY(Prepared.HasValue());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2);
+        auto Extract = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_));
+        QVERIFY(Extract.HasValue());
+        const auto Snapshot = [&] { return Scheduler.Snapshot(Extract.Value().id_).Value(); };
+        QTRY_VERIFY_WITH_TIMEOUT(Snapshot().state_ == JobState::WaitingForUser || IsTerminal(Snapshot().state_), 10000);
+        const auto Started = Snapshot();
+        QVERIFY2(Started.state_ == JobState::WaitingForUser, Started.error_ ? Started.error_->code_.c_str() : "");
+        const auto Question = Snapshot().interaction_;
+        QVERIFY(Question && Question->kind_ == InteractionKind::Overwrite);
+
+        using Operation = hc::operations::FileOperation;
+        class SingleSelection final : public ISelectionManifest {
+        public:
+            SingleSelection(EntrySnapshot Entry, std::shared_ptr<IStorageProvider> Reader)
+                : entry_(std::move(Entry)), reader_(std::move(Reader)) {}
+            std::uint64_t Count() const override { return 1; }
+            Result<EntryPage> Read(std::uint64_t, std::size_t, const OperationContext&) const override
+            { return EntryPage{{entry_}, {}, true}; }
+            std::shared_ptr<IStorageProvider> Provider() const override { return reader_; }
+        private:
+            EntrySnapshot entry_;
+            std::shared_ptr<IStorageProvider> reader_;
+        };
+        const auto Submit = [&](Operation Kind, const QString& Path, const QString& Destination = {}, bool Manifest = false) -> Result<JobHandle> {
+            auto Entry = Reader->Resolve(At(Path), {}).get();
+            if (!Entry.HasValue()) return Entry.Failure();
+            FileOperationRequest Request;
+            Request.operation_ = Kind;
+            Request.confirmDelete_ = false;
+            Request.destination_ = At(Destination);
+            Request.destinationWriter_ = Writer;
+            if (Manifest) {
+                Request.selectionRoot_ = At(QFileInfo(Path).absolutePath());
+                Request.selection_ = std::make_shared<SingleSelection>(std::move(Entry.Value()), Reader);
+                Request.selectionWriter_ = Writer;
+            } else Request.sources_ = {{Entry.Value(), Reader, Writer}};
+            return SubmitFileOperation(Scheduler, std::move(Request));
+        };
+        const auto Target = QFileInfo(Output).absolutePath();
+        for (const auto& [Kind, Name] : {std::pair{Operation::Copy, "copied.txt"}, std::pair{Operation::Move, "moved.txt"}}) {
+            const auto Path = Extra + '/' + Name;
+            QVERIFY(Put(Path, "independent"));
+            auto Transfer = Submit(Kind, Path, Target, true);
+            QVERIFY(Transfer.HasValue());
+            QVERIFY(Transfer.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+            const auto Result = Transfer.Value().completion_.get();
+            const auto Failure = std::ranges::find_if(Result.items_, [](const auto& Item) { return Item.error_.has_value(); });
+            QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Failure == Result.items_.end()
+                ? (Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "") : Failure->error_->code_.c_str());
+            QCOMPARE(Read(Target + '/' + Name), QByteArray("independent"));
+            QCOMPARE(QFileInfo::exists(Path), Kind == Operation::Copy);
+        }
+        auto Rename = Submit(Operation::Rename, Extra + "/bonus.txt", Extra + "/renamed.txt");
+        QVERIFY(Rename.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Rename.Value().id_).Value().state_, JobState::Completed);
+        QCOMPARE(Read(Extra + "/renamed.txt"), QByteArray("delete me"));
+        auto RemoveExtra = Submit(Operation::Delete, Extra, {}, true);
+        QVERIFY(RemoveExtra.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(RemoveExtra.Value().id_).Value().state_, JobState::Completed);
+        QVERIFY(!QFileInfo::exists(Extra));
+        QCOMPARE(Read(Output + "/item.txt"), QByteArray("existing"));
+        for (const auto& Path : {Archive, Output, Output + "/item.txt", QFileInfo(Output).absolutePath()}) {
+            auto Removal = Submit(Operation::Delete, Path);
+            QVERIFY(Removal.HasValue());
+            const auto Wait = [&] { return Scheduler.Snapshot(Removal.Value().id_).Value().wait_; };
+            QTRY_COMPARE(Wait().reason_, JobWaitReason::Resource);
+            QCOMPARE(Wait().jobId_, Extract.Value().id_);
+            QVERIFY(Scheduler.Cancel(Removal.Value().id_).HasValue());
+        }
+        QVERIFY(Put(Extra + ".txt", "replacement"));
+        auto RenameIntoOutput = Submit(Operation::Rename, Extra + ".txt", Output + "/item.txt");
+        QVERIFY(RenameIntoOutput.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(RenameIntoOutput.Value().id_).Value().wait_.jobId_, Extract.Value().id_);
+        QVERIFY(Scheduler.Cancel(RenameIntoOutput.Value().id_).HasValue());
+        QVERIFY(Scheduler.Reply(Extract.Value().id_, {Question->id_, InteractionChoice::Replace}).HasValue());
+        QTRY_COMPARE(Snapshot().state_, JobState::Completed);
+        QCOMPARE(Read(Output + "/item.txt"), QByteArray("extracted"));
+    }
+
     void nsisStoredArchiveIsOuter() {
         const auto Case = QJsonDocument::fromJson(Read(QFINDTESTDATA("fixtures/nsis-duplicates.json")))["storedArchive"].toObject();
         QTemporaryDir Directory;

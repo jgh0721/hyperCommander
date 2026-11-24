@@ -225,6 +225,40 @@ private slots:
         QVERIFY(Scheduler.Cancel(B.Value().id_).HasValue());
         QVERIFY(Ready(Parent.Value()) && Ready(Source.Value()));
     }
+    void plannedPathsWaitWithoutHoldingThePreviousPathsOrSlot()
+    {
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2);
+        QVERIFY(Scheduler.SetConcurrencyLimit(1).HasValue());
+        auto Blocking = Scheduler.Submit(Lane("path:C:/folder/blocked"), std::make_unique<ScriptTask>(std::make_shared<Probe>(),
+            [](const JobStepContext& Context) { return Context.answer_ ? JobStep{JobState::Completed} : Prompt(); }));
+        QVERIFY(Blocking.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Blocking.Value().id_).Value().state_, JobState::WaitingForUser);
+
+        auto Changing = std::make_shared<Probe>();
+        auto Pending = Scheduler.Submit(Lane("path:C:/folder/old"), std::make_unique<ScriptTask>(Changing,
+            [Changing](const JobStepContext&) {
+                if (Changing->calls_ != 1) return JobStep{JobState::Completed};
+                JobStep Step{JobState::Preparing};
+                Step.nextLanes_ = JobLanes{{"path:C:/folder/blocked", "path:C:/folder/other"}, {}};
+                return Step;
+            }));
+        QVERIFY(Pending.HasValue());
+        const auto Wait = [&] { return Scheduler.Snapshot(Pending.Value().id_).Value().wait_; };
+        QTRY_COMPARE(Wait().reason_, JobWaitReason::Resource);
+        QCOMPARE(Wait().jobId_, Blocking.Value().id_);
+        QCOMPARE(Scheduler.BackgroundJobsInUse(), std::size_t{0});
+        for (const auto* Path : {"path:C:/folder/old", "path:C:/folder/other"}) {
+            auto Independent = Scheduler.Submit(Lane(Path), std::make_unique<ScriptTask>(std::make_shared<Probe>()));
+            QVERIFY(Independent.HasValue() && Ready(Independent.Value()));
+            QCOMPARE(Independent.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        }
+        QCOMPARE(Changing->calls_.load(), 1);
+        const auto PromptId = Scheduler.Snapshot(Blocking.Value().id_).Value().interaction_->id_;
+        QVERIFY(Scheduler.Reply(Blocking.Value().id_, {PromptId, InteractionChoice::Replace}).HasValue());
+        QVERIFY(Ready(Pending.Value()));
+        QCOMPARE(Pending.Value().completion_.get().snapshot_.state_, JobState::Completed);
+    }
+
     void dynamicTargetNeverStealsAnotherClaim()
     {
         JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2);

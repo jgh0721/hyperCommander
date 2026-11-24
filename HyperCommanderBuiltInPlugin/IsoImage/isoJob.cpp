@@ -163,7 +163,11 @@ Result<PreparedJob> PrepareCreate(CreateRequest Request, OperationContext Contex
         if (Target.compare(Path, Qt::CaseInsensitive) == 0 || (Source.entry_.directory_ && Target.startsWith(Path + '/', Qt::CaseInsensitive))) return Error{ErrorCategory::InvalidRequest, "iso-output-inside-input"};
     }
     JobRequest Job; Job.correlationId_ = Request.correlationId_; Job.operation_ = Context;
-    Job.resourceLanes_.push_back("iso:" + Target.toCaseFolded().toStdString());
+    Job.resourceLanes_.push_back(FileOperationLane(Request.destination_));
+    for (const auto& Source : Request.sources_) {
+        auto& Lanes = Source.entry_.locator_.kind_ == LocatorKind::Plugin ? Job.resourceLanes_ : Job.readLanes_;
+        Lanes.push_back(FileOperationLane(Source.entry_.locator_));
+    }
     return PreparedJob{std::move(Job), std::make_unique<CreateTask>(std::move(Request))};
 }
 }

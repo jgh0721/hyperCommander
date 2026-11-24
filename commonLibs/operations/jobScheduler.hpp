@@ -151,6 +151,10 @@ namespace hc::operations
         // Each resume starts a new pause notification period.
         std::stop_token pauseSignal_;
     };
+    struct JobLanes
+    {
+        std::vector<std::string> writes_, reads_;
+    };
     struct JobStep
     {
         JobState next_ = JobState::Running;
@@ -167,6 +171,13 @@ namespace hc::operations
         // Bounded completed effects from one commit (for example parallel
         // deletion). Mutually exclusive with item_/replaceItem_; <=128 rows.
         std::vector<ItemOutcome> items_;
+        // Refine already-held path claims after planning. New paths must be
+        // covered by an existing claim with the same access mode.
+        std::optional<std::vector<std::string>> narrowedWrites_, narrowedReads_;
+        // At a phase boundary, release the previous claims and acquire this
+        // entire set before advancing again. The task must close any handles
+        // or I/O that require the old claims before requesting the change.
+        std::optional<JobLanes> nextLanes_;
     };
     // Effects that task-owned background work completed after its last step.
     struct CompletedEffects
@@ -194,6 +205,10 @@ namespace hc::operations
         JobRequest request_;
         std::unique_ptr<IJobTask> task_;
     };
+    inline JobLanes TakeJobLanes(JobRequest& Request)
+    {
+        return {std::move(Request.resourceLanes_), std::move(Request.readLanes_)};
+    }
     class IJobJournal
     {
     public:

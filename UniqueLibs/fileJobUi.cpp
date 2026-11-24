@@ -543,6 +543,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     managerDetails_->setMinimumWidth(295);
     auto* Selected = new QGroupBox(tr("선택 작업"), managerDetails_);
     Selected->setObjectName("hc.jobs.selectedGroup");
+    Selected->installEventFilter(this);
     auto* SelectedRows = new QVBoxLayout(Selected);
     auto* SelectedText = new hc::qt::ElidedLabel(Selected);
     SelectedText->setObjectName("hc.jobs.selectedSummary");
@@ -1900,6 +1901,14 @@ void FileJobUi::answer(InteractionChoice Choice)
 bool FileJobUi::eventFilter(QObject* Object, QEvent* Event)
 {
     if (Object == manager_ && Event->type() == QEvent::Resize) updateManagerLayout();
+    if (managerDetails_ && Object == managerDetails_->widget()
+        && (Event->type() == QEvent::Show || Event->type() == QEvent::FontChange || Event->type() == QEvent::StyleChange)) {
+        QTimer::singleShot(0, this, [this] {
+            // The tree's frame sits above its header, unlike the detail title band.
+            const int Height = managerDetails_->widget()->contentsRect().top() - jobList_->frameWidth();
+            jobList_->header()->setMinimumHeight(std::max(0, Height));
+        });
+    }
     if (Object == manager_ && Event->type() == QEvent::Hide && !Event->spontaneous()) {
         auto& Store = hc::settings::AppSettings();
         if (!Store.Editing()) {

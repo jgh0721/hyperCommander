@@ -5,6 +5,7 @@ namespace hc::operations {
 inline std::string ResourceLane(const storage::Locator& At) { return FileOperationLane(At); }
 // Legacy atomic archive APIs need a full change vector. Read the immutable
 // selection on the worker in cancellable pages while retaining its lease.
+// Acquire the paths of the resulting operation before running it.
 class SelectionPlan final : public IJobTask {
 public:
     using Prepare = std::function<storage::Result<PreparedJob>(std::vector<storage::EntrySnapshot>, storage::OperationContext)>;
@@ -37,7 +38,8 @@ public:
             return JobStep{JobState::Preparing};
         }
         auto Prepared = build_(std::move(entries_), Context.operation_); if (!Prepared.HasValue()) return failed(Prepared.Failure());
-        inner_ = std::move(Prepared.Value().task_); build_ = {}; return JobStep{JobState::Preparing};
+        inner_ = std::move(Prepared.Value().task_); build_ = {};
+        JobStep Step{JobState::Preparing}; Step.nextLanes_ = TakeJobLanes(Prepared.Value().request_); return Step;
     }
     CompletedEffects TakeCompletedEffects() override { return inner_ ? inner_->TakeCompletedEffects() : CompletedEffects{}; }
     std::vector<storage::Error> Finalize(JobState State) override

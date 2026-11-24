@@ -120,7 +120,14 @@ private slots:
     void queueLaneAndDurableUndo() {
         QTemporaryDir Data, Journal, General; QVERIFY(Data.isValid()); const auto Rows = Fixture(Data.path(), true); QCOMPARE(Rows.size(), 3);
         auto Prepared = PrepareBatchRename(Journal.path(), Rows); QVERIFY(Prepared.HasValue()); const auto Id = IdOf(Prepared.Value());
-        QCOMPARE(Prepared.Value().request_.resourceLanes_.size(), std::size_t(1)); QVERIFY(Prepared.Value().request_.resourceLanes_.front().starts_with("path:"));
+        const auto& Paths = Prepared.Value().request_.resourceLanes_;
+        auto Plan = ReadRenameRecord(Journal.path(), Id); QVERIFY(Plan.HasValue());
+        QCOMPARE(Paths.size(), std::size_t(Rows.size() * 3));
+        const auto Reserved = [&](const QString& Path) {
+            return std::ranges::find(Paths, FileOperationLane({LocatorKind::Local, Path.toStdString()})) != Paths.end();
+        };
+        for (const auto& Row : Rows) QVERIFY(Reserved(Row.source_.path_) && Reserved(Row.target_));
+        for (const auto& Temporary : Plan.Value().temporary_) QVERIFY(Reserved(Temporary));
         Prepared.Value().request_.deferred_ = true;
         {
             JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2, 1024, MakeFileJobJournal(General.path()));
@@ -237,6 +244,12 @@ private slots:
         auto Rename = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)); QVERIFY(Rename.HasValue());
         QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(Record.Value().temporary_[0]), 5000);
         QVERIFY(Scheduler.Pause(Rename.Value().id_, true).HasValue()); QTRY_COMPARE(Scheduler.Snapshot(Rename.Value().id_).Value().state_, JobState::Paused);
+        JobRequest Sibling;
+        Sibling.resourceLanes_ = {FileOperationLane({LocatorKind::Local, Data.filePath("unrelated.txt").toStdString()})};
+        std::atomic<bool> SiblingSeen = false;
+        auto Independent = Scheduler.Submit(std::move(Sibling), std::make_unique<LaneMarker>(SiblingSeen));
+        QVERIFY(Independent.HasValue() && Independent.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QVERIFY(SiblingSeen.load());
         std::atomic<bool> Seen = false; JobRequest Other; Other.resourceLanes_ = Lane; auto Marker = Scheduler.Submit(std::move(Other), std::make_unique<LaneMarker>(Seen)); QVERIFY(Marker.HasValue());
         QTest::qWait(100); QVERIFY(!Seen.load()); QVERIFY(QFileInfo::exists(Record.Value().temporary_[0]));
         QVERIFY(Scheduler.Cancel(Rename.Value().id_).HasValue()); QVERIFY(Rename.Value().completion_.wait_for(std::chrono::seconds(10)) == std::future_status::ready);

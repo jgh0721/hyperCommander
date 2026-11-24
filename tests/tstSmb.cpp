@@ -112,6 +112,7 @@
 #include "columnNativeFields.hpp"
 #include "fileJobUi.hpp"
 #include <QTreeWidget>
+#include <QHeaderView>
 #include <fmwidgets/TransferGraph.h>
 #include <fmwidgets/DialogHeader.h>
 #include <fmstyle/ThemeManager.h>
@@ -18004,6 +18005,17 @@ private slots:
         auto* ShowDetails = Manager->findChild<QPushButton*>("hc.jobs.managerOpen"); QVERIFY(ShowDetails);
         ShowDetails->setChecked(true);
         QCoreApplication::processEvents();
+        auto* List = Manager->findChild<QTreeWidget*>("hc.jobs.list");
+        auto* Group = Manager->findChild<QGroupBox*>("hc.jobs.selectedGroup");
+        QVERIFY(List && Group);
+        auto* Header = List->header();
+        QTRY_COMPARE(Header->height() + List->frameWidth(), Group->contentsRect().top());
+        const auto NarrowSize = Manager->size();
+        Manager->resize(1000, NarrowSize.height());
+        QTRY_COMPARE(Header->mapTo(Manager, QPoint(0, Header->height())).y(),
+            Group->mapTo(Manager, Group->contentsRect().topLeft()).y());
+        Manager->resize(NarrowSize);
+        ShowDetails->setChecked(true);
         const auto SavedSize = Manager->size();
         auto* Close = Manager->findChild<QPushButton*>("hc.jobs.close"); QVERIFY(Close);
         Close->setFocus(); QTRY_VERIFY(Close->hasFocus()); QTest::keyClick(Close, Qt::Key_Space); QTRY_VERIFY(!Manager->isVisible());

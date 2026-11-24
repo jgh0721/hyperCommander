@@ -2,12 +2,43 @@
 #include "archiveExtractJob.hpp"
 #include "commonLibs/operations/providerInteractionTask.hpp"
 #include "commonLibs/operations/directoryPreparation.hpp"
+#include "commonLibs/plugins/archiveVolumeNames.hpp"
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
+#include <QSet>
 
 namespace hc::operations {
 using namespace storage;
 namespace {
+bool CanCheckArchiveSiblings(const Locator& At) {
+    if (At.kind_ != LocatorKind::Local && At.kind_ != LocatorKind::Smb) return false;
+    const QFileInfo File(QString::fromStdString(At.root_));
+    const auto Extension = File.suffix().toLower();
+    if (Extension == "zip" || Extension == "zipx") return true;
+    // RAR also supports volume names that increment a number in the stem.
+    return Extension == "rar" && !hc::plugins::IsArchiveVolumeName(File.fileName())
+        && !File.completeBaseName().isEmpty() && !File.completeBaseName().back().isDigit();
+}
+Locator ArchiveReadScope(const Locator& At) {
+    if (At.kind_ != LocatorKind::Local && At.kind_ != LocatorKind::Smb) return At;
+    const QFileInfo File(QString::fromStdString(At.root_));
+    const auto Extension = File.suffix().toLower();
+    if (Extension == "7z" || Extension == "iso") return At;
+    return DirectoryPreparation::ParentOf(At);
+}
+std::optional<QSet<QString>> ArchiveVolumeAnchors(const QDir& Directory, const OperationContext& Context) {
+    if (!Directory.isReadable()) return std::nullopt;
+    QSet<QString> Anchors;
+    QDirIterator Entries(Directory.path(), QDir::Files | QDir::Hidden | QDir::System);
+    while (Entries.hasNext()) {
+        if (Context.Check({"archive-extract"})) return std::nullopt;
+        const auto Volume = hc::plugins::ParseArchiveVolumeName(QFileInfo(Entries.next()).fileName());
+        if (!Volume.firstName_.isEmpty()) Anchors.insert(Volume.firstName_.toCaseFolded());
+        if (!Volume.alternateName_.isEmpty()) Anchors.insert(Volume.alternateName_.toCaseFolded());
+    }
+    return Anchors;
+}
 Result<Locator> ExtractTarget(const ExtractRequest& Request, const EntrySnapshot& Source) {
     auto Target = Request.destination_;
     if (Request.separateFolders_) {
@@ -25,7 +56,8 @@ public:
 };
 class ExtractTask final : public IJobTask {
 public:
-    explicit ExtractTask(ExtractRequest Request) : request_(std::move(Request)) {}
+    ExtractTask(ExtractRequest Request, bool RefineInputs, bool RefineOutputs)
+        : request_(std::move(Request)), refineInputs_(RefineInputs), refineOutputs_(RefineOutputs) {}
     JobStep Advance(JobStepContext Context) override {
         if (const auto Error = Context.operation_.Check({"archive-extract"})) return failed(*Error);
         if (request_.selection_) {
@@ -42,6 +74,18 @@ public:
         }
         if (pinned_ < request_.archives_.size()) {
             const auto& Source = request_.archives_[pinned_];
+            if (refineInputs_) {
+                const auto& At = Source.entry_.locator_;
+                auto Read = ArchiveReadScope(At);
+                if (CanCheckArchiveSiblings(At)) {
+                    const QFileInfo File(QString::fromStdString(At.root_));
+                    const auto Directory = File.dir();
+                    auto [Anchors, Inserted] = volumeAnchors_.try_emplace(FileOperationPath(Directory.path().toStdString()));
+                    if (Inserted) Anchors->second = ArchiveVolumeAnchors(Directory, Context.operation_);
+                    if (Anchors->second && !Anchors->second->contains(File.fileName().toCaseFolded())) Read = At;
+                }
+                readLanes_.push_back(FileOperationLane(Read));
+            }
             if (Source.entry_.hints_.contains("virtualArchiveRoot")) {
                 if (!Source.reader_) return failed({ErrorCategory::InvalidRequest, "extract-reader-required"});
                 auto Fresh = Source.reader_->Stat(Source.entry_.id_, Context.operation_).get(); if (!Fresh.HasValue()) return failed(Fresh.Failure());
@@ -53,6 +97,13 @@ public:
             auto PinnedContext = Context.operation_; PinnedContext.denyConcurrentMutation_ = true;
             auto Pin = Source.reader_->OpenRead(Source.entry_.id_, PinnedContext).get(); if (!Pin.HasValue()) return failed(Pin.Failure());
             pins_.push_back(std::move(Pin.Value())); ++pinned_; return JobStep{JobState::Preparing};
+        }
+        if (refineInputs_) {
+            refineInputs_ = false;
+            volumeAnchors_.clear();
+            JobStep Step{JobState::Preparing};
+            Step.narrowedReads_ = std::move(readLanes_);
+            return Step;
         }
         if (inner_) {
             auto Step = inner_->Advance(Context);
@@ -99,15 +150,17 @@ public:
                 if (!Entry.hints_.contains("virtualArchiveRoot")) entries_.push_back({Entry, reader_, {}});
             listed_ = Page.Value().end_; return JobStep{JobState::Preparing};
         }
+        JobStep Step{JobState::Running};
         if (entries_.empty()) inner_ = std::make_unique<DirectoryPreparation>(target_, request_.writer_, std::make_unique<EmptyExtract>());
         else {
             FileOperationRequest Copy; Copy.sources_ = std::move(entries_); Copy.destination_ = target_; Copy.destinationWriter_ = request_.writer_;
             Copy.preservePaths_ = request_.preservePaths_; Copy.includePattern_ = request_.includePattern_;
             Copy.conflict_ = request_.conflict_; Copy.createParents_ = true; Copy.elevation_ = request_.elevation_; Copy.maxEntries_ = Context.operation_.EnumerationLimit();
             auto Prepared = PrepareFileOperation(std::move(Copy), Context.operation_); if (!Prepared.HasValue()) return failed(Prepared.Failure());
+            if (refineOutputs_) Step.narrowedWrites_ = std::move(Prepared.Value().request_.resourceLanes_);
             inner_ = std::move(Prepared.Value().task_);
         }
-        listed_ = false; return JobStep{JobState::Running};
+        listed_ = false; return Step;
     }
     std::vector<Error> Finalize(JobState State) override {
         if (inner_) { auto Errors = inner_->Finalize(State); cleanup_.insert(cleanup_.end(), Errors.begin(), Errors.end()); inner_.reset(); }
@@ -122,10 +175,14 @@ private:
     std::vector<OperationSource> entries_;
     std::unique_ptr<IJobTask> inner_;
     Locator root_, target_;
+    std::vector<std::string> readLanes_;
+    std::map<std::string, std::optional<QSet<QString>>> volumeAnchors_;
     std::vector<Error> cleanup_;
     std::size_t pinned_ = 0, archive_ = 0, itemOffset_ = 0, currentItems_ = 0;
     std::uint64_t selectionOffset_ = 0, bytesOffset_ = 0, currentBytes_ = 0;
     bool listed_ = false;
+    bool refineInputs_;
+    bool refineOutputs_;
 };
 }
 Result<PreparedJob> PrepareExtract(ExtractRequest Request, OperationContext Context) {
@@ -136,9 +193,18 @@ Result<PreparedJob> PrepareExtract(ExtractRequest Request, OperationContext Cont
     PreparedJob Out; Out.request_.operation_ = Context; Out.request_.maxItemResults_ = Context.EnumerationLimit();
     Out.request_.metadata_ = {"파일 압축 해제", Request.sourceRoot_.root_, Request.destination_.root_, Request.separateFolders_ ? "extract; separate-folders" : "extract; shared-folder"};
     Out.request_.metadata_.kind_ = JobKind::Extract;
-    // A split archive can read sibling volumes as well as the selected file.
-    auto& Sources = Request.sourceRoot_.kind_ == LocatorKind::Plugin ? Out.request_.resourceLanes_ : Out.request_.readLanes_;
-    Sources.push_back(FileOperationLane(Request.sourceRoot_));
+    // Unknown selections and formats with companion files need an initial
+    // directory claim. Standalone archives only need their own input file.
+    const bool Explicit = !Request.selection_ && Request.sourceRoot_.kind_ != LocatorKind::Plugin;
+    const bool RefineInputs = Request.sourceRoot_.kind_ != LocatorKind::Plugin
+        && (Request.selection_ || std::ranges::any_of(Request.archives_, [](const auto& Source) { return CanCheckArchiveSiblings(Source.entry_.locator_); }));
+    if (Explicit) {
+        for (const auto& Source : Request.archives_)
+            Out.request_.readLanes_.push_back(FileOperationLane(ArchiveReadScope(Source.entry_.locator_)));
+    } else {
+        auto& Sources = Request.sourceRoot_.kind_ == LocatorKind::Plugin ? Out.request_.resourceLanes_ : Out.request_.readLanes_;
+        Sources.push_back(FileOperationLane(Request.sourceRoot_));
+    }
     if (Request.separateFolders_ && !Request.selection_) {
         for (const auto& Source : Request.archives_) {
             auto Target = ExtractTarget(Request, Source.entry_);
@@ -146,6 +212,8 @@ Result<PreparedJob> PrepareExtract(ExtractRequest Request, OperationContext Cont
             Out.request_.resourceLanes_.push_back(FileOperationLane(Target.Value()));
         }
     } else Out.request_.resourceLanes_.push_back(FileOperationLane(Request.destination_));
-    Out.task_ = std::make_unique<ProviderInteractionTask>(std::make_unique<ExtractTask>(std::move(Request)), "압축 내용을 준비·해독하는 중…"); return Out;
+    const bool RefineOutputs = Request.sourceRoot_.kind_ != LocatorKind::Plugin
+        && (Request.selection_ ? Request.selection_->Count() == 1 : Request.archives_.size() == 1);
+    Out.task_ = std::make_unique<ProviderInteractionTask>(std::make_unique<ExtractTask>(std::move(Request), RefineInputs, RefineOutputs), "압축 내용을 준비·해독하는 중…"); return Out;
 }
 }

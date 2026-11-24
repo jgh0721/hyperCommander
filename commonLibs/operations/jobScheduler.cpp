@@ -181,9 +181,14 @@ namespace hc::operations
             if (Value.result_.snapshot_.state_ == Next) return;
             Value.result_.snapshot_.state_ = Next;
             if (IsTerminal(Next)) activeJobs_.erase(Value.result_.snapshot_.id_);
-            if ((Next == JobState::Paused || Next == JobState::WaitingForUser || IsTerminal(Next)) && Value.admitted_)
-            { Value.admitted_ = false; if (!Value.result_.snapshot_.foreground_) --admitted_; }
+            if (Next == JobState::Paused || Next == JobState::WaitingForUser || IsTerminal(Next)) releaseSlot(Value);
             notify(Value, IsTerminal(Next) ? "job." + std::string(StateName(Next)) : "job.changed");
+        }
+        void releaseSlot(Job& Value)
+        {
+            if (!Value.admitted_) return;
+            Value.admitted_ = false;
+            if (!Value.result_.snapshot_.foreground_) --admitted_;
         }
         void setWait(Job& Value, JobWait Wait = {})
         {
@@ -239,6 +244,30 @@ namespace hc::operations
             if (blocker(writers_, Lane, 1, &Value) || blocker(readers_, Lane, 1, &Value)) return false;
             Lanes.push_back(std::move(Lane));
             writers_[Lanes.back()].insert(&Value);
+            return true;
+        }
+        bool narrowPaths(Job& Value, std::optional<std::vector<std::string>> Writes, std::optional<std::vector<std::string>> Reads)
+        {
+            const auto Covered = [](const auto& Previous, const auto& Next) {
+                return !Next || std::ranges::all_of(*Next, [&](const auto& Lane) {
+                    if (std::ranges::find(Previous, Lane) != Previous.end()) return true;
+                    if (!Lane.starts_with("path:")) return false;
+                    for (auto End = Lane.find_last_of('\\'); End != std::string::npos && End >= 5; End = Lane.rfind('\\', End - 1))
+                        if (std::ranges::find(Previous, Lane.substr(0, End)) != Previous.end()) return true;
+                    return false;
+                });
+            };
+            if (!Value.lanesHeld_ || !Covered(Value.request_.resourceLanes_, Writes) || !Covered(Value.request_.readLanes_, Reads)) return false;
+            if (Writes) for (const auto& Lane : *Writes) {
+                const auto Limit = laneLimits_.contains(Lane) ? laneLimits_.at(Lane) : 1;
+                if (blocker(writers_, Lane, Limit, &Value) || blocker(readers_, Lane, 1, &Value)) return false;
+            }
+            release(Value);
+            if (Writes) Value.request_.resourceLanes_ = std::move(*Writes);
+            if (Reads) Value.request_.readLanes_ = std::move(*Reads);
+            for (const auto& Lane : Value.request_.resourceLanes_) writers_[Lane].insert(&Value);
+            for (const auto& Lane : Value.request_.readLanes_) readers_[Lane].insert(&Value);
+            Value.lanesHeld_ = true;
             return true;
         }
         void release(Job& Value)
@@ -633,6 +662,16 @@ namespace hc::operations
                 catch (...) { Step.next_ = JobState::Failed; Step.error_ = Error{ErrorCategory::Internal, "job-task-exception"}; }
             }
             JobState Terminal = JobState::Running;
+            if (Step.nextLanes_ && ((Step.next_ != JobState::Preparing && Step.next_ != JobState::Running)
+                || Step.retry_ || Step.interaction_ || Step.narrowedReads_ || Step.narrowedWrites_
+                || !NormalizeLanes(Step.nextLanes_->writes_).HasValue()
+                || !NormalizeLanes(Step.nextLanes_->reads_, true).HasValue())) {
+                Step = JobStep{JobState::Failed}; Step.error_ = Error{ErrorCategory::Internal, "invalid-next-job-paths"};
+            }
+            if ((Step.narrowedWrites_ && !NormalizeLanes(*Step.narrowedWrites_).HasValue())
+                || (Step.narrowedReads_ && !NormalizeLanes(*Step.narrowedReads_, true).HasValue())) {
+                Step = JobStep{JobState::Failed}; Step.error_ = Error{ErrorCategory::Internal, "invalid-refined-paths"};
+            }
             // Disk writes and replacement reads must never hold the scheduler
             // mutex: cancellation and unrelated lanes stay responsive.
             if (!Step.items_.empty() && (Step.item_ || Step.replaceItem_ || Step.retry_ || Step.items_.size() > 128)) {
@@ -781,6 +820,21 @@ namespace hc::operations
                 if (IsTerminal(Step.next_)) Terminal = Step.next_;
                 else
                 {
+                    if ((Step.narrowedWrites_ || Step.narrowedReads_)
+                        && !Shared->narrowPaths(*Value, std::move(Step.narrowedWrites_), std::move(Step.narrowedReads_))) {
+                        Snapshot.error_ = Error{ErrorCategory::Internal, "invalid-refined-paths"};
+                        Terminal = JobState::Failed;
+                    }
+                }
+                if (!IsTerminal(Terminal))
+                {
+                    if (Step.nextLanes_) {
+                        Shared->release(*Value);
+                        Value->request_.resourceLanes_ = std::move(Step.nextLanes_->writes_);
+                        Value->request_.readLanes_ = std::move(Step.nextLanes_->reads_);
+                        if (Snapshot.pauseRequested_ || Snapshot.cancelRequested_ || !Shared->acquire(*Value))
+                            Shared->releaseSlot(*Value);
+                    }
                     if (Step.next_ == JobState::Committing && Snapshot.state_ != JobState::Committing && Snapshot.pauseRequested_)
                     { Value->resume_ = Step.next_; Shared->transition(*Value, JobState::Paused); }
                     else Shared->transition(*Value, Step.next_);

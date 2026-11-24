@@ -14,6 +14,12 @@ namespace hc::archive {
 using namespace storage;
 using namespace operations;
 namespace {
+std::string CreatorLane(const plugins::ArchiveCreatorDescriptor& Creator) {
+    // External creators can share mutable INI/package settings.
+    if (Creator.kind_ == plugins::ArchiveCreatorKind::Wcx || Creator.kind_ == plugins::ArchiveCreatorKind::DopusVfs)
+        return "archive-creator:" + Creator.id_;
+    return {};
+}
 class CreateTask final : public IJobTask {
 public:
     explicit CreateTask(CreateJobRequest Request) : request_(std::move(Request)) { if (qEnvironmentVariableIsSet("HC_ARCHIVE_TIMINGS")) elapsed_.start(); }
@@ -70,7 +76,10 @@ public:
             planner_ = std::make_unique<CreationPlanner>(std::move(Plan)); phase_ = Phase::Plan;
         }
         if (phase_ == Phase::Plan) {
-            auto Step = planner_->Advance(Context); if (Step.next_ != JobState::Completed) return Step;
+            auto Step = planner_->Advance(Context);
+            if (Step.nextLanes_)
+                if (auto Lane = CreatorLane(request_.creator_.descriptor_); !Lane.empty()) Step.nextLanes_->writes_.push_back(std::move(Lane));
+            if (Step.next_ != JobState::Completed) return Step;
             outputs_ = planner_->Take(); planner_.reset(); phase_ = Phase::Initialize;
         }
         if (group_ >= outputs_.size()) return JobStep{JobState::Completed};
@@ -359,17 +368,15 @@ Result<PreparedJob> PrepareCreation(CreateJobRequest Request, OperationContext C
             if (!Output.HasValue()) return Output.Failure();
             if (!Request.completedOutputs_.contains(Serialize(Output.Value()))) Job.resourceLanes_.push_back(FileOperationLane(Output.Value()));
         }
-    } else Job.resourceLanes_.push_back(FileOperationLane(Request.value_.output_));
+    } else if (!Request.selection_) Job.resourceLanes_.push_back(FileOperationLane(Request.value_.output_));
     const auto ReserveSource = [&](const Locator& At) {
         auto& Claims = At.kind_ == LocatorKind::Plugin ? Job.resourceLanes_ : Job.readLanes_;
         Claims.push_back(FileOperationLane(At));
     };
-    if (Request.selection_) ReserveSource(Request.value_.sourceRoot_);
-    for (const auto& Source : Request.sources_) ReserveSource(Source.entry_.locator_);
-    // External creators may share their mutable INI/package settings. Built-ins
-    // create independent codec sessions and can run on disjoint paths together.
-    if (Kind == plugins::ArchiveCreatorKind::Wcx || Kind == plugins::ArchiveCreatorKind::DopusVfs)
-        Job.resourceLanes_.push_back("archive-creator:" + Request.value_.creator_.id_);
+    if (!Request.selection_) {
+        for (const auto& Source : Request.sources_) ReserveSource(Source.entry_.locator_);
+        if (auto Lane = CreatorLane(Request.creator_.descriptor_); !Lane.empty()) Job.resourceLanes_.push_back(std::move(Lane));
+    }
     Job.metadata_.destination_ = Request.value_.output_.root_; Job.metadata_.options_ = Request.value_.format_ + " · " + Request.value_.creator_.displayName_;
     Job.metadata_.source_ = Request.sources_.size() == 1 ? Serialize(Request.sources_.front().entry_.locator_) : Request.value_.sourceRoot_.root_;
     Job.metadata_.kind_ = Request.value_.composition_.separateArchives_ ? JobKind::ArchiveSeparate

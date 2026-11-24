@@ -175,7 +175,18 @@ JobStep CreationPlanner::Advance(JobStepContext Context)
             S.pending_.push_back({Source, Member, Group, 0});
         }
         if (!R.composition_.separateArchives_ && R.completedOutputs_.contains(Serialize(R.destination_))) S.outputs_.clear();
-        S.names_.resize(S.outputs_.size()); S.initialized_ = true; return S.progress();
+        S.names_.resize(S.outputs_.size()); S.initialized_ = true;
+        auto Step = S.progress();
+        if (R.selection_) {
+            auto& Lanes = Step.nextLanes_.emplace();
+            for (const auto& Output : S.outputs_) Lanes.writes_.push_back(FileOperationLane(Output.destination_));
+            for (const auto& Item : S.pending_) {
+                const auto& At = Item.source_.entry_.locator_;
+                auto& Claims = At.kind_ == LocatorKind::Plugin ? Lanes.writes_ : Lanes.reads_;
+                Claims.push_back(FileOperationLane(At));
+            }
+        }
+        return Step;
     }
     if (S.cursor_) {
         S.currentPath_ = Serialize(S.directory_.source_.entry_.locator_);
