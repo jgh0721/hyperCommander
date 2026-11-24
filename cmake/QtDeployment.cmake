@@ -11,10 +11,8 @@ if(WIN32)
             string(APPEND HC_PLUGIN_MANIFEST "    \"$<TARGET_FILE:${HC_IMPORTED_TARGET}>\"\n")
         endif()
     endforeach()
-    foreach(HC_IMAGE_PLUGIN IN ITEMS hc_image_codecs_plugin hc_jpeg2000_plugin hc_jpegxl_plugin)
-        if(TARGET ${HC_IMAGE_PLUGIN})
-            string(APPEND HC_PLUGIN_MANIFEST "    \"$<TARGET_FILE:${HC_IMAGE_PLUGIN}>\"\n")
-        endif()
+    foreach(HC_IMAGE_PLUGIN IN LISTS HC_PRODUCT_IMAGE_PLUGINS)
+        string(APPEND HC_PLUGIN_MANIFEST "    \"$<TARGET_FILE:${HC_IMAGE_PLUGIN}>\"\n")
     endforeach()
     string(APPEND HC_PLUGIN_MANIFEST ")\n")
     file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/hc-qt-plugins-$<CONFIG>.cmake" CONTENT "${HC_PLUGIN_MANIFEST}")
@@ -41,11 +39,9 @@ function(hc_enable_qt_deployment Target)
         "-DHC_IMAGE_CODEC_PREFIX=${HC_IMAGE_CODEC_PREFIX}"
         -P "${PROJECT_SOURCE_DIR}/cmake/DeployQt.cmake"
     )
-    foreach(ImagePlugin IN ITEMS hc_image_codecs_plugin hc_jpeg2000_plugin hc_jpegxl_plugin)
-        if(TARGET ${ImagePlugin})
-            add_dependencies(${Target} ${ImagePlugin})
-        endif()
-    endforeach()
+    if(HC_PRODUCT_IMAGE_PLUGINS)
+        add_dependencies(${Target} ${HC_PRODUCT_IMAGE_PLUGINS})
+    endif()
     add_custom_command(TARGET ${Target} POST_BUILD
         COMMAND "${CMAKE_COMMAND}" ${HC_ARGS}
         COMMENT "Deploying the selected Qt runtime for ${Target}"

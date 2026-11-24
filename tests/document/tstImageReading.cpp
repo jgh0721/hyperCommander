@@ -600,6 +600,146 @@ class ImageReadingTests : public QObject
         QVERIFY(Page.HasValue());
         QCOMPARE(Page.Value().image_, Result.Value().image_);
     }
+
+private:
+    static QByteArray photoshopFixture(bool Large, quint16 Compression, bool Merged = true)
+    {
+        QByteArray Resources;
+        if (!Merged) {
+            QDataStream Block(&Resources, QIODevice::WriteOnly);
+            Block.writeRawData("8BIM", 4);
+            Block << quint16(1057) << quint16(0) << quint32(5) << quint32(1) << quint8(0) << quint8(0);
+        }
+        QByteArray Bytes;
+        QDataStream Stream(&Bytes, QIODevice::WriteOnly);
+        Stream.writeRawData("8BPS", 4);
+        Stream << quint16(Large ? 2 : 1) << quint32(0) << quint16(0) << quint16(3)
+            << quint32(1) << quint32(2) << quint16(8) << quint16(3);
+        Stream << quint32(0) << quint32(Resources.size());
+        Stream.writeRawData(Resources.constData(), Resources.size());
+        if (Large) Stream << quint64(0); else Stream << quint32(0);
+        Stream << Compression;
+        if (Compression == 1) {
+            for (auto Channel = 0; Channel < 3; ++Channel) {
+                if (Large) Stream << quint32(3); else Stream << quint16(3);
+            }
+            Stream.writeRawData("\x01\xa0\x0f\x01\x28\xa0\x01\x46\x55", 9);
+        } else {
+            Stream.writeRawData("\xa0\x0f\x28\xa0\x46\x55", 6);
+        }
+        return Bytes;
+    }
+
+private slots:
+    void additionalImageFormatsOpenAsImages_data()
+    {
+        QTest::addColumn<QString>("Suffix");
+        QTest::addColumn<QByteArray>("Bytes");
+        QTest::addColumn<QColor>("FirstPixel");
+        const QColor Opaque(160, 40, 70);
+        QTest::newRow("qoi") << QStringLiteral("QOI")
+            << QByteArray::fromHex("716f696600000002000000010400ffa0284678ff0fa055ff0000000000000001")
+            << QColor(160, 40, 70, 120);
+
+        QByteArray Dds;
+        QDataStream DdsHeader(&Dds, QIODevice::WriteOnly);
+        DdsHeader.setByteOrder(QDataStream::LittleEndian);
+        DdsHeader.writeRawData("DDS ", 4);
+        DdsHeader << quint32(124) << quint32(0x100f) << quint32(1) << quint32(2) << quint32(8) << quint32(0) << quint32(0);
+        for (auto I = 0; I < 11; ++I) DdsHeader << quint32(0);
+        DdsHeader << quint32(32) << quint32(0x41) << quint32(0) << quint32(32)
+            << quint32(0x00ff0000) << quint32(0x0000ff00) << quint32(0x000000ff) << quint32(0xff000000)
+            << quint32(0x1000) << quint32(0) << quint32(0) << quint32(0) << quint32(0);
+        DdsHeader.writeRawData("\x46\x28\xa0\xff\x55\xa0\x0f\xff", 8);
+        QTest::newRow("dds") << QStringLiteral("dds") << Dds << Opaque;
+
+        QByteArray Pcx(128, '\0');
+        Pcx[0] = 10; Pcx[1] = 5; Pcx[2] = 1; Pcx[3] = 8;
+        Pcx[8] = 1; Pcx[65] = 3; Pcx[66] = 2; Pcx[68] = 1;
+        Pcx.append("\xa0\x0f\x28\xa0\x46\x55", 6);
+        QTest::newRow("pcx") << QStringLiteral("pcx") << Pcx << Opaque;
+        QTest::newRow("psd-raw") << QStringLiteral("psd") << photoshopFixture(false, 0) << Opaque;
+        QTest::newRow("psd-rle") << QStringLiteral("psd") << photoshopFixture(false, 1) << Opaque;
+        QTest::newRow("psb-raw") << QStringLiteral("psb") << photoshopFixture(true, 0) << Opaque;
+        QTest::newRow("psb-rle") << QStringLiteral("psb") << photoshopFixture(true, 1) << Opaque;
+    }
+
+    void additionalImageFormatsOpenAsImages()
+    {
+        QFETCH(QString, Suffix);
+        QFETCH(QByteArray, Bytes);
+        QFETCH(QColor, FirstPixel);
+        QTemporaryDir Directory;
+        QVERIFY(Directory.isValid());
+        const auto Name = QStringLiteral("image.") + Suffix;
+        const auto Path = Directory.filePath(Name);
+        QFile File(Path);
+        QVERIFY(File.open(QIODevice::WriteOnly));
+        QCOMPARE(File.write(Bytes), Bytes.size());
+        File.close();
+        QVERIFY(IsImageFile(Path));
+        const auto Open = ReadDocumentFile(Path);
+        QVERIFY2(Open.HasValue(), Open.HasValue() ? "" : Open.Failure().code_.c_str());
+        QCOMPARE(Open.Value().viewId_, QStringLiteral("image"));
+        QCOMPARE(Open.Value().image_.size(), QSize(2, 1));
+        QCOMPARE(Open.Value().image_.pixelColor(0, 0), FirstPixel);
+        QCOMPARE(Open.Value().image_.pixelColor(1, 0), QColor(15, 160, 85));
+
+        const auto ArchivePath = Directory.filePath("images.cbz");
+        QZipWriter Archive(ArchivePath);
+        Archive.addFile(Name, Bytes);
+        Archive.close();
+        QCOMPARE(Archive.status(), QZipWriter::NoError);
+        const auto Book = OpenImageBook(ArchivePath);
+        QVERIFY(Book.HasValue());
+        const auto Page = ReadImagePage(Book.Value(), 0);
+        QVERIFY(Page.HasValue());
+        QCOMPARE(Page.Value().image_, Open.Value().image_);
+
+        if (Suffix == "dds" || Suffix == "psd" || Suffix == "psb") {
+            DocumentWorkspaceWidget Workspace(Directory.filePath("recovery"), false);
+            Workspace.Handle({{"action", "open"}, {"path", Path}});
+            const auto State = [&] { return Workspace.Snapshot()["documents"].toArray().first().toObject(); };
+            QTRY_COMPARE(State()["lifecycle"].toString(), QStringLiteral("ready"));
+            QVERIFY(!State()["canSave"].toBool());
+            QVERIFY(State()["canSaveAs"].toBool());
+        }
+    }
+
+    void photoshopCompositeErrors_data()
+    {
+        QTest::addColumn<QByteArray>("Bytes");
+        QTest::addColumn<QString>("Code");
+        QTest::newRow("absent") << photoshopFixture(false, 0, false) << QStringLiteral("photoshop-composite-absent");
+        QTest::newRow("zip") << photoshopFixture(true, 2) << QStringLiteral("photoshop-composite-zip");
+        QTest::newRow("zip-prediction") << photoshopFixture(true, 3) << QStringLiteral("photoshop-composite-zip");
+    }
+
+    void photoshopCompositeErrors()
+    {
+        QFETCH(QByteArray, Bytes);
+        QFETCH(QString, Code);
+        QTemporaryDir Directory;
+        const auto Path = Directory.filePath("composite.psd");
+        QFile File(Path);
+        QVERIFY(File.open(QIODevice::WriteOnly));
+        QCOMPARE(File.write(Bytes), Bytes.size());
+        File.close();
+        const auto Open = ReadDocumentFile(Path);
+        QVERIFY(!Open.HasValue());
+        QCOMPARE(QString::fromStdString(Open.Failure().code_), Code);
+
+        const auto ArchivePath = Directory.filePath("images.cbz");
+        QZipWriter Archive(ArchivePath);
+        Archive.addFile("composite.psd", Bytes);
+        Archive.close();
+        QCOMPARE(Archive.status(), QZipWriter::NoError);
+        const auto Book = OpenImageBook(ArchivePath);
+        QVERIFY(Book.HasValue());
+        const auto Page = ReadImagePage(Book.Value(), 0);
+        QVERIFY(!Page.HasValue());
+        QCOMPARE(QString::fromStdString(Page.Failure().code_), Code);
+    }
     void animatedFramesDoNotBlockOrModify()
     {
         const auto Bytes =

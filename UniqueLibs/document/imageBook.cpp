@@ -4,6 +4,7 @@
 #include "core/AppSettings.h"
 #include <QSet>
 #include "imagePartialDecoder.hpp"
+#include "imageComposite.hpp"
 #include "imagePerformance.hpp"
 #include "imageZipRecovery.hpp"
 #include "pluginHost/imageArchiveTransport.hpp"
@@ -396,6 +397,7 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
     if(Content.bytes_.startsWith(QByteArray("\xff\xd8",2)) && !ImagePartialDecoder::HasCompleteJpeg(Content.bytes_))
         Content.warning_="image-jpeg-incomplete";
     if(Content.image_.isNull()){
+        if (const auto* Code = PhotoshopCompositeError(Content.bytes_)) return Error(Code);
         Content.image_=ImagePartialDecoder::Decode(Content.bytes_);
         if(Content.image_.isNull())return Error("image-page-decode");
         Content.warning_="image-page-partial-preview";

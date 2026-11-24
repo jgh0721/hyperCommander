@@ -4,6 +4,7 @@
 #include "UniqueLibs/document/sqlite/sqliteFormat.hpp"
 #include "imagePerformance.hpp"
 #include "imageDecodeCache.hpp"
+#include "imageComposite.hpp"
 #include "imagePartialDecoder.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "imageBook.hpp"
@@ -195,6 +196,7 @@ namespace hc::document
                 const bool IncompleteJpeg=Input.bytes_.startsWith(QByteArray("\xff\xd8",2))&&!ImagePartialDecoder::HasCompleteJpeg(Input.bytes_);
                 if(Input.image_.isNull() || IncompleteJpeg){
                     if(Preview){auto Partial=ImagePartialDecoder::Decode(Input.bytes_);if(!Partial.isNull())Preview(std::move(Partial));}
+                    if (const auto* Code = PhotoshopCompositeError(Input.bytes_)) return Invalid(Code);
                     return Invalid("document-image-incomplete");
                 }
                 if(auto Stop=Context.Check({"document"}))return *Stop;
@@ -207,6 +209,7 @@ namespace hc::document
                 Input.viewId_="image";return Input;
             }
         }
+        if (const auto* Code = PhotoshopCompositeError(Input.bytes_)) return Invalid(Code);
         if(IsImageFile(Path)||QStringList{"heic","heif","avif","jxl"}.contains(Suffix)){
             if(Preview){auto Partial=ImagePartialDecoder::Decode(Input.bytes_);if(!Partial.isNull())Preview(std::move(Partial));}
             return Invalid("document-image-codec-unavailable-or-corrupt");

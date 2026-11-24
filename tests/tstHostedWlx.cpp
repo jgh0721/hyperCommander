@@ -377,6 +377,8 @@ private slots:
         QTest::newRow("png") << QStringLiteral("png") << false;
         QTest::newRow("jp2-viewer") << QStringLiteral("jp2") << false;
         QTest::newRow("jp2-quick-preview") << QStringLiteral("jp2") << true;
+        QTest::newRow("qoi-viewer") << QStringLiteral("qoi") << false;
+        QTest::newRow("qoi-quick-preview") << QStringLiteral("qoi") << true;
     }
     void builtinImageDirectInputAndPresentation()
     {

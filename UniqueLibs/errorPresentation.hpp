@@ -159,7 +159,11 @@ namespace hc::ui
         };
         // Stable product identifiers have explicit explanations; originals remain
         // in code_ for diagnostics, journals, scripts and support.
-        if (Code == "job-journal-busy" || Code == "archive-create-settings-lock" || Code == "archive-create-settings-lock-wait")
+        if (Code == "photoshop-composite-absent")
+            Set(ErrorKind::Unsupported, QObject::tr("PSD·PSB 파일에 합성 이미지가 저장되어 있지 않습니다."));
+        else if (Code == "photoshop-composite-zip")
+            Set(ErrorKind::Unsupported, QObject::tr("이 PSD·PSB 합성 이미지는 ZIP 압축을 사용합니다. 비압축 또는 RLE 합성 이미지를 지원합니다."));
+        else if (Code == "job-journal-busy" || Code == "archive-create-settings-lock" || Code == "archive-create-settings-lock-wait")
             Set(ErrorKind::InUse, QObject::tr("다른 작업이 기록 또는 설정을 사용하고 있습니다."), QObject::tr("진행 중인 작업이 끝난 뒤 다시 시도하세요."));
         else if (Code == "job-journal-remove" || Code == "job-outcomes-remove" || Code == "job-writes-remove")
             Set(ErrorKind::Unavailable, QObject::tr("작업 이력 파일을 삭제하지 못했습니다."), QObject::tr("이력 폴더의 접근 권한과 파일 사용 상태를 확인하세요."));

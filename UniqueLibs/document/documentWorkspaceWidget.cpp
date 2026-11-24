@@ -10,6 +10,7 @@
 #include "UniqueLibs/document/sqlite/sqliteFormat.hpp"
 #include "documentProgressOverlay.hpp"
 #include "loadingImageFrame.hpp"
+#include "imageComposite.hpp"
 #include "recentDocuments.hpp"
 #include "recentDocumentsDialog.hpp"
 #include "documentStartPage.hpp"
@@ -1899,7 +1900,8 @@ namespace hc::document
                     Tab->pane_->Cancel();
                     Tab->input_=std::move(Result.Value());Tab->path_=Tab->input_.path_;
                     Tab->sourceToken_.clear();Tab->broker_=false;Tab->hostSlot_=false;
-                    Tab->originalAuthority_=true;Tab->originalSave_=!(Tab->input_.source_.attributes_&1u);
+                    Tab->originalAuthority_ = true;
+                    Tab->originalSave_ = !(Tab->input_.source_.attributes_ & 1u) && !IsCompositeOnlyImage(Tab->input_.bytes_);
                     Tab->readingPath_.clear();Tab->readingEntry_.clear();Tab->displayName_.clear();Tab->recoveredName_.clear();
                     Tab->temporarySource_.clear();Tab->recovered_=false;Tab->closeAfterSave_=false;
                     Tab->checkpointedRevision_=(std::numeric_limits<std::uint64_t>::max)();
@@ -2002,9 +2004,10 @@ namespace hc::document
                 const bool Hwp=Tab->input_.viewId_=="hwp"||Tab->input_.viewId_=="hwpx";
                 // SQLite 는 sqlite3 가 파일을 직접 쓴다(커밋). 문서 바이트 저장 · 중개 저장을 쓰지 않는다.
                 const bool Sqlite=Tab->input_.viewId_=="sqlite";
-                Tab->originalSave_ = !Hwp && !Sqlite && Tab->originalAuthority_ && !Tab->input_.book_ && !Tab->recovered_ && !(Tab->input_.source_.attributes_ & 1u);
+                const bool CompositeOnly = Tab->input_.viewId_ == "image" && IsCompositeOnlyImage(Tab->input_.bytes_);
+                Tab->originalSave_ = !Hwp && !Sqlite && !CompositeOnly && Tab->originalAuthority_ && !Tab->input_.book_ && !Tab->recovered_ && !(Tab->input_.source_.attributes_ & 1u);
                 if(Hwp || Sqlite || Tab->input_.viewId_=="epub")Tab->broker_=false;
-                if (Tab->input_.book_) Tab->broker_ = false;
+                if (Tab->input_.book_ || CompositeOnly) Tab->broker_ = false;
                 SourceIdentity Source{Tab->input_.source_, {}, Tab->path_.toUtf8().toStdString(), Tab->sourceToken_.toStdString(),
                     (Tab->originalSave_ || Tab->broker_) && !Tab->recovered_};
                 Tab->loading_=true;
@@ -2545,7 +2548,9 @@ namespace hc::document
                         // original-provider binding without decoding/creating a second view.
                         const auto Begun=Tab->session_->BeginOpen(true);
                         if(!Begun.HasValue())break;
-                        Tab->sourceToken_=Item["sourceToken"].toString();Tab->broker_=Item["broker"].toBool()&&!Tab->input_.book_&&!Tab->pane_->IsProcessDocument();
+                        Tab->sourceToken_ = Item["sourceToken"].toString();
+                        const bool CompositeOnly = Tab->input_.viewId_ == "image" && IsCompositeOnlyImage(Tab->input_.bytes_);
+                        Tab->broker_ = Item["broker"].toBool() && !Tab->input_.book_ && !Tab->pane_->IsProcessDocument() && !CompositeOnly;
                         Tab->displayName_=Item["displayName"].toString();
                         SourceIdentity Source{Tab->input_.source_,{},Tab->path_.toUtf8().toStdString(),Tab->sourceToken_.toStdString(),Tab->broker_};
                         {auto Serialized=Tab->pane_->SerializeSession();Tab->serializationError_=Serialized.error_;Tab->session_->CompleteOpen(Begun.Value(),OpenedDocument{std::move(Source),Serialized.bytes_.toStdString()});}

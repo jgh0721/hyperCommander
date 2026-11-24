@@ -47,3 +47,6 @@ endfunction()
 hc_enable_preview_webp()
 add_subdirectory(cmake/Jpeg2000)
 add_subdirectory(cmake/JpegXl)
+add_subdirectory(cmake/AdditionalImageFormats)
+set(HC_PRODUCT_IMAGE_PLUGINS hc_image_codecs_plugin hc_jpeg2000_plugin hc_jpegxl_plugin
+    hc_qoi_plugin hc_dds_plugin hc_pcx_plugin hc_psd_plugin)
