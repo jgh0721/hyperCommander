@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "pluginProcess.hpp"
+#include "UniqueLibs/packageVerification.hpp"
 #include "UniqueLibs/productDefaults.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "commonLibs/layout/productLayout.hpp"
@@ -270,7 +271,11 @@ namespace hc::plugins
             return HostError("host-invalid-limits");
         const auto CallerContext = Context;
         Context = Bound(Context, Limits.startupMs_);
-        auto Inspected = InspectManifestFile(ManifestPath, Context); if (!Inspected.HasValue()) return Inspected.Failure();
+        const auto ApprovedFormat = Approval.reviewed_.format_;
+        const bool Viewer = ApprovedFormat == PluginFormat::Wlx || ApprovedFormat == PluginFormat::DopusViewer;
+        auto Inspected = InspectManifestFile(ManifestPath, Context,
+            Viewer ? ManifestInspection::Paths : ManifestInspection::Complete);
+        if (!Inspected.HasValue()) return Inspected.Failure();
         if (ConfiguredArchiveBinary) {
             const auto Expected = QFileInfo(*ConfiguredArchiveBinary).canonicalFilePath();
             if (Expected.isEmpty() || Expected.compare(Inspected.Value().binaryPath_, Qt::CaseInsensitive) != 0)
@@ -350,6 +355,13 @@ namespace hc::plugins
         // overrides. Its DLL search policy is configured before loading a plugin.
         // Children such as the HyperViewer workspace inherit this block.
         auto Variables = hc::win::RestrictedEnvironment(qEnvironmentVariable("SystemRoot") + "/System32");
+        if (S.viewer_) {
+            const auto Endpoint = qEnvironmentVariable(hc::packages::VerificationEndpoint);
+            if (!Endpoint.isEmpty() && !qEnvironmentVariableIsSet(hc::packages::VerifyEachOpen))
+                Variables << QString::fromLatin1(hc::packages::VerificationEndpoint) + '=' + Endpoint;
+            if (qEnvironmentVariableIsSet(hc::packages::VerifyEachOpen))
+                Variables << QString::fromLatin1(hc::packages::VerifyEachOpen) + "=1";
+        }
         if (S.helpers_ && Inspected.Value().manifest_.compatibility_ == "hyperviewer-v1")
             Variables << "HC_DOCUMENT_CONFIG_DIR=" + hc::settings::DocumentPaths().directory_;
         if(S.documentViewer_ && Inspected.Value().manifest_.id_=="builtin.hyperviewer") {

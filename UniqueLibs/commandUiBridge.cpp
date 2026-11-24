@@ -4,6 +4,8 @@
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "UniqueLibs/temporaryCleanup.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
+#include "UniqueLibs/packageVerification.hpp"
+#include "UniqueLibs/document/documentWebProcess.hpp"
 #include "qtMessageDialog.hpp"
 #include "builtinPluginCatalog.hpp"
 #include "HyperCommander/UIs/dialogShell.hpp"
@@ -13,6 +15,8 @@
 #include "archive/creationDialog.hpp"
 #include "archive/creationJob.hpp"
 #include "commonLibs/plugins/archiveVolumeNames.hpp"
+#include "commonLibs/layout/productLayout.hpp"
+#include "pluginHost/manifestFile.hpp"
 #include <QCheckBox>
 #include "commandUiBridge.hpp"
 #include "ui/childProcess.hpp"
@@ -384,9 +388,11 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         QTimer::singleShot(0, &Settings, [&Settings, Binary] { Settings.ShowPluginSettingsPage(Binary, true); });
         Settings.exec();
     };
+    ApplyPackageVerification();
     // Product startup may retain one idle viewer; Qt test mode owns its own
     // session lifecycle and explicitly prepares viewers in the adoption tests.
     if (!QStandardPaths::isTestModeEnabled() && QCoreApplication::applicationName() == "HyperCommander") QTimer::singleShot(500, viewers_, [this] {
+        if (qEnvironmentVariableIsSet(hc::packages::VerifyEachOpen)) return;
         const auto Catalog = hc::document::BuildDocumentHandlerCatalog(hc::settings::AppSettings(), QCoreApplication::applicationDirPath());
         const auto Found = Catalog.targets_.find("builtin.hyperviewer");
         if (Found != Catalog.targets_.end() && Found->second.descriptor_.available_) viewers_->PreparePlugin(Found->second.plugin_);
@@ -534,6 +540,35 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
 }
 
 CommandUiBridge::~CommandUiBridge() { clipboardImportStop_.request_stop(); }
+
+void CommandUiBridge::ApplyPackageVerification()
+{
+    if (QStandardPaths::isTestModeEnabled() || QCoreApplication::applicationName() != "HyperCommander") return;
+    auto& Settings = hc::settings::AppSettings();
+    const bool Strict = Settings.CommittedObject()["options"].toObject()["verifyPackagesOnOpen"].toBool();
+    if (verifyPackagesOnOpen_ == Strict) return;
+    verifyPackagesOnOpen_ = Strict;
+    hc::packages::ConfigureVerification(this, Strict, [Directory = QCoreApplication::applicationDirPath(),
+        Choices = Strict ? std::vector<QtViewerSurface::PluginViewerChoice>{} : QPluginHostSettings::ViewerChoices(Settings)] {
+        using namespace hc::plugins;
+        QList<hc::packages::VerificationRequest> Requests;
+        const auto ViewerManifest = QDir(Directory).filePath(QString::fromLatin1(hc::layout::HyperViewerPackage) + "/hyperviewer.json");
+        const auto Viewer = InspectManifestFile(ViewerManifest, {}, ManifestInspection::Paths);
+        if (Viewer.HasValue() && Viewer.Value().manifest_.id_ == "builtin.hyperviewer"
+            && Viewer.Value().manifest_.compatibility_ == "hyperviewer-v1") {
+            Requests.append(hc::packages::ForPlugin(Viewer.Value()));
+        }
+        Requests.append(hc::document::ProductWebVerificationRequests(Directory));
+        for (const auto& Choice : Choices) {
+            const auto& Options = Choice.options_;
+            if (!Options.approval_.approved_) continue;
+            const auto Plugin = InspectManifestFile(Options.manifestPath_, {}, ManifestInspection::Paths);
+            if (Plugin.HasValue() && Plugin.Value().manifest_ == Options.approval_.reviewed_)
+                Requests.append(hc::packages::ForPlugin(Plugin.Value()));
+        }
+        return Requests;
+    });
+}
 
 std::function<void()> CommandUiBridge::captureSelectionRemoval(const CommandContext& Context) const
 {

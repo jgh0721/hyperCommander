@@ -136,7 +136,8 @@ namespace hc::plugins
         if (!Manifest.packageRoot_.empty()) Object.insert("packageRoot", S(Manifest.packageRoot_));
         return QJsonDocument(Object).toJson();
     }
-    static Result<InspectedPlugin> InspectDeclared(const PluginManifest& Manifest, const QString& Directory, OperationContext Context)
+    static Result<InspectedPlugin> InspectDeclared(const PluginManifest& Manifest, const QString& Directory, OperationContext Context,
+        ManifestInspection Inspection = ManifestInspection::Complete)
     {
         if (const auto Stop = Context.Check({"plugin"})) return *Stop;
         auto Parsed = ParseManifest(EncodeManifest(Manifest)); if (!Parsed.HasValue()) return Parsed.Failure();
@@ -146,6 +147,7 @@ namespace hc::plugins
         const auto Binary = QFileInfo(QDir(Root).filePath(QString::fromStdString(Relative))).canonicalFilePath();
         const auto Prefix = Root.endsWith('/') ? Root : Root + '/';
         if (Root.isEmpty() || Binary.isEmpty() || !Binary.startsWith(Prefix, Qt::CaseInsensitive)) return Invalid("plugin-binary-outside-root");
+        if (Inspection == ManifestInspection::Paths) return Binary;
         QFile File(Binary); if (!File.open(QIODevice::ReadOnly)) return Error{ErrorCategory::Unavailable, "plugin-binary-open", {"plugin"}};
         constexpr qint64 Limit = 512LL * 1024 * 1024;
         if (File.size() > Limit) return Error{ErrorCategory::BudgetExceeded, "plugin-binary-budget", {"plugin"}};
@@ -154,6 +156,7 @@ namespace hc::plugins
         if (!Arch.HasValue()) return Arch.Failure();
         const bool Companion = Manifest.compatibility_ == "total7zip" && Relative == "7z.dll" && !Executable && Arch.Value() == Architecture::X86;
         if (Arch.Value() != Parsed.Value().architecture_ && !Companion) return Invalid("plugin-binary-architecture-mismatch");
+        if (Inspection == ManifestInspection::Headers) return Binary;
         ContentSha256 Hash;
         if (!Hash.Add(Header.constData(), ULONG(Header.size()))) return Invalid("plugin-binary-hash");
         qint64 Bytes = Header.size();
@@ -196,9 +199,9 @@ namespace hc::plugins
         // The host additionally avoids package-directory loader searches.
         for (const auto& File : QDir(QFileInfo(Binary.Value()).absolutePath()).entryInfoList({"*.dll"}, QDir::Files | QDir::Hidden | QDir::System))
             if (!Allowed.contains(File.canonicalFilePath().toCaseFolded())) return Invalid("plugin-unreviewed-adjacent-dll");
-        return InspectedPlugin{std::move(Parsed.Value()), Binary.Value(), Dependencies, Helpers};
+        return InspectedPlugin{std::move(Parsed.Value()), Binary.Value(), Dependencies, Helpers, Root};
     }
-    Result<InspectedPlugin> InspectManifestFile(const QString& Path, OperationContext Context)
+    Result<InspectedPlugin> InspectManifestFile(const QString& Path, OperationContext Context, ManifestInspection Inspection)
     {
         if (const auto Stop = Context.Check({"plugin"})) return *Stop;
         QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return Error{ErrorCategory::Unavailable, "plugin-manifest-open", {"plugin"}};
@@ -210,7 +213,7 @@ namespace hc::plugins
             if (!Root.endsWith(Package, Qt::CaseInsensitive)) return Invalid("plugin-package-root");
             Root.chop(Package.size());
         }
-        return InspectDeclared(Parsed.Value(), Root, Context);
+        return InspectDeclared(Parsed.Value(), Root, Context, Inspection);
     }
     bool PluginPackageChanged(const std::string& Code)
     {

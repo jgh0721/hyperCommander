@@ -1,5 +1,6 @@
 ﻿#include "qtViewerHost.hpp"
 #include "qtViewerProvider.hpp"
+#include "packageVerification.hpp"
 #include "qtMessageDialog.hpp"
 #include "commonLibs/layout/productLayout.hpp"
 #include <QCloseEvent>
@@ -157,7 +158,8 @@ QDialog* QtViewerHost::OpenFull(std::shared_ptr<hc::storage::IContentSource> Sou
 }
 void QtViewerHost::PreparePlugin(hc::plugins::PluginViewerOptions Options)
 {
-    if (closing_ || !pluginViewer_ || preparedWindow_ || !Options.approval_.approved_
+    if (qEnvironmentVariableIsSet(hc::packages::VerifyEachOpen)
+        || closing_ || !pluginViewer_ || preparedWindow_ || !Options.approval_.approved_
         || Options.approval_.reviewed_.id_ != "builtin.hyperviewer"
         || Options.approval_.reviewed_.compatibility_ != "hyperviewer-v1"
         || QFileInfo(Options.binaryPath_).canonicalFilePath() != QFileInfo(QCoreApplication::applicationDirPath() + '/'
@@ -175,7 +177,8 @@ void QtViewerHost::PreparePlugin(hc::plugins::PluginViewerOptions Options)
 }
 bool QtViewerHost::matchesPrepared(const hc::plugins::PluginViewerOptions& Options) const
 {
-    return preparedOptions_ && Options.approval_.approved_ && preparedOptions_->approval_.reviewed_ == Options.approval_.reviewed_
+    return !qEnvironmentVariableIsSet(hc::packages::VerifyEachOpen)
+        && preparedOptions_ && Options.approval_.approved_ && preparedOptions_->approval_.reviewed_ == Options.approval_.reviewed_
         && preparedOptions_->approval_.granted_ == Options.approval_.granted_
         && preparedOptions_->approval_.allowInProcess_ == Options.approval_.allowInProcess_
         && preparedOptions_->limits_ == Options.limits_ && preparedOptions_->purpose_ == Options.purpose_
@@ -200,7 +203,8 @@ void QtViewerHost::retirePlugin(QDialog* Window, QtPluginViewerSurface* Surface,
     // ESC closed every document but left the helper running. Keep it as the
     // next warm viewer instead of starting another helper for the next F3.
     const auto Details = Surface->Details();
-    if (Recyclable && !closing_ && Surface->IsReady() && Details.documentChannel_
+    if (Recyclable && !qEnvironmentVariableIsSet(hc::packages::VerifyEachOpen)
+        && !closing_ && Surface->IsReady() && Details.documentChannel_
         && Details.documentState_["closeRequested"].toBool() && (!preparedSurface_ || !preparedSurface_->IsReady()))
         {
             if (preparedWindow_) preparedWindow_->deleteLater(); // A slower, still starting warm viewer.

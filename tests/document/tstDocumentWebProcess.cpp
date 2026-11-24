@@ -9,6 +9,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QScopeGuard>
+#include <QtConcurrentRun>
 #include <cstdio>
 #include "UniqueLibs/document/documentWebProcess.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
@@ -29,6 +31,55 @@ private:
     }
     WebProcessLimits limits() { return {4,512ULL*1024*1024,1500}; }
 private slots:
+    void startupVerificationRequiresMatchingLiveLease()
+    {
+        using namespace hc::packages;
+        QTemporaryDir Directory;
+        QVERIFY(Directory.isValid());
+        const auto Path = Directory.filePath("fixture.bin");
+        QFile File(Path);
+        QVERIFY(File.open(QIODevice::WriteOnly));
+        QCOMPARE(File.write("fixture"), 7);
+        File.close();
+        const auto Hash = QCryptographicHash::hash(QByteArrayLiteral("fixture"), QCryptographicHash::Sha256).toHex();
+        const VerificationRequest Request{QFileInfo(Path).canonicalPath(), {{"fixture.bin", Hash}}};
+        const auto SavedEndpoint = qgetenv(VerificationEndpoint);
+        const auto SavedStrict = qgetenv(VerifyEachOpen);
+        const auto RestoreEnvironment = qScopeGuard([&] {
+            SavedEndpoint.isNull() ? qunsetenv(VerificationEndpoint) : qputenv(VerificationEndpoint, SavedEndpoint);
+            SavedStrict.isNull() ? qunsetenv(VerifyEachOpen) : qputenv(VerifyEachOpen, SavedStrict);
+        });
+        QObject Owner;
+        ConfigureVerification(&Owner, false, [Request] { return QList{Request}; });
+        QVERIFY(qEnvironmentVariableIsSet(VerificationEndpoint));
+        auto Lease = FileLease::Acquire(Request);
+        QVERIFY(Lease);
+        QFuture<bool> Poll;
+        const auto Accepted = [&] {
+            if (Poll.isRunning()) return false;
+            if (Poll.isValid() && Poll.isFinished() && Poll.result()) return true;
+            Poll = QtConcurrent::run([Lease] { return Lease->HasStartupVerification(); });
+            return false;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(Accepted(), 3000);
+        auto Other = Request;
+        Other.hashes_["fixture.bin"] = QByteArray(64, 'f');
+        auto OtherLease = FileLease::Acquire(Other);
+        QVERIFY(OtherLease);
+        auto Mismatch = QtConcurrent::run([OtherLease] { return OtherLease->HasStartupVerification(); });
+        QTRY_VERIFY(Mismatch.isFinished());
+        QVERIFY(!Mismatch.result());
+        QVERIFY(!File.open(QIODevice::WriteOnly));
+        ConfigureVerification(&Owner, true, {});
+        QVERIFY(qEnvironmentVariableIsSet(VerifyEachOpen));
+        QVERIFY(!qEnvironmentVariableIsSet(VerificationEndpoint));
+        QVERIFY(!Lease->HasStartupVerification());
+        OtherLease.reset();
+        Lease.reset();
+        const auto CanWrite = [&] { QFile Probe(Path); return Probe.open(QIODevice::WriteOnly); };
+        QTRY_VERIFY(CanWrite());
+    }
+
     void productEpubCompiledPolicyIgnoresEnvironment()
     {
         const auto Before = MakeProductEpubRuntime("C:/application");

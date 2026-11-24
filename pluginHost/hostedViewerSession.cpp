@@ -476,7 +476,8 @@ namespace hc::plugins
                 hc::document::ImageTraceSpan Trace("viewer.open");
                 if (const auto Stop = Context.Check({"wlx"})) return *Stop;
                 if (!Options.approval_.approved_) return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wlx"}};
-                auto Inspected = InspectManifestFile(Options.manifestPath_, Context); if (!Inspected.HasValue()) return Inspected.Failure();
+                auto Inspected = InspectManifestFile(Options.manifestPath_, Context, ManifestInspection::Paths);
+                if (!Inspected.HasValue()) return Inspected.Failure();
                 const bool Dopus = Inspected.Value().manifest_.format_ == PluginFormat::DopusViewer;
                 if ((!Dopus && Inspected.Value().manifest_.format_ != PluginFormat::Wlx) || !Inspected.Value().manifest_.extensions_.contains(Extension::Viewer) || Options.approval_.reviewed_ != Inspected.Value().manifest_)
                     return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wlx"}};
@@ -674,6 +675,7 @@ namespace hc::plugins
                     // can still be parsing. Bind only after its slot is stable.
                     auto Deadline = std::min(Context.deadline_, std::chrono::steady_clock::now() + std::chrono::seconds(15));
                     auto WaitTrace=std::make_unique<hc::document::ImageTraceSpan>("viewer.initial-content");
+                    QByteArray Hash;
                     for (;;) {
                         const auto PollStarted = std::chrono::steady_clock::now();
                         auto Current = UiCall([&](OperationContext Calls) { return Document->Call("DocumentState", {}, {}, {}, Calls); }); if (!Current.HasValue()) return Current.Failure();
@@ -694,7 +696,10 @@ namespace hc::plugins
                                     && !Slot["canSave"].toBool() && !Slot["canSaveAs"].toBool();
                                 const bool ImageSource=Slot["imagePresentationReady"].toBool() && !Slot["loading"].toBool()
                                     && Slot["lifecycle"].toString()=="ready";
-                                if (EpubSource || ImageSource || (Current.Value()["idle"].toBool() && !Slot["loading"].toBool() && Slot["lifecycle"].toString() == "ready")) break;
+                                if (EpubSource || ImageSource || (Current.Value()["idle"].toBool() && !Slot["loading"].toBool() && Slot["lifecycle"].toString() == "ready")) {
+                                    Hash = QByteArray::fromHex(Slot["inputSha256"].toString().toLatin1());
+                                    break;
+                                }
                             }
                         }
                         if (auto Stop = Context.Check({"document"})) return *Stop;
@@ -709,11 +714,6 @@ namespace hc::plugins
                     PreparationStage("verify");
                     // The approved reader already hashed the exact snapshot while loading it.
                     // Re-reading an SMB/RDP input here doubles first-open network traffic.
-                    QByteArray Hash;
-                    const auto Loaded = UiCall([&](OperationContext Calls) { return Document->Call("DocumentState", {}, {}, {}, Calls); });
-                    if (!Loaded.HasValue()) return Loaded.Failure();
-                    for (const auto& Item : Loaded.Value()["documents"].toArray())
-                        if (Item.toObject()["hostSlot"].toBool()) Hash = QByteArray::fromHex(Item.toObject()["inputSha256"].toString().toLatin1());
                     if (!DirectBook && Hash.size() != 32) return Invalid("document-input-hash-required");
                     const auto ArchiveSource = std::dynamic_pointer_cast<ProviderContentSource>(Source);
                     const auto Writeback = ArchiveSource ? ArchiveSource->GetArchiveWriteback() : ProviderContentSource::ArchiveWriteback{};

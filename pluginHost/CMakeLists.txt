@@ -13,6 +13,13 @@ qt_add_library(hc_plugin_manifest STATIC manifestFile.cpp manifestFile.hpp)
 target_include_directories(hc_plugin_manifest PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(hc_plugin_manifest PUBLIC hc_plugin_contract Qt6::Core PRIVATE bcrypt)
 target_compile_options(hc_plugin_manifest PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+qt_add_library(hc_package_verification STATIC
+    ../UniqueLibs/packageVerification.cpp ../UniqueLibs/packageVerification.hpp)
+target_include_directories(hc_package_verification PRIVATE
+    ${PROJECT_SOURCE_DIR}/HyperCommander ${PROJECT_SOURCE_DIR}/commonLibs
+    ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include)
+target_link_libraries(hc_package_verification PUBLIC Qt6::Core PRIVATE Qt6::Widgets Qt6::Network Qt6::Concurrent hc_update_core)
+target_compile_options(hc_package_verification PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 qt_add_executable(hc-plugin-inspect inspectMain.cpp)
 target_link_libraries(hc-plugin-inspect PRIVATE hc_plugin_manifest)
 target_compile_options(hc-plugin-inspect PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
@@ -26,7 +33,7 @@ target_sources(hc_plugin_process PRIVATE archiveCodec.cpp archiveCodec.hpp hoste
 target_sources(hc_plugin_process PRIVATE approvedWcxBackend.cpp approvedWcxBackend.hpp)
 target_sources(hc_plugin_process PRIVATE wlxDetection.cpp wlxDetection.hpp)
 target_sources(hc_plugin_process PRIVATE hostedDataProviders.cpp hostedDataProviders.hpp ../commonLibs/plugins/metadataProvider.hpp ../commonLibs/plugins/contentConverter.hpp)
-target_link_libraries(hc_plugin_process PUBLIC hc_plugin_manifest PRIVATE advapi32 user32)
+target_link_libraries(hc_plugin_process PUBLIC hc_plugin_manifest hc_package_verification PRIVATE advapi32 user32)
 if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND HC_RHWP_APPROVED_INVENTORY_SHA256)
     target_compile_definitions(hc_plugin_process PRIVATE HC_RHWP_HOST_RUNTIME=1)
 endif()

@@ -1,5 +1,6 @@
 ﻿#include "qtPluginViewerSurface.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
+#include "packageVerification.hpp"
 #include "document/loadingImageFrame.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include <QMessageBox>
@@ -125,7 +126,8 @@ void QtPluginViewerController::Retire(QWidget* Anchor, const std::shared_ptr<Hos
 bool QtPluginViewerController::CachePreview(QWidget* Anchor, const std::shared_ptr<HostedViewerSession>& Session,
     const PluginViewerOptions& Options)
 {
-    if (!Anchor || !Session || Options.purpose_ != ViewerPurpose::QuickPreview
+    if (qEnvironmentVariableIsSet(hc::packages::VerifyEachOpen)
+        || !Anchor || !Session || Options.purpose_ != ViewerPurpose::QuickPreview
         || Options.approval_.reviewed_.id_ != "builtin.hyperviewer") return false;
     const auto Details = Session->Details();
     if (!Details.documentChannel_ || Details.viewer_.status_ != ViewerStatus::Ready) return false;
@@ -147,7 +149,8 @@ QtPluginViewerController::CachedPreview QtPluginViewerController::TakePreview(co
     if (!previewCache_.session_ || !previewOptions_) return {};
     const auto& Cached = *previewOptions_;
     const auto Details = previewCache_.session_->Details();
-    const bool Compatible = previewFiles_ == PreviewFiles(Options) && Options.purpose_ == ViewerPurpose::QuickPreview && Options.approval_.approved_
+    const bool Compatible = !qEnvironmentVariableIsSet(hc::packages::VerifyEachOpen)
+        && previewFiles_ == PreviewFiles(Options) && Options.purpose_ == ViewerPurpose::QuickPreview && Options.approval_.approved_
         && Cached.approval_.reviewed_ == Options.approval_.reviewed_
         && Cached.approval_.granted_ == Options.approval_.granted_
         && Cached.binaryPath_ == Options.binaryPath_ && Cached.manifestPath_ == Options.manifestPath_
@@ -320,7 +323,8 @@ void QtPluginViewerSurface::RequestArchiveClose()
 }
 bool QtPluginViewerSurface::ReusePreview(const PluginViewerOptions& Options, std::shared_ptr<IContentSource> Source)
 {
-    if (!previewOptions_ || !preview_ || !ready_ || interacted_ || previewFiles_ != PreviewFiles(Options)) return false;
+    if (qEnvironmentVariableIsSet(hc::packages::VerifyEachOpen)
+        || !previewOptions_ || !preview_ || !ready_ || interacted_ || previewFiles_ != PreviewFiles(Options)) return false;
     const auto& Previous = *previewOptions_;
     if (!Options.approval_.approved_ || Previous.approval_.reviewed_ != Options.approval_.reviewed_
         || Previous.approval_.granted_ != Options.approval_.granted_ || Previous.applicationRule_ != Options.applicationRule_

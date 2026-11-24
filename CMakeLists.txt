@@ -141,6 +141,8 @@ add_subdirectory(HyperCommanderUpdater)
 target_link_libraries(HyperEditor PRIVATE hc_update_core)
 # HyperCommanderBuiltInPlugin/HyperViewer validates this pinned package during configure.
 # HWP F3 uses the product SDI entry outside the UI-restricted plugin Job.
+target_compile_definitions(hc_document_broker PRIVATE
+    HC_PACKAGE_RHWP_INVENTORY_SHA256="${HC_RHWP_APPROVED_INVENTORY_SHA256}")
 if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND HC_RHWP_APPROVED_INVENTORY_SHA256)
     target_compile_definitions(hc_document_open PRIVATE HC_RHWP_F3_RUNTIME=1)
     file(READ "${HC_RHWP_PRODUCT_RUNTIME_DIRECTORY}/runtime-inventory.json" HC_RHWP_PRODUCT_INVENTORY)

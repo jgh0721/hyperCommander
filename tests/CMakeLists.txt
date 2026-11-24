@@ -1083,7 +1083,7 @@ set_target_properties(hc_web_process_fixture PROPERTIES HC_NATIVE_EXECUTABLE ON)
 target_compile_options(hc_web_process_fixture PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
 qt_add_executable(hc_document_web_process_tests document/tstDocumentWebProcess.cpp)
-target_link_libraries(hc_document_web_process_tests PRIVATE hc_document_broker Qt6::Test)
+target_link_libraries(hc_document_web_process_tests PRIVATE hc_document_broker Qt6::Test Qt6::Concurrent)
 target_compile_options(hc_document_web_process_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_dependencies(hc_document_web_process_tests hc_web_process_fixture)
 hc_enable_qt_deployment(hc_document_web_process_tests TEST)

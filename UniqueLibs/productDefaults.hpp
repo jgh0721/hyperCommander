@@ -1553,6 +1553,7 @@ namespace hc::defaults
                  { "enableJobRecovery",       false },
                  { "saveJobProgress",         false },
                  { "showJobDetails",          false },
+                 { "verifyPackagesOnOpen",    false },
                  { "fileColorRules",          FileGroups( ExistingInstallation ) } };
     }
     inline QJsonObject Settings( bool ExistingInstallation = false )

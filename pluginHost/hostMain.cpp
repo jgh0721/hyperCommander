@@ -1,5 +1,6 @@
 ﻿#include "pipeChannel.hpp"
 #include "UniqueLibs/nativeFilePath.hpp"
+#include "UniqueLibs/packageVerification.hpp"
 #include "manifestFile.hpp"
 #include "wcxHostService.hpp"
 #include "HyperCommanderBuiltInPlugin/SevenZip/sevenZipBackend.hpp"
@@ -16,6 +17,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QScopeGuard>
+#include <QSet>
 #include <thread>
 #include <QWidget>
 #include <QEventLoop>
@@ -61,6 +63,7 @@ namespace
     struct LoadedPlugin
     {
         std::vector<WinHandle> locks_;
+        std::shared_ptr<hc::packages::FileLease> verifiedLease_;
         std::unique_ptr<WcxHostService> archives_;
         std::unique_ptr<NativeViewerHostService> viewer_;
         std::unique_ptr<TcDataHostService> data_;
@@ -81,6 +84,7 @@ namespace
             if (module_) FreeLibrary(module_);
             for (auto At = dependencies_.rbegin(); At != dependencies_.rend(); ++At) FreeLibrary(*At);
             module_ = nullptr; dependencies_.clear(); locks_.clear();
+            verifiedLease_.reset();
         }
         void Close() { CloseServices(); Unload(); }
         Result<Unit> Open(const QJsonObject& Hello, DWORD ParentProcess)
@@ -97,26 +101,41 @@ namespace
                 || Expected.Value().execution_ != ExecutionMode::Isolated
                 || (Expected.Value().format_ == PluginFormat::Wcx && !Expected.Value().extensions_.contains(Extension::ArchiveRead))
                 || Expected.Value().protocol_.major_ != 1 || Expected.Value().protocol_.minimumMinor_ != 0) return HostError("host-unsupported-manifest");
-            auto Inspected = InspectManifestFile(Path, Deadline(5000)); if (!Inspected.HasValue()) return Inspected.Failure();
+            const auto Format = Expected.Value().format_;
+            const bool Viewer = Format == PluginFormat::Wlx || Format == PluginFormat::DopusViewer;
+            auto Inspected = InspectManifestFile(Path, Deadline(5000),
+                Viewer ? ManifestInspection::Paths : ManifestInspection::Complete);
+            if (!Inspected.HasValue()) return Inspected.Failure();
             if (Inspected.Value().manifest_ != Expected.Value()) return HostError("host-manifest-changed");
             const auto Binary = Inspected.Value().binaryPath_;
             // Deny replacement of the file and its ancestor directory names until
             // unload. Recheck while these handles are held, before any DllMain.
             auto PackageFiles = Inspected.Value().dependencyPaths_; PackageFiles.append(Inspected.Value().helperPaths_); PackageFiles.prepend(Binary);
-            for (const auto& PackageFile : PackageFiles)
-            {
-            auto Directory = QFileInfo(PackageFile).absolutePath();
-            for (;;)
-            {
-                WinHandle Lock(CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Directory).utf16()), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
-                if (!Lock.Valid()) return HostError("host-package-lock", GetLastError()); locks_.push_back(std::move(Lock));
-                const auto Parent = QFileInfo(Directory).absolutePath(); if (Parent == Directory) break; Directory = Parent;
+            if (Viewer && qEnvironmentVariableIsSet(hc::packages::VerificationEndpoint))
+                verifiedLease_ = hc::packages::FileLease::Acquire(hc::packages::ForPlugin(Inspected.Value()));
+            QSet<QString> LockedDirectories;
+            if (!verifiedLease_) {
+                for (const auto& PackageFile : PackageFiles) {
+                    auto Directory = QFileInfo(PackageFile).absolutePath();
+                    while (!LockedDirectories.contains(Directory)) {
+                        WinHandle Lock(CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Directory).utf16()), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+                        if (!Lock.Valid()) return HostError("host-package-lock", GetLastError());
+                        locks_.push_back(std::move(Lock));
+                        LockedDirectories.insert(Directory);
+                        const auto Parent = QFileInfo(Directory).absolutePath();
+                        if (Parent == Directory) break;
+                        Directory = Parent;
+                    }
+                    WinHandle File(CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(PackageFile).utf16()), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+                    if (!File.Valid()) return HostError("host-binary-lock", GetLastError());
+                    locks_.push_back(std::move(File));
+                }
             }
-            WinHandle File(CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(PackageFile).utf16()), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-            if (!File.Valid()) return HostError("host-binary-lock", GetLastError()); locks_.push_back(std::move(File));
-            }
-            Inspected = InspectManifestFile(Path, Deadline(5000)); if (!Inspected.HasValue()) return Inspected.Failure();
+            const auto Inspection = verifiedLease_ && verifiedLease_->HasStartupVerification()
+                ? ManifestInspection::Headers : ManifestInspection::Complete;
+            Inspected = InspectManifestFile(Path, Deadline(5000), Inspection);
+            if (!Inspected.HasValue()) return Inspected.Failure();
             if (Inspected.Value().manifest_ != Expected.Value() || Inspected.Value().binaryPath_ != Binary) return HostError("host-manifest-changed");
             auto RecheckedFiles = Inspected.Value().dependencyPaths_; RecheckedFiles.append(Inspected.Value().helperPaths_); RecheckedFiles.prepend(Binary);
             if (RecheckedFiles != PackageFiles) return HostError("host-dependency-changed");

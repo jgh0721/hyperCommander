@@ -39,6 +39,18 @@ namespace hc::document
             Handle(const Handle&) = delete;
             Handle& operator=(const Handle&) = delete;
         };
+        struct VerifiedRuntime
+        {
+            QString root_;
+            QMap<QString, QByteArray> inventory_;
+            std::vector<std::unique_ptr<Handle>> handles_;
+            std::shared_ptr<packages::FileLease> startupLease_;
+        };
+
+        // Share the approved file locks while a product RHWP helper is alive.
+        std::mutex RuntimeMutex;
+        std::weak_ptr<const VerifiedRuntime> LiveHwpRuntime;
+
         std::wstring Quote(const QString& Value)
         {
             std::wstring Out=L"\""; unsigned Slashes=0;
@@ -180,6 +192,7 @@ namespace hc::document
         mutable std::mutex mutex_;
         Handle job_, process_, pipe_;
         std::vector<std::unique_ptr<Handle>> leases_;
+        std::shared_ptr<const VerifiedRuntime> runtimeLease_;
         std::array<unsigned char,16> connection_{};
         DWORD pid_=0;
         std::uintptr_t childWindow_=0;
@@ -209,7 +222,7 @@ namespace hc::document
             }
             if(job_.Valid()) { CloseHandle(job_.value_); job_.value_=nullptr; }
             if(pipe_.Valid()) { CloseHandle(pipe_.value_); pipe_.value_=nullptr; }
-            leases_.clear(); retired_=true; return true;
+            leases_.clear(); runtimeLease_.reset(); retired_=true; return true;
         }
         ~State()
         {
@@ -232,6 +245,21 @@ namespace hc::document
     WebProcessRuntime MakeProductEpubRuntime(const QString& ApplicationDirectory)
     {
         return MakeProductEpubRuntime(ApplicationDirectory, QByteArray(HC_EPUB_APPROVED_INVENTORY_SHA256));
+    }
+
+    QList<packages::VerificationRequest> ProductWebVerificationRequests(const QString& ApplicationDirectory)
+    {
+        QList<packages::VerificationRequest> Requests;
+        const WebProcessRuntime Hwp{QDir::cleanPath(QDir(ApplicationDirectory).filePath(hc::layout::RhwpRuntime)),
+            {}, QByteArray(HC_PACKAGE_RHWP_INVENTORY_SHA256)};
+        for (auto Runtime : {Hwp, MakeProductEpubRuntime(ApplicationDirectory)}) {
+            if (!Runtime.approvedInventorySha256_ || Runtime.approvedInventorySha256_->isEmpty()) continue;
+            QString Error;
+            if (!ReadApprovedInventory(Runtime, Error)) continue;
+            const auto Root = QFileInfo(Runtime.root_).canonicalFilePath();
+            if (!Root.isEmpty()) Requests.append({Root, std::move(Runtime.sha256_)});
+        }
+        return Requests;
     }
     std::unique_ptr<DocumentWebProcess> DocumentWebProcess::Start(const WebProcessRuntime& RequestedRuntime,
         WebProcessLimits Limits,std::uintptr_t ParentWindow,WebProcessError& Error,
@@ -295,64 +323,98 @@ namespace hc::document
         if(Root.isEmpty() || !QFileInfo(Root).isDir() || Runtime.sha256_.isEmpty() || Runtime.sha256_.size()>512
             || !Runtime.sha256_.contains(Executable)) return Fail("web-owner-runtime");
         const auto VerificationStart=StartupClock.elapsed();
-        startup::Scope LeasesAndHash("runtime.leasesAndHash");
-        startup::Scope ProviderInit("runtime.shaProviderInitialize");
-        HwpRuntimeSha256 RuntimeHash(RuntimeHashBackend::PreferCng,RuntimeSha256Api::System(),S->epub_);
-        ProviderInit.End();startup::Data().SetRuntimeHashBackend(RuntimeHash.UsesCng());
-        double HashMs = 0; qint64 HashBytes = 0, HashFiles = 0;
-        QSet<QString> Seen;
-        for(auto At=Runtime.sha256_.cbegin();At!=Runtime.sha256_.cend();++At)
-        {
-            const auto Relative=At.key(); const auto Parts=Relative.split('/');
-            if(Relative.isEmpty() || Relative.contains('\\') || Relative.contains(':') || QDir::isAbsolutePath(Relative)
-                || Parts.size()>32 || Parts.contains("..") || Parts.contains(".") || Parts.contains("") || Seen.contains(Relative.toCaseFolded())
-                || At.value().size()!=64 || QByteArray::fromHex(At.value()).toHex()!=At.value()) return Fail("web-owner-runtime-entry");
-            Seen.insert(Relative.toCaseFolded());
-            // Do not follow junctions/symlinks supplied as runtime children. Keep
-            // each directory open against rename while acquiring descendant leases.
-            auto Current=Root;
-            for(int I=-1;I<Parts.size();++I)
-            {
-                if(I>=0) Current+='/'+Parts[I];
-                const auto Attributes=GetFileAttributesW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Current).utf16()));
-                if(Attributes==INVALID_FILE_ATTRIBUTES) return Fail("web-owner-runtime-attributes");
-                if(Attributes&FILE_ATTRIBUTE_REPARSE_POINT) return Fail("web-owner-runtime-reparse");
-                auto Lease=std::make_unique<Handle>();
-                const bool Directory=(Attributes&FILE_ATTRIBUTE_DIRECTORY)!=0;
-                if(Directory!=(I<Parts.size()-1)) return Fail("web-owner-runtime-kind");
-                Lease->value_=CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Current).utf16()),Directory?FILE_READ_ATTRIBUTES:GENERIC_READ,
-                    Directory?(FILE_SHARE_READ|FILE_SHARE_WRITE):FILE_SHARE_READ,nullptr,OPEN_EXISTING,
-                    (Directory?FILE_FLAG_BACKUP_SEMANTICS:FILE_FLAG_SEQUENTIAL_SCAN)|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
-                if(!Lease->Valid()) return Fail("web-owner-runtime-lease");
-                BY_HANDLE_FILE_INFORMATION Info{};
-                if(!GetFileInformationByHandle(Lease->value_,&Info)) return Fail("web-owner-runtime-info");
-                if(Info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT) return Fail("web-owner-runtime-reparse");
-                if(((Info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)!=0)!=Directory) return Fail("web-owner-runtime-kind");
-                if(!Directory)
-                {
-                    LARGE_INTEGER Size{};
-                    if(!GetFileSizeEx(Lease->value_,&Size) || Size.QuadPart<0 || Size.QuadPart>512LL*1024*1024) return Fail("web-owner-runtime-size");
-                    const auto HashStart = startup::Data().Now();
-                    QByteArray Digest;
-                    const auto Hashed=RuntimeHash.Read(Lease->value_,Size.QuadPart,Digest,Cancelled);
-                    if(Hashed==RuntimeHashResult::ReadFailed) return Fail("web-owner-runtime-read");
-                    if(Hashed==RuntimeHashResult::LengthMismatch) return Fail("web-owner-runtime-size");
-                    if(Hashed==RuntimeHashResult::Cancelled) return Fail("web-owner-runtime-cancelled");
-                    if(Hashed!=RuntimeHashResult::Success || Digest!=At.value()) return Fail("web-owner-runtime-hash");
-                    HashMs += startup::Data().Now()-HashStart; HashBytes += Size.QuadPart; ++HashFiles;
-                }
-                S->leases_.push_back(std::move(Lease));
+        const bool StartupCache = Runtime.approvedInventorySha256_ && !qEnvironmentVariableIsSet(packages::VerifyEachOpen)
+            && qEnvironmentVariableIsSet(packages::VerificationEndpoint);
+        const bool ShareRuntime = StartupCache && Runtime.kind_ == WebProcessKind::Rhwp;
+        if (ShareRuntime) {
+            std::lock_guard Lock(RuntimeMutex);
+            const auto Live = LiveHwpRuntime.lock();
+            if (Live && Live->root_ == Root && Live->inventory_ == Runtime.sha256_)
+                S->runtimeLease_ = Live;
+        }
+        S->startupMetrics_["reusedRuntime"] = bool(S->runtimeLease_);
+        if (!S->runtimeLease_ && StartupCache) {
+            auto Lease = packages::FileLease::Acquire({Root, Runtime.sha256_});
+            if (Lease && Lease->HasStartupVerification()) {
+                auto Verified = std::make_shared<VerifiedRuntime>();
+                Verified->root_ = Root;
+                Verified->inventory_ = Runtime.sha256_;
+                Verified->startupLease_ = std::move(Lease);
+                S->runtimeLease_ = std::move(Verified);
+                S->startupMetrics_["reusedStartupVerification"] = true;
             }
         }
-        startup::Scope ProviderCleanup("runtime.shaProviderCleanup");
-        const bool CngBackend=RuntimeHash.UsesCng();const bool ProviderClosed=RuntimeHash.Close();ProviderCleanup.End();
-        if(!ProviderClosed) return Fail("web-owner-runtime-hash");
-        if(Cancelled && Cancelled()) return Fail("web-owner-runtime-cancelled");
-        LeasesAndHash.End(HashBytes,HashFiles);
-        startup::Data().Aggregate("runtime.hashReadAndSha256",HashMs,HashBytes,HashFiles);
-        S->startupMetrics_["verificationMs"]=StartupClock.elapsed()-VerificationStart;
-        const auto HashMetrics=RuntimeHash.Metrics();
-        S->startupMetrics_["hashMs"]=HashMetrics.readMs_+HashMetrics.updateMs_;S->startupMetrics_["readMs"]=HashMetrics.readMs_;S->startupMetrics_["shaMs"]=HashMetrics.updateMs_;S->startupMetrics_["cng"]=CngBackend;S->startupMetrics_["hashBytes"]=HashBytes;S->startupMetrics_["hashFiles"]=HashFiles;
+        if (!S->runtimeLease_) {
+            auto Verified = std::make_shared<VerifiedRuntime>();
+            Verified->root_ = Root;
+            Verified->inventory_ = Runtime.sha256_;
+            startup::Scope LeasesAndHash("runtime.leasesAndHash");
+            startup::Scope ProviderInit("runtime.shaProviderInitialize");
+            HwpRuntimeSha256 RuntimeHash(RuntimeHashBackend::PreferCng,RuntimeSha256Api::System(),S->epub_);
+            ProviderInit.End();startup::Data().SetRuntimeHashBackend(RuntimeHash.UsesCng());
+            double HashMs = 0; qint64 HashBytes = 0, HashFiles = 0;
+            QSet<QString> Seen, LockedDirectories;
+            for(auto At=Runtime.sha256_.cbegin();At!=Runtime.sha256_.cend();++At)
+            {
+                const auto Relative=At.key(); const auto Parts=Relative.split('/');
+                if(Relative.isEmpty() || Relative.contains('\\') || Relative.contains(':') || QDir::isAbsolutePath(Relative)
+                    || Parts.size()>32 || Parts.contains("..") || Parts.contains(".") || Parts.contains("") || Seen.contains(Relative.toCaseFolded())
+                    || At.value().size()!=64 || QByteArray::fromHex(At.value()).toHex()!=At.value()) return Fail("web-owner-runtime-entry");
+                Seen.insert(Relative.toCaseFolded());
+                // Do not follow junctions/symlinks supplied as runtime children. Keep
+                // each directory open against rename while acquiring descendant leases.
+                auto Current=Root;
+                for(int I=-1;I<Parts.size();++I)
+                {
+                    if(I>=0) Current+='/'+Parts[I];
+                    const bool Directory=I<Parts.size()-1;
+                    if (Directory && LockedDirectories.contains(Current)) continue;
+                    const auto Attributes=GetFileAttributesW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Current).utf16()));
+                    if(Attributes==INVALID_FILE_ATTRIBUTES) return Fail("web-owner-runtime-attributes");
+                    if(Attributes&FILE_ATTRIBUTE_REPARSE_POINT) return Fail("web-owner-runtime-reparse");
+                    auto Lease=std::make_unique<Handle>();
+                    if(bool(Attributes&FILE_ATTRIBUTE_DIRECTORY)!=Directory) return Fail("web-owner-runtime-kind");
+                    Lease->value_=CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Current).utf16()),Directory?FILE_READ_ATTRIBUTES:GENERIC_READ,
+                        Directory?(FILE_SHARE_READ|FILE_SHARE_WRITE):FILE_SHARE_READ,nullptr,OPEN_EXISTING,
+                        (Directory?FILE_FLAG_BACKUP_SEMANTICS:FILE_FLAG_SEQUENTIAL_SCAN)|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+                    if(!Lease->Valid()) return Fail("web-owner-runtime-lease");
+                    BY_HANDLE_FILE_INFORMATION Info{};
+                    if(!GetFileInformationByHandle(Lease->value_,&Info)) return Fail("web-owner-runtime-info");
+                    if(Info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT) return Fail("web-owner-runtime-reparse");
+                    if(((Info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)!=0)!=Directory) return Fail("web-owner-runtime-kind");
+                    if(!Directory)
+                    {
+                        LARGE_INTEGER Size{};
+                        if(!GetFileSizeEx(Lease->value_,&Size) || Size.QuadPart<0 || Size.QuadPart>512LL*1024*1024) return Fail("web-owner-runtime-size");
+                        const auto HashStart = startup::Data().Now();
+                        QByteArray Digest;
+                        const auto Hashed=RuntimeHash.Read(Lease->value_,Size.QuadPart,Digest,Cancelled);
+                        if(Hashed==RuntimeHashResult::ReadFailed) return Fail("web-owner-runtime-read");
+                        if(Hashed==RuntimeHashResult::LengthMismatch) return Fail("web-owner-runtime-size");
+                        if(Hashed==RuntimeHashResult::Cancelled) return Fail("web-owner-runtime-cancelled");
+                        if(Hashed!=RuntimeHashResult::Success || Digest!=At.value()) return Fail("web-owner-runtime-hash");
+                        HashMs += startup::Data().Now()-HashStart; HashBytes += Size.QuadPart; ++HashFiles;
+                    }
+                    Verified->handles_.push_back(std::move(Lease));
+                    if (Directory) LockedDirectories.insert(Current);
+                }
+            }
+            startup::Scope ProviderCleanup("runtime.shaProviderCleanup");
+            const bool CngBackend=RuntimeHash.UsesCng();const bool ProviderClosed=RuntimeHash.Close();ProviderCleanup.End();
+            if(!ProviderClosed) return Fail("web-owner-runtime-hash");
+            if(Cancelled && Cancelled()) return Fail("web-owner-runtime-cancelled");
+            LeasesAndHash.End(HashBytes,HashFiles);
+            startup::Data().Aggregate("runtime.hashReadAndSha256",HashMs,HashBytes,HashFiles);
+            const auto HashMetrics=RuntimeHash.Metrics();
+            S->startupMetrics_["hashMs"]=HashMetrics.readMs_+HashMetrics.updateMs_;S->startupMetrics_["readMs"]=HashMetrics.readMs_;S->startupMetrics_["shaMs"]=HashMetrics.updateMs_;S->startupMetrics_["cng"]=CngBackend;S->startupMetrics_["hashBytes"]=HashBytes;S->startupMetrics_["hashFiles"]=HashFiles;
+            S->runtimeLease_ = std::move(Verified);
+        }
+        if (ShareRuntime) {
+            std::lock_guard Lock(RuntimeMutex);
+            LiveHwpRuntime = S->runtimeLease_;
+        }
+        if (Cancelled && Cancelled()) return Fail("web-owner-runtime-cancelled");
+        S->startupMetrics_["verificationMs"] = StartupClock.elapsed() - VerificationStart;
         const auto SetupStart=StartupClock.elapsed();
         startup::Scope Setup("helper.spawnSetup");
         Handle Original, Token;

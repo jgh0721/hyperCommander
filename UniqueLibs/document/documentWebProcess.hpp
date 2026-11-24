@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/packageVerification.hpp"
 #include <QByteArray>
 #include <QJsonObject>
 #include <QMap>
@@ -34,6 +35,7 @@ namespace hc::document
     WebProcessRuntime MakeProductEpubRuntime(const QString& ApplicationDirectory, const QByteArray& ApprovedInventorySha256);
     // Product entry points use the build-time policy; no runtime/environment pin lookup.
     WebProcessRuntime MakeProductEpubRuntime(const QString& ApplicationDirectory);
+    QList<packages::VerificationRequest> ProductWebVerificationRequests(const QString& ApplicationDirectory);
     struct WebProcessLimits
     {
         // Zero delegates process/memory capacity to Windows.

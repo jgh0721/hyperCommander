@@ -40,7 +40,7 @@ include("${PROJECT_SOURCE_DIR}/cmake/EpubProductPolicy.cmake")
 configure_file(epubProductPolicy.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/epubProductPolicy.hpp" @ONLY NEWLINE_STYLE CRLF)
 target_include_directories(hc_document_broker PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 
-target_link_libraries(hc_document_broker PUBLIC hc_document_core Qt6::Core PRIVATE Qt6::ZlibPrivate Qt6::Widgets advapi32 shell32 ole32 bcrypt)
+target_link_libraries(hc_document_broker PUBLIC hc_document_core Qt6::Core PRIVATE hc_package_verification Qt6::ZlibPrivate Qt6::Widgets advapi32 shell32 ole32 bcrypt)
 target_compile_options(hc_document_broker PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 find_package(Qt6 6.12.0 REQUIRED COMPONENTS ZlibPrivate)
 qt_add_library(hc_epub_package STATIC

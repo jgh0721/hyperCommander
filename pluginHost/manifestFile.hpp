@@ -14,10 +14,13 @@ namespace hc::plugins
         QString binaryPath_;
         QStringList dependencyPaths_;
         QStringList helperPaths_;
+        QString root_;
     };
+    enum class ManifestInspection { Paths, Headers, Complete };
     // Worker/CLI operation. This is a point-in-time inspection, not a load
     // authorization or a file lease. The future host must revalidate at load.
-    storage::Result<InspectedPlugin> InspectManifestFile(const QString& Path, storage::OperationContext Context = {});
+    storage::Result<InspectedPlugin> InspectManifestFile(const QString& Path, storage::OperationContext Context = {},
+        ManifestInspection Inspection = ManifestInspection::Complete);
     storage::Result<InspectedPlugin> InspectPluginBinary(const QString& Binary, PluginFormat Format,
         std::optional<PluginManifest> Previous = {}, storage::OperationContext Context = {});
     storage::Result<QString> SavePluginManifest(const InspectedPlugin& Plugin, const QString& Directory,

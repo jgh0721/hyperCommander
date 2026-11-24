@@ -6,6 +6,7 @@
 #include <QStringList>
 #include <QHash>
 #include <QSet>
+#include <optional>
 #include "commonLibs/operations/fileOperation.hpp"
 #include "commonLibs/commands/commandBus.hpp"
 #include "commonLibs/commands/automation.hpp"
@@ -62,6 +63,7 @@ public:
     void RefreshShortcutLabels();
     bool ReloadMenu();
     void RefreshFunctionBar();
+    void ApplyPackageVerification();
     bool CancelClipboard();
     // 평면 보기 열거 중이면 열거만 멈춘다(Esc). 결과는 남는다.
     bool CancelFlatListing();
@@ -86,6 +88,7 @@ public:
     hc::automation::Host AutomationHost();
     std::shared_ptr<hc::script::IScriptHostApi> ScriptApi(std::set<std::string> Permissions);
 private:
+    std::optional<bool> verifyPackagesOnOpen_;
     hc::storage::Result<hc::commands::CommandOutcome> executeClipboard(const hc::commands::CommandInvocation& Invocation, CFSModel* Model);
     void refreshClipboardVisuals();
     bool ownsFileClipboard() const;

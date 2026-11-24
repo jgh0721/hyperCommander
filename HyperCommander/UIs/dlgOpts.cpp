@@ -246,6 +246,7 @@ void QMainOpts::LoadSettings()
         findChild<QCheckBox*>("hc.settings.saveJobProgress")->setEnabled(Options["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()));
         findChild<QCheckBox*>("hc.settings.saveJobProgress")->setChecked(Options["saveJobProgress"].toBool(hc::defaults::DefaultValue("options/saveJobProgress").toBool()));
         findChild<QCheckBox*>("hc.settings.showJobDetails")->setChecked(Options["showJobDetails"].toBool(hc::defaults::DefaultValue("options/showJobDetails").toBool()));
+        findChild<QCheckBox*>("hc.settings.verifyPackagesOnOpen")->setChecked(Options["verifyPackagesOnOpen"].toBool());
     }
 
 
@@ -439,6 +440,7 @@ bool QMainOpts::SaveSettings()
     Options["enableJobRecovery"] = findChild<QCheckBox*>("hc.settings.enableJobRecovery")->isChecked();
     Options["saveJobProgress"] = findChild<QCheckBox*>("hc.settings.saveJobProgress")->isChecked();
     Options["showJobDetails"] = findChild<QCheckBox*>("hc.settings.showJobDetails")->isChecked();
+    Options["verifyPackagesOnOpen"] = findChild<QCheckBox*>("hc.settings.verifyPackagesOnOpen")->isChecked();
     hc::settings::AppSettings().Put(hc::settings::Section::Options, Options);
     const bool ColumnsChanged = listView_ && columnEditor_->Dirty();
     // 평면 폴더 세트는 별도 키에 저장하고, 적용 대상(현재 탭 등)과 무관하게 평면 보기 중인 탭에 다시 적용한다.
@@ -581,7 +583,10 @@ bool QMainOpts::SaveSettings()
     }
     TyStPlugInMgr::GetInstance()->Refresh();
     TyStCommandMgr::GetInstance()->Refresh();
-    if (auto* Bridge = TyStCommandMgr::GetInstance()->Bridge()) { Bridge->ReloadMenu(); Bridge->RefreshShortcutLabels(); Bridge->RefreshFunctionBar(); }
+    if (auto* Bridge = TyStCommandMgr::GetInstance()->Bridge()) {
+        Bridge->ApplyPackageVerification();
+        Bridge->ReloadMenu(); Bridge->RefreshShortcutLabels(); Bridge->RefreshFunctionBar();
+    }
     if (FlatChanged && parentWidget()) for (auto* Panel : parentWidget()->window()->findChildren<CmpPanel*>()) Panel->RefreshFlatProfiles();
     if (ColumnsRequested || FlatChanged) columnEditor_->MarkSaved();
     if (resetListModeDraft_ && listView_) { listView_->SetListMode("inherit"); resetListModeDraft_ = false; }
@@ -1132,6 +1137,17 @@ void QMainOpts::initializeDesignPages()
     auto* ShowDetails = new QCheckBox(tr("상세 기록 보이기"), DetailsCard); ShowDetails->setObjectName("hc.settings.showJobDetails"); DetailsLayout->addWidget(ShowDetails);
     auto* DetailsNote = new QLabel(tr("작업 진행 창에 파일별 처리 결과와 진단 기록을 표시합니다. 기본값은 꺼짐입니다. 오류 안내와 확인·암호 입력 요청은 이 설정과 관계없이 표시합니다. 작업 복구·진행률 저장과 독립적으로 사용합니다."), DetailsCard);
     DetailsNote->setWordWrap(true); DetailsLayout->addWidget(DetailsNote); qobject_cast<QVBoxLayout*>(Laboratory->layout())->addWidget(DetailsCard);
+    auto* SecurityCard = new fm::ui::Card(Laboratory);
+    auto* SecurityLayout = new QVBoxLayout(SecurityCard);
+    SecurityLayout->addWidget(new QLabel(tr("보안"), SecurityCard));
+    auto* VerifyPackages = new QCheckBox(tr("패키지 검증"), SecurityCard);
+    VerifyPackages->setObjectName("hc.settings.verifyPackagesOnOpen");
+    SecurityLayout->addWidget(VerifyPackages);
+    auto* VerifyNote = new QLabel(tr("켜면 F3·F4·Ctrl+Q에서 사용하는 뷰어·편집기 패키지를 열 때마다 검증합니다. 기본값인 꺼짐은 시작 시 백그라운드에서 검증하고, 파일 잠금이 유지되는 동안 결과를 재사용합니다."), SecurityCard);
+    VerifyNote->setWordWrap(true);
+    SecurityLayout->addWidget(VerifyNote);
+    connect(VerifyPackages, &QCheckBox::toggled, this, [this] { ui.btnApply->setEnabled(true); });
+    Laboratory->layout()->addWidget(SecurityCard);
     qobject_cast<QVBoxLayout*>(Laboratory->layout())->addStretch();
     keyboardSettings_ = new hc::ui::KeyboardSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(keyboardSettings_);
     // Resolve page indices from widgets so removing a page cannot retarget navigation.
