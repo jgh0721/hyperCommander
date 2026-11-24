@@ -432,6 +432,8 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnRealDownloadsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "downloadsGroupingInputUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "downloadsBackgroundRefreshFocusUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "historyListingReuseUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "remoteDirectoryChangesUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "gridPopulationSortCacheUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewRefreshInputUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewCloseTabUi"
@@ -12596,6 +12598,92 @@ private slots:
         QVERIFY(Persistent.isValid());
         QCOMPARE(View->CaptureFocus(), Key);
         QCOMPARE(View->CaptureSelection(), QStringList{Key});
+    }
+
+    void historyListingReuseUi()
+    {
+        using namespace hc::storage;
+        QTemporaryDir Parent; QVERIFY(Parent.isValid());
+        QDir Folders(Parent.path());
+        QVERIFY(Folders.mkpath("first")); QVERIFY(Folders.mkpath("second"));
+        const auto Write = [&](const QString& Name) {
+            QFile File(Folders.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write("fixture") == 7;
+        };
+        QVERIFY(Write("first/original.txt")); QVERIFY(Write("second/second.txt"));
+        const auto Saved = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Saved); });
+        auto* Panel = panels_.front();
+        hc::workspace::TabState Tab; Tab.id_ = "history-reuse";
+        Tab.location_ = {LocatorKind::Local, QDir::toNativeSeparators(Folders.filePath("first")).toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(main_->winId())));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->UsesDetailedDirectoryWatch() && names(Model).contains("original.txt"), 10000);
+        Panel->ChangeCurrentPath(Folders.filePath("second"), {});
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("second.txt"), 10000);
+        QVERIFY(Panel->CanNavigateHistory(-1));
+        QSignalSpy Reads(Model, &CFSModel::DirectoryReadStarted);
+        QVERIFY(Write("first/parked.txt"));
+        Panel->NavigateHistory(-1);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("original.txt") && names(Model).contains("parked.txt"), 10000);
+        QCOMPARE(Reads.size(), 0);
+        QVERIFY(Panel->CanNavigateHistory(1));
+        Panel->NavigateHistory(1);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("second.txt"), 10000);
+        QCOMPARE(Reads.size(), 0);
+
+        // A live handle can still refer to the directory before a same-path replacement.
+        QVERIFY(Folders.rename("first", "previous")); QVERIFY(Folders.mkpath("first"));
+        QVERIFY(Write("first/replacement.txt"));
+        Panel->NavigateHistory(-1);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("replacement.txt"), 10000);
+        QVERIFY(!names(Model).contains("original.txt")); QVERIFY(!names(Model).contains("parked.txt"));
+        QCOMPARE(Reads.size(), 1);
+    }
+
+    void remoteDirectoryChangesUi()
+    {
+        const auto Root = qEnvironmentVariable("HC_UI_DIRECTORY_WATCH_SHARE");
+        if (Root.isEmpty()) QSKIP("An owned SMB or RDP fixture share is required");
+        QTemporaryDir Directory(QDir(Root).filePath("hc-watch-XXXXXX")); QVERIFY(Directory.isValid());
+        const auto Write = [&](const QString& Name, QIODevice::OpenMode Mode) {
+            QFile File(Directory.filePath(Name)); return File.open(Mode) && File.write("data") == 4;
+        };
+        QVERIFY(Write("changes.txt", QIODevice::WriteOnly));
+        const auto Saved = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Saved); });
+        auto* Panel = panels_.front(); Panel->SetSearch({});
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(main_->winId())));
+        Panel->ChangeCurrentPath(Directory.path(), {});
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->UsesDetailedDirectoryWatch() && names(Model).contains("changes.txt"), 20000);
+        QTest::qWait(650);
+        QTRY_VERIFY(!Model->IsLoading());
+        QSignalSpy Reads(Model, &CFSModel::DirectoryReadStarted);
+        QSignalSpy Resets(Model, &QAbstractItemModel::modelReset);
+        QVERIFY(Write("changes.txt", QIODevice::Append));
+        QTRY_COMPARE_WITH_TIMEOUT(Model->GetTotalSize(), quint64(8), 10000);
+        QCOMPARE(Reads.size(), 0); QCOMPARE(Resets.size(), 0);
+        QVERIFY(Write("created.txt", QIODevice::WriteOnly));
+        QVERIFY(QFile::remove(Directory.filePath("changes.txt")));
+        QTRY_VERIFY_WITH_TIMEOUT(names(Model).contains("created.txt") && !names(Model).contains("changes.txt"), 10000);
+        QCOMPARE(Reads.size(), 0);
+
+        const auto Harness = qEnvironmentVariable("HC_UI_DIRECTORY_WATCH_RECONNECT");
+        if (Harness.isEmpty()) return;
+        {
+            QFile Request(QDir(Harness).filePath("drop-share.txt"));
+            QVERIFY(Request.open(QIODevice::WriteOnly));
+            const auto Name = QFileInfo(Directory.path()).fileName().toUtf8();
+            QCOMPARE(Request.write(Name), Name.size());
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->UsesDetailedDirectoryWatch(), 12000);
+        QVERIFY(names(Model).contains("created.txt"));
+        QCOMPARE(Reads.size(), 0);
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(QDir(Harness).filePath("share-restored.txt")), 25000);
+        QTRY_VERIFY_WITH_TIMEOUT(Model->UsesDetailedDirectoryWatch() && !Model->IsLoading()
+            && names(Model).contains("offline.txt"), 30000);
+        QCOMPARE(Reads.size(), 1);
     }
 
     void scopedSearchUi()

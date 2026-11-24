@@ -172,6 +172,8 @@ namespace hc::storage
                             return false;
                         auto Item = Entry(Id, Prefix, {At.kind_, Child}, Name.toStdString(), Data);
                         Item.id_.revision_ = std::move(Revision);
+                        if (Row->ShortNameLength > 0 && Row->ShortNameLength <= sizeof(Row->ShortName))
+                            Item.hints_["nativeAlternateName"] = QString::fromWCharArray(Row->ShortName, Row->ShortNameLength / sizeof(wchar_t)).toStdString();
                         Item.hints_["reparseTag"] = std::to_string(Tag);
                         Entries.push_back(std::move(Item));
                     }
@@ -361,7 +363,7 @@ namespace hc::storage
                     if (const auto Failure = Context.Check(Id)) return *Failure;
                     if (At.kind_ != Kind || At.root_.empty() || !At.nesting_.empty()) return Error{ErrorCategory::InvalidRequest, "locator-kind", Id};
                     WIN32_FIND_DATAW Found{};
-                    const bool Listing = Context.directoryEntryName_ && Kind == LocatorKind::Local;
+                    const bool Listing = Context.directoryEntryName_;
                     if (Listing) {
                         const auto File = FindFirstFileW(FilePath(At.root_).c_str(), &Found);
                         if (File == INVALID_HANDLE_VALUE) return NativeError(GetLastError(), Id);
@@ -510,7 +512,7 @@ namespace hc::storage
                         const auto Handle = Recovery.Invoke([&] {
                             const auto Pattern = Path + (Path.ends_with(L'\\') || Path.ends_with(L'/') ? L"*" : L"\\*");
                             return native::FindFirstCompatible([&](DWORD Flags) {
-                                const auto Info = Kind == LocatorKind::Local && Context.allowUnavailableChildMetadata_ ? FindExInfoStandard : FindExInfoBasic;
+                                const auto Info = Context.allowUnavailableChildMetadata_ ? FindExInfoStandard : FindExInfoBasic;
                                 return FindFirstFileExW(Pattern.c_str(), Info, &Found, FindExSearchNameMatch, nullptr, Flags);
                             }, Context);
                         }, [](HANDLE Value) { return Value == INVALID_HANDLE_VALUE; }, Context);

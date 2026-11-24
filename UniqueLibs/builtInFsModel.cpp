@@ -655,18 +655,12 @@ CFSModel::CFSModel()
         refreshColumnSortRanks();
     });
     displaySettings_ = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
-    connect(&tracker_, &QtDirectoryTracker::RefreshRequired, this, [this] {
-        if (!loading_ && watchEnabled_ && providerEnabled_ && !HasPlaceholder()) {
-            invalidateDisplayIcons(false, 500);
-            carryDirectorySizes_ = true; autoRefreshRequested_ = true; Refresh();
-        }
-    });
-    connect(&tracker_, &QtDirectoryTracker::NamesChanged, this, &CFSModel::reconcileDirectoryNames);
+    tracker_ = makeDirectoryTracker();
     connect(this, &CFSModel::sigRefreshCompleted, this, &CFSModel::updateDirectoryWatchBusy);
     connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) {
         const auto Settings = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
         windowWatchSuspended_ = Settings.pauseInBackground && State != Qt::ApplicationActive;
-        tracker_.SetSuspended(windowWatchSuspended_ || !watchEnabled_);
+        tracker_->SetSuspended(windowWatchSuspended_ || !watchEnabled_);
         hc::icons::FileIconService::Instance().SetAutomaticRefresh(this, !Settings.Excludes(GetCurrentPathWithRoot())
             && (!Settings.pauseInBackground || State == Qt::ApplicationActive));
         if (State == Qt::ApplicationActive && !iconApplyTimer_.isActive()) iconApplyTimer_.start();
@@ -677,9 +671,43 @@ CFSModel::CFSModel()
 void CFSModel::ApplyRefreshSettings()
 {
     const auto Settings = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
-    tracker_.Configure(Settings);
+    tracker_->Configure(Settings);
+    for (const auto& Directory : retainedDirectories_) Directory.tracker_->Configure(Settings);
     windowWatchSuspended_ = Settings.pauseInBackground && QGuiApplication::applicationState() != Qt::ApplicationActive;
     SetWatchEnabled(watchEnabled_, watchRetained_);
+}
+
+std::unique_ptr<QtDirectoryTracker> CFSModel::makeDirectoryTracker()
+{
+    auto Tracker = std::make_unique<QtDirectoryTracker>();
+    Tracker->Configure(hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject()));
+    Tracker->SetSuspended(windowWatchSuspended_ || !watchEnabled_);
+    auto* Source = Tracker.get();
+    connect(Source, &QtDirectoryTracker::RefreshRequired, this, [this, Source] {
+        if (tracker_.get() == Source && !loading_ && watchEnabled_ && providerEnabled_ && !HasPlaceholder()) {
+            invalidateDisplayIcons(false, 500);
+            carryDirectorySizes_ = true; autoRefreshRequested_ = true; Refresh();
+        }
+    });
+    connect(Source, &QtDirectoryTracker::NamesChanged, this, [this, Source](const QStringList& Names) {
+        if (tracker_.get() == Source) reconcileDirectoryNames(Names);
+    });
+    return Tracker;
+}
+
+void CFSModel::retainDirectoryListing()
+{
+    const auto Key = property("hc.snapshotLocation").toString();
+    if (Key.isEmpty() || Key != tracker_->LocationKey() || loading_ || entryRefreshBusy_ || searchResults_
+        || elevatedDirectorySession_ || !acceptedProvider_ || !pageSource_ || navigationError_
+        || tracker_->CoveredIdentity().empty()) return;
+    // Keep the outgoing raw snapshot and its continuous watch together. A
+    // second slot lets a history target survive parking the current directory.
+    std::erase_if(retainedDirectories_, [&](const auto& Directory) { return Directory.key_ == Key; });
+    if (retainedDirectories_.size() == 2) retainedDirectories_.erase(retainedDirectories_.begin());
+    tracker_->SetSuspended(true);
+    retainedDirectories_.push_back({Key, acceptedProvider_, pageSource_, std::move(tracker_)});
+    tracker_ = makeDirectoryTracker();
 }
 
 hc::storage::Locator CFSModel::WorkspaceLocation() const
@@ -692,7 +720,7 @@ hc::storage::Locator CFSModel::WorkspaceLocation() const
 
 void CFSModel::NotifyComputerChange()
 {
-    if (hc::ui::IsDriveList(WorkspaceLocation())) tracker_.Invalidate();
+    if (hc::ui::IsDriveList(WorkspaceLocation())) tracker_->Invalidate();
 }
 
 void CFSModel::NotifyNetworkChange()
@@ -700,7 +728,7 @@ void CFSModel::NotifyNetworkChange()
     const auto Location = WorkspaceLocation();
     if ((Location.kind_ == hc::storage::LocatorKind::Smb && Location.root_ == "\\")
         || (Location.kind_ == hc::storage::LocatorKind::Shell && Location.root_ == "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"))
-        tracker_.Invalidate();
+        tracker_->Invalidate();
 }
 
 void CFSModel::SetSelectionInputActive(bool Active)
@@ -713,30 +741,35 @@ void CFSModel::SetSelectionInputActive(bool Active)
 
 void CFSModel::SetWatchEnabled(bool Enabled, bool RetainCoverage)
 {
-    if (!Enabled && !RetainCoverage && tracker_.NotificationsAvailable()) directoryWatchGap_ = true;
+    if (!Enabled && !RetainCoverage && tracker_->NotificationsAvailable()) directoryWatchGap_ = true;
     watchEnabled_ = Enabled;
     watchRetained_ = RetainCoverage;
-    tracker_.SetSuspended(windowWatchSuspended_ || !Enabled);
-    if (!Enabled && !RetainCoverage) tracker_.SetLocation({});
+    tracker_->SetSuspended(windowWatchSuspended_ || !Enabled);
+    if (!Enabled && !RetainCoverage) {
+        tracker_->SetLocation({});
+        retainedDirectories_.clear();
+    }
     if (!loading_) configureDirectoryWatch(WorkspaceLocation());
-    if (Enabled && !loading_ && std::exchange(directoryWatchGap_, false) && tracker_.NotificationsAvailable())
-        tracker_.Invalidate();
+    if (Enabled && !loading_ && std::exchange(directoryWatchGap_, false)) {
+        if (tracker_->NotificationsAvailable()) tracker_->Invalidate();
+        else if (const auto Coverage = tracker_->Coverage()) Coverage->needsBaseline_ = true;
+    }
 }
 
 void CFSModel::updateDirectoryWatchBusy()
 {
-    tracker_.SetBusy(loading_ || pageBusy_ || selectionInputActive_ || entryRefreshBusy_);
+    tracker_->SetBusy(loading_ || pageBusy_ || selectionInputActive_ || entryRefreshBusy_);
 }
 
 bool CFSModel::UsesDetailedDirectoryWatch() const
 {
-    return watchEnabled_ && tracker_.NotificationsAvailable() && !elevatedDirectorySession_ && !searchResults_;
+    return watchEnabled_ && tracker_->NotificationsAvailable() && !elevatedDirectorySession_ && !searchResults_;
 }
 
 bool CFSModel::ApplyWatchedFileJob(const QStringList& RemovedNames, bool ChangesMetadata)
 {
-    if ((!watchEnabled_ && !watchRetained_) || elevatedDirectorySession_ || searchResults_ || !tracker_.CoversNames()
-        || (ChangesMetadata && !tracker_.CoversMetadata()) || !pageSource_) return false;
+    if ((!watchEnabled_ && !watchRetained_) || elevatedDirectorySession_ || searchResults_ || !tracker_->CoversNames()
+        || (ChangesMetadata && !tracker_->CoversMetadata()) || !pageSource_) return false;
     // The native feed is armed throughout the job. Confirm visible removals
     // promptly from its result as well, without losing concurrent external changes.
     const auto Location = WorkspaceLocation();
@@ -744,28 +777,34 @@ bool CFSModel::ApplyWatchedFileJob(const QStringList& RemovedNames, bool Changes
     QStringList Pending;
     for (const auto& Name : RemovedNames) {
         hc::storage::EntrySnapshot Entry;
-        Entry.locator_ = {hc::storage::LocatorKind::Local, Prefix + Name.toStdString()};
+        Entry.locator_ = {Location.kind_, Prefix + Name.toStdString()};
         if (index_.Row(hc::workspace::SelectionKey(Entry)) >= 0) Pending.append(Name);
     }
-    tracker_.VerifyNames(Pending);
+    tracker_->VerifyNames(Pending);
     return true;
 }
 
 void CFSModel::configureDirectoryWatch(const hc::storage::Locator& Location)
 {
     const auto Root = GetRoot();
-    // Registering a native watcher on an unreachable server can block the GUI.
-    const auto Native = Root && !Root->IsRemote() && Location.kind_ == hc::storage::LocatorKind::Local
-        && Location.nesting_.empty() ? QString::fromStdString(Location.root_) : QString{};
-    tracker_.SetLocation((watchEnabled_ || watchRetained_) && Root && providerEnabled_ && !searchResults_ ? hc::workspace::LocationKey(Location) : QString{}, Native,
-        QString::fromStdString(Location.root_));
+    using hc::storage::LocatorKind;
+    const auto Path = QDir::toNativeSeparators(QString::fromStdString(Location.root_));
+    const auto Parts = QDir::fromNativeSeparators(Path).split('/', Qt::SkipEmptyParts);
+    const bool NativeKind = Location.kind_ == LocatorKind::Local || Location.kind_ == LocatorKind::Smb;
+    const bool SharePath = Path.startsWith("\\\\") && Parts.size() >= 2;
+    const bool DrivePath = Path.size() >= 3 && Path[1] == ':' && Path[2] == '\\';
+    const auto Native = Root && NativeKind && Location.nesting_.empty() && (SharePath || DrivePath) ? Path : QString{};
+    const bool Remote = !Native.isEmpty() && (Root->IsRemote() || isNetworkLocation(Location));
+    if ((watchEnabled_ || watchRetained_) && Root && providerEnabled_ && !searchResults_)
+        tracker_->SetLocation(hc::workspace::LocationKey(Location), Native, Path, Remote);
+    else tracker_->SetLocation({});
 }
 
 void CFSModel::reconcileDirectoryNames(const QStringList& Names)
 {
     using namespace hc::storage;
     if (!UsesDetailedDirectoryWatch() || !pageSource_ || !pageView_ || !acceptedProvider_) {
-        if (watchEnabled_ && GetRoot()) tracker_.Invalidate();
+        if (watchEnabled_ && GetRoot()) tracker_->Invalidate();
         return;
     }
     const auto Location = WorkspaceLocation();
@@ -778,11 +817,11 @@ void CFSModel::reconcileDirectoryNames(const QStringList& Names)
     for (const auto& Name : Names) {
         if (Name.isEmpty() || Name == "." || Name == ".." || Name.contains(QChar(0))
             || Name.contains('\\') || Name.contains('/') || Name.contains(':') || Name.contains('*') || Name.contains('?')) {
-            tracker_.Invalidate(); return;
+            tracker_->Invalidate(); return;
         }
         auto Path = Prefix + Name.toStdString();
         EntrySnapshot Lookup;
-        Lookup.locator_ = {LocatorKind::Local, Path};
+        Lookup.locator_ = {Location.kind_, Path};
         const int Row = index_.Row(hc::workspace::SelectionKey(Lookup));
         const auto ModelRow = Row + rowCount() - int(pageView_->Count());
         KnownRow Previous;
@@ -850,17 +889,17 @@ void CFSModel::reconcileDirectoryNames(const QStringList& Names)
             entryRefreshBusy_ = false;
             updateDirectoryWatchBusy();
             if (!watchEnabled_ || windowWatchSuspended_) {
-                if (watchRetained_ || watchEnabled_) tracker_.VerifyNames(Names);
+                if (watchRetained_ || watchEnabled_) tracker_->VerifyNames(Names);
                 return;
             }
             if (Source != pageSource_ || View != pageView_ || PageGeneration != pageGeneration_ || Sorts != columnSorts_
                 || TextOptions != sortTextOptions() || Query != pageQuery_ || Match != pageMatch_ || ShowHidden != pageShowHidden_) {
-                tracker_.VerifyNames(Names);
+                tracker_->VerifyNames(Names);
                 return;
             }
-            if (!Result.HasValue()) { tracker_.Invalidate(); return; }
+            if (!Result.HasValue()) { tracker_->Invalidate(); return; }
             auto& Update = Result.Value();
-            if (!Update.source_ && !canReplaceEntryRows()) { tracker_.VerifyNames(Names); return; }
+            if (!Update.source_ && !canReplaceEntryRows()) { tracker_->VerifyNames(Names); return; }
             automaticRefresh_ = true;
             const auto Finish = qScopeGuard([this] { automaticRefresh_ = false; });
             if (!Update.source_) {
@@ -904,7 +943,7 @@ void CFSModel::reconcileDirectoryNames(const QStringList& Names)
                 for (const auto& [Path, Previous] : Known) {
                     const auto& Old = Previous.entry_;
                     if (const auto Failure = Context.Check(Provider->Id())) return *Failure;
-                    auto Entry = Provider->Resolve({LocatorKind::Local, Path}, Context).get();
+                    auto Entry = Provider->Resolve({Location.kind_, Path}, Context).get();
                     if (!Entry.HasValue()) {
                         if (Entry.Failure().category_ != ErrorCategory::NotFound) return Entry.Failure();
                         Changes.try_emplace(Path, std::nullopt);
@@ -1031,9 +1070,10 @@ void CFSModel::applyEntryReplacements(const hc::storage::PagedEntryIndex::Change
 
 void CFSModel::SetPlaceholder(const hc::storage::Locator& Location, const QString& Reason, bool Pending)
 {
+    if (Pending && tracker_->LocationKey() != hc::workspace::LocationKey(Location)) retainDirectoryListing();
     automaticRefresh_ = autoRefreshRequested_ = false;
     elevatedDirectorySession_.reset();
-    CancelNavigation(); tracker_.SetLocation({});
+    CancelNavigation(); tracker_->SetLocation({});
     columnQueries_->Reset(); clearRuleFields();
     beginResetModel(); vecNode_.clear(); fileCount_ = directoryCount_ = 0; totalSize_ = 0;
     vecFs_.clear(); acceptedRoots_.clear(); acceptedProvider_.reset(); path_.clear(); acceptedPath_.clear();
@@ -1055,7 +1095,7 @@ void CFSModel::publishNavigationFallback(const hc::storage::Locator& Location)
 {
     // A failed first listing still needs a selectable escape route. Keep this
     // synthetic parent outside the provider snapshot and every file operation.
-    tracker_.SetLocation({}); columnQueries_->Reset(); clearRuleFields();
+    tracker_->SetLocation({}); columnQueries_->Reset(); clearRuleFields();
     pageSource_.reset(); pageView_.reset(); index_.Publish({});
     beginResetModel();
     recoveryLocation_ = Location;
@@ -1121,7 +1161,7 @@ void CFSModel::CancelNavigation(bool Superseding)
     pageStop_.request_stop(); ++pageGeneration_; pageBusy_ = false;
     entryRefreshStop_.request_stop();
     entryRefreshStop_ = {};
-    if (std::exchange(entryRefreshBusy_, false) && !Superseding) tracker_.Invalidate();
+    if (std::exchange(entryRefreshBusy_, false) && !Superseding) tracker_->Invalidate();
     updateDirectoryWatchBusy();
     if (!loading_) return;
     if (!Superseding)
@@ -1301,6 +1341,23 @@ void CFSModel::refreshProvider()
     const bool ReusedArchive = Location.kind_ == LocatorKind::Archive && Provider == acceptedProvider_;
     const auto Session = Location.kind_ == LocatorKind::Local && elevatedDirectorySession_
         && elevatedDirectorySession_->Contains(QString::fromStdString(Location.root_)) ? elevatedDirectorySession_ : nullptr;
+    const auto Key = hc::workspace::LocationKey(Location);
+    if (tracker_->LocationKey() != Key) retainDirectoryListing();
+    std::shared_ptr<PagedEntryIndex> CachedSource;
+    std::string CachedIdentity;
+    if (!automaticRefresh_ && !Elevated && !Session && Location.kind_ == LocatorKind::Local && !Root->IsRemote()
+        && watchEnabled_ && property("hc.historyTarget").isValid()) {
+        const auto Cached = std::find_if(retainedDirectories_.begin(), retainedDirectories_.end(),
+            [&](const auto& Directory) { return Directory.key_ == Key && Directory.provider_ == Provider; });
+        if (Cached != retainedDirectories_.end()) {
+            CachedIdentity = Cached->tracker_->CoveredIdentity();
+            if (!CachedIdentity.empty()) {
+                CachedSource = std::move(Cached->source_);
+                tracker_ = std::move(Cached->tracker_);
+            }
+            retainedDirectories_.erase(Cached);
+        }
+    }
     configureDirectoryWatch(Location);
     directoryWatchGap_ = false;
     entryRefreshStop_.request_stop();
@@ -1313,15 +1370,17 @@ void CFSModel::refreshProvider()
     }
     navigationError_.reset();
     loading_ = true;
-    tracker_.SetBusy(true);
-    emit DirectoryReadStarted(TargetFullPath, Location.kind_ == LocatorKind::Archive);
+    tracker_->SetBusy(true);
+    tracker_->SetSuspended(windowWatchSuspended_ || !watchEnabled_);
+    if (!CachedSource) emit DirectoryReadStarted(TargetFullPath, Location.kind_ == LocatorKind::Archive);
     OperationContext Context;
     Context.requestId_ = std::to_string(Generation);
     Context.stopToken_ = navigationStop_.get_token();
     Context.freshEnumerationMetadata_ = true;
     Context.allowUnavailableChildMetadata_ = true;
-    const auto SharedRead = Location.kind_ == LocatorKind::Local && Provider && !Root->IsRemote()
-        && !Session && !Elevated && !automaticRefresh_ && tracker_.NotificationsAvailable()
+    const auto RemoteCoverage = tracker_->Coverage();
+    const auto SharedRead = !CachedSource && Location.kind_ == LocatorKind::Local && Provider && !Root->IsRemote()
+        && !Session && !Elevated && !automaticRefresh_ && tracker_->NotificationsAvailable()
         && property("hc.snapshotLocation").toString() != hc::workspace::LocationKey(Location)
         ? shareFolderRead(Provider, Location, Context) : std::shared_ptr<FolderRead>{};
     struct Listing { std::shared_ptr<PagedEntryIndex> source_, view_; EntryPage page_; std::shared_ptr<hc::permissions::DirectoryElevationSession> session_; std::vector<hc::settings::FileRuleResult> styles_; PreparedListing prepared_; };
@@ -1356,15 +1415,24 @@ void CFSModel::refreshProvider()
         && Sorts == pageSorts_ && property("hc.snapshotLocation").toString() == hc::workspace::LocationKey(Location)
         ? pageView_ : std::shared_ptr<PagedEntryIndex>{};
     auto* Watcher = new QFutureWatcher<ReadResult>(this);
-    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location, Query, Match, ShowHidden, Sorts, Fallback, Display, Append, RuleGeneration, Dark, ReusedArchive, DeltaBase, TextOptions, Columns = std::move(Columns)] {
+    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location, Query, Match, ShowHidden, Sorts, Fallback, Display, Append, RuleGeneration, Dark, ReusedArchive, DeltaBase, TextOptions, CachedIdentity, Columns = std::move(Columns)] {
         auto Result = Watcher->future().takeResult();
         Watcher->deleteLater();
         const bool Defer = Result.HasValue() && Result.Value().page_.entries_.size() > IndexedOrderThreshold;
         auto Apply = [this, Result = std::move(Result), Generation, TargetRoots, TargetPath, Provider, Location, Query, Match,
-            ShowHidden, Sorts, Fallback, Display, Append, RuleGeneration, Dark, ReusedArchive, DeltaBase, TextOptions, Columns]() mutable {
+            ShowHidden, Sorts, Fallback, Display, Append, RuleGeneration, Dark, ReusedArchive, DeltaBase, TextOptions, CachedIdentity, Columns]() mutable {
             if (Generation != generation_) return;
             const auto EndAutomatic = qScopeGuard([this] { automaticRefresh_ = false; });
             loading_ = false;
+            if (!CachedIdentity.empty() && (tracker_->CoveredIdentity() != CachedIdentity
+                || (!Result.HasValue() && Result.Failure().category_ != ErrorCategory::Cancelled))) {
+                // A parked handle can still point at a directory that was renamed
+                // away. Reopen the path and establish a new baseline before use.
+                tracker_->SetLocation({});
+                vecFs_ = TargetRoots; path_ = TargetPath;
+                refreshProvider();
+                return;
+            }
             if (!Result.HasValue())
             {
                 // A changed container invalidates the mounted index. Retry once
@@ -1414,6 +1482,7 @@ void CFSModel::refreshProvider()
             if (CancelSort && !AppliedColumns) emit ColumnSortCancelled();
             setProperty("hc.snapshotLocation", hc::workspace::LocationKey(Location));
             SetWatchEnabled(watchEnabled_, watchRetained_);
+            tracker_->CompleteListing();
             emit PageChanged();
             emit sigRefreshCompleted();
             const auto Notify = IsRoot() && (GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK)
@@ -1426,7 +1495,7 @@ void CFSModel::refreshProvider()
         if (Defer) applyListingWhenIdle(std::move(Apply), Generation);
         else Apply();
     });
-    Watcher->setFuture(QtConcurrent::run([Provider, Location, Context, Compare, Query, Match, ShowHidden, Elevated, Session, Append, Previous, SortPrevious, Rules, Dark, DeltaBase, TextOptions, PrepareNameRanks, SharedRead, PreviousRows = std::move(PreviousRows)]() mutable -> ReadResult {
+    Watcher->setFuture(QtConcurrent::run([Provider, Location, Context, Compare, Query, Match, ShowHidden, Elevated, Session, Append, Previous, SortPrevious, Rules, Dark, DeltaBase, TextOptions, PrepareNameRanks, SharedRead, CachedSource, CachedIdentity, RemoteCoverage, PreviousRows = std::move(PreviousRows)]() mutable -> ReadResult {
         // Only provider ownership and immutable values enter this worker.
         try
         {
@@ -1437,7 +1506,14 @@ void CFSModel::refreshProvider()
                 if (!Open.HasValue()) return Open.Failure();
                 ActiveSession = std::move(Open.Value());
             }
-            auto Source = SharedRead ? SharedRead->future_.result() : enumerateFolder(Provider, Location, Context, ActiveSession);
+            if (RemoteCoverage) RemoteCoverage->WaitForWatch(Context.stopToken_);
+            if (CachedSource) {
+                if (const auto Failure = Context.Check(Provider->Id())) return *Failure;
+                if (!QtDirectoryTracker::HasDirectoryIdentity(QString::fromStdString(Location.root_), CachedIdentity))
+                    return Error{ErrorCategory::StaleRevision, "history-directory-identity"};
+            }
+            auto Source = CachedSource ? RawListing(CachedSource)
+                : SharedRead ? SharedRead->future_.result() : enumerateFolder(Provider, Location, Context, ActiveSession);
             if (!Source.HasValue()) return Source.Failure();
             if (Append) {
                 if (SortPrevious) {

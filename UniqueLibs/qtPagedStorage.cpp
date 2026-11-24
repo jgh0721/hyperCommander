@@ -167,7 +167,7 @@ Result<std::shared_ptr<PagedEntryIndex>> PagedEntryIndex::Reconcile(Changes Upda
                 offset_ += Read.Value().entries_.size();
                 for (auto& Entry : Read.Value().entries_) {
                     auto Match = updates_.find(Entry.locator_.root_);
-                    if (Match == updates_.end() && Entry.locator_.kind_ == LocatorKind::Local) {
+                    if (Match == updates_.end() && (Entry.locator_.kind_ == LocatorKind::Local || Entry.locator_.kind_ == LocatorKind::Smb)) {
                         const auto Alias = Entry.hints_.find("nativeAlternateName");
                         if (Alias != Entry.hints_.end()) {
                             const auto& Path = Entry.locator_.root_;

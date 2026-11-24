@@ -257,14 +257,14 @@ hc::storage::Result<hc::storage::Unit> CFSModel::EnterFile(const QModelIndex& In
     }
     CancelNavigation(true); navigationStop_ = std::stop_source{};
     const auto Generation = ++generation_; OperationContext Context; Context.stopToken_ = navigationStop_.get_token();
-    automaticRefresh_ = autoRefreshRequested_ = false; navigationError_.reset(); loading_ = true; tracker_.SetBusy(true);
+    automaticRefresh_ = autoRefreshRequested_ = false; navigationError_.reset(); loading_ = true; updateDirectoryWatchBusy();
     emit DirectoryReadStarted(FullPath, true);
     using OpenResult = Result<hc::navigation::OpenedContainer>;
     auto* Watcher = new QFutureWatcher<OpenResult>(this); auto Stop = navigationStop_;
     connect(Watcher, &QObject::destroyed, [Stop]() mutable { Stop.request_stop(); });
     connect(Watcher, &QFutureWatcher<OpenResult>::finished, this, [this, Watcher, Generation, Roots, ParentPath, FullPath, Rebase, BeforeMount = std::move(BeforeMount)] {
         auto Result = Watcher->future().takeResult(); Watcher->deleteLater(); if (Generation != generation_) return;
-        loading_ = false; tracker_.SetBusy(selectionInputActive_);
+        loading_ = false; updateDirectoryWatchBusy();
         if (!Result.HasValue()) {
             navigationError_ = Result.Failure(); emit sigNavigationFailed(QString::fromStdString(Result.Failure().code_)); emit sigRefreshCompleted();
             // An ordinary file without a handler keeps keyboard focus on the current listing.

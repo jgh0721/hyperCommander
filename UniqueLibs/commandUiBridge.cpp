@@ -504,12 +504,12 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
                         QDir::cleanPath(QString::fromStdString(Current.root_)), Qt::CaseInsensitive) == 0)
                     {
                         QStringList Removed;
-                        if ((WatchedDeletion || WatchedTransfer) && Current.kind_ == LocatorKind::Local) {
+                        if ((WatchedDeletion || WatchedTransfer) && (Current.kind_ == LocatorKind::Local || Current.kind_ == LocatorKind::Smb)) {
                             const auto Folder = QDir::cleanPath(QString::fromStdString(Current.root_));
                             // The preview is bounded for large jobs. The continuous native
                             // watch covers the remainder, including skipped and concurrent work.
                             for (const auto& Outcome : Result.items_) {
-                                if (!Outcome.sourceRemoved_ || !Outcome.source_ || Outcome.source_->locator_.kind_ != LocatorKind::Local) continue;
+                                if (!Outcome.sourceRemoved_ || !Outcome.source_ || Outcome.source_->locator_.kind_ != Current.kind_) continue;
                                 const QFileInfo Source(QString::fromStdString(Outcome.source_->locator_.root_));
                                 if (QDir::cleanPath(Source.absolutePath()) == Folder) Removed.append(Source.fileName());
                             }

@@ -264,6 +264,8 @@ private:
     void                            setColumnBinding(const ColumnView& View);
     void                            refreshProvider();
     void updateDirectoryWatchBusy();
+    std::unique_ptr<QtDirectoryTracker> makeDirectoryTracker();
+    void retainDirectoryListing();
     void configureDirectoryWatch(const hc::storage::Locator& Location);
     void reconcileDirectoryNames(const QStringList& Names);
     void applyEntryReplacements(const hc::storage::PagedEntryIndex::Changes& Updates);
@@ -463,7 +465,14 @@ private:
     QSet<QString>                   directorySizeStale_;
     bool                            carryDirectorySizes_ = false;
     bool                            providerEnabled_ = true;
-    QtDirectoryTracker              tracker_;
+    struct RetainedDirectoryListing {
+        QString key_;
+        std::shared_ptr<hc::storage::IStorageProvider> provider_;
+        std::shared_ptr<hc::storage::PagedEntryIndex> source_;
+        std::unique_ptr<QtDirectoryTracker> tracker_;
+    };
+    std::unique_ptr<QtDirectoryTracker> tracker_;
+    std::vector<RetainedDirectoryListing> retainedDirectories_;
     bool                            watchEnabled_ = false;
     bool                            watchRetained_ = false, windowWatchSuspended_ = false;
     bool                            entryRefreshBusy_ = false;
