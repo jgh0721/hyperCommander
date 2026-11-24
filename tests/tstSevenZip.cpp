@@ -97,7 +97,26 @@ private slots:
         QVERIFY(Module);
         const auto Unload = qScopeGuard([&] { FreeLibrary(Module); });
         auto Backend = MakeSevenZipBackend(Module);
-        auto Created = Backend->Update({Archive.toStdString(), Input.path().toStdString(), {"episode/item.txt"}}, {});
+        const auto Folder = Input.filePath("episode/nested");
+        const auto Member = Folder + "/metadata.txt";
+        QVERIFY(QDir().mkpath(Folder) && Put(Member, "metadata"));
+        const auto Attributes = [](const QString& Path) { return GetFileAttributesW(reinterpret_cast<LPCWSTR>(Path.utf16())); };
+        const auto Set = [](const QString& Path, DWORD Bits) { return SetFileAttributesW(reinterpret_cast<LPCWSTR>(Path.utf16()), Bits); };
+        constexpr DWORD Bits = FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_READONLY;
+        const auto Reset = qScopeGuard([&] {
+            for (const auto& Path : {Member, Folder, Output + "/nested/metadata.txt", Output + "/nested"})
+                Set(Path, FILE_ATTRIBUTE_NORMAL);
+        });
+        const auto Handle = CreateFileW(reinterpret_cast<LPCWSTR>(Folder.utf16()), FILE_WRITE_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        QVERIFY(Handle != INVALID_HANDLE_VALUE);
+        constexpr qint64 Modified = 1609459200000LL;
+        constexpr auto Ticks = (Modified + 11644473600000LL) * 10000;
+        const FILETIME Time{DWORD(Ticks), DWORD(Ticks >> 32)};
+        const bool Saved = SetFileTime(Handle, nullptr, nullptr, &Time);
+        CloseHandle(Handle);
+        QVERIFY(Saved && Set(Member, Bits) && Set(Folder, Bits));
+        auto Created = Backend->Update({Archive.toStdString(), Input.path().toStdString(), {"episode/item.txt", "episode/nested/", "episode/nested/metadata.txt"}}, {});
         QVERIFY2(Created.HasValue(), Created.HasValue() ? "" : Created.Failure().code_.c_str());
 
         auto Reader = MakeNativeReadProvider(LocatorKind::Local);
@@ -192,6 +211,13 @@ private slots:
         QVERIFY(Scheduler.Reply(Extract.Value().id_, {Question->id_, InteractionChoice::Replace}).HasValue());
         QTRY_COMPARE(Snapshot().state_, JobState::Completed);
         QCOMPARE(Read(Output + "/item.txt"), QByteArray("extracted"));
+        QCOMPARE(Read(Output + "/nested/metadata.txt"), QByteArray("metadata"));
+        QCOMPARE(QFileInfo(Output + "/nested").lastModified().toMSecsSinceEpoch(), Modified);
+        for (const auto& Path : {Output + "/nested", Output + "/nested/metadata.txt"}) {
+            const auto Restored = Attributes(Path);
+            QVERIFY(Restored != INVALID_FILE_ATTRIBUTES);
+            QCOMPARE(Restored & Bits, Bits);
+        }
     }
 
     void nsisStoredArchiveIsOuter() {

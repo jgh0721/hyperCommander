@@ -995,7 +995,7 @@ namespace hc::operations
                 phase_ = Phase::Begin;
                 if (index_ == items_.size()) {
                     if (streaming_ && !planningFinished_) { phase_ = Phase::Preparing; Step.next_ = JobState::Preparing; }
-                    else Step.next_ = JobState::Completed;
+                    else if (archiveDirectories_.empty()) Step.next_ = JobState::Completed;
                 }
                 trimProcessed();
                 return Step;
@@ -1721,7 +1721,18 @@ namespace hc::operations
             }
             JobStep begin(OperationContext Context)
             {
-                if (index_ == items_.size()) return JobStep{JobState::Completed};
+                if (index_ == items_.size()) {
+                    if (archiveDirectories_.empty()) return JobStep{JobState::Completed};
+                    // Children change the parent modification time. Restore directories in
+                    // reverse creation order, using the identity captured at creation.
+                    auto& [Directory, Patch] = archiveDirectories_.back();
+                    auto Applied = request_.destinationWriter_->PatchMetadata(Directory, Patch, Context);
+                    if (!Applied.HasValue()) {
+                        JobStep Step{JobState::Failed}; Step.error_ = Applied.Failure(); return Step;
+                    }
+                    archiveDirectories_.pop_back();
+                    return progress();
+                }
                 if (current().preparationError_ && (request_.operation_ != FileOperation::Delete || !request_.elevation_))
                     return terminalFailure(*current().preparationError_);
                 if (current().excluded_) return done(ItemOutcome::Status::Skipped);
@@ -1952,6 +1963,20 @@ namespace hc::operations
                     const auto Made = request_.destinationWriter_->MakeDirectory(current().destination_, Context);
                     if (!Made.HasValue()) return failed(Made.Failure());
                     const auto& Item = current();
+                    const auto& Source = Item.source_.entry_;
+                    if (Source.locator_.kind_ == LocatorKind::Archive && Source.hints_.contains("wcxName")
+                        && NativeFileKind(Item.destination_.kind_) && request_.copyOptions_.metadata_) {
+                        auto Created = request_.destinationWriter_->Inspect(Item.destination_, Context);
+                        if (!Created.HasValue()) return failed(Created.Failure());
+                        if (!Created.Value() || !Created.Value()->directory_)
+                            return failed({ErrorCategory::StaleRevision, "extracted-directory-changed"});
+                        constexpr std::uint32_t DosAttributes = 0x27;
+                        MetadataPatch Patch;
+                        Patch.setMask_ = Source.attributes_ & ~Created.Value()->attributes_ & DosAttributes;
+                        Patch.clearMask_ = Created.Value()->attributes_ & ~Source.attributes_ & DosAttributes;
+                        if (Source.modifiedUtcMs_) Patch.modifiedUtcMs_ = Source.modifiedUtcMs_;
+                        if (!Patch.Empty()) archiveDirectories_.emplace_back(std::move(*Created.Value()), Patch);
+                    }
                     if (request_.operation_ == FileOperation::Copy && request_.preservePaths_
                         && !Context.workload_.IsAutomatic() && !Context.writeCheckpoint_ && !request_.bytesPerSecondLimit_
                         && !request_.copyOptions_.streams_ && !request_.copyOptions_.acl_ && request_.includePattern_ == "*") {
@@ -2142,6 +2167,7 @@ namespace hc::operations
             bool preparationRetry_ = false, skipDeleteErrors_ = false;
             std::deque<PlannedItem> pending_;
             std::vector<PlannedItem> items_, directories_;
+            std::vector<std::pair<EntrySnapshot, MetadataPatch>> archiveDirectories_;
             std::map<IStorageProvider*, std::shared_ptr<IReadStream>> discoveryPins_;
             std::vector<std::shared_ptr<IStorageProvider>> batchReaders_;
             std::set<std::string> seen_;
