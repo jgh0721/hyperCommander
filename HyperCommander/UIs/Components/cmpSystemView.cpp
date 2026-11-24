@@ -412,6 +412,7 @@ void CSystemView::buildServiceBar( QWidget* Bar )
 
 void CSystemView::configureGrid()
 {
+    view_->modelController()->setPartialDataUpdatesEnabled(true);
     view_->beginUpdate();
     auto& Options = view_->options();
     Options.setGroupsHeader( false );

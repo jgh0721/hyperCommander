@@ -140,6 +140,7 @@ private slots:
     void independentGrouping() { hc::tests::GridIndependentGroupingRegression(); }
     void fileManager() { hc::tests::GridFileManagerRegression(); }
     void cacheAndSort() { hc::tests::GridCacheAndSortRegression(); }
+    void partialDataUpdates() { hc::tests::GridPartialDataUpdatesRegression(); }
     void recordPainterWithFileManager()
     {
         hc::tests::GridCountingModel Model(10);

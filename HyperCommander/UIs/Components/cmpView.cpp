@@ -1117,6 +1117,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     }
     model_ = Source;
     proxy_ = Proxy;
+    Controller->setPartialDataUpdatesEnabled(qobject_cast<CFSModel*>(Source) != nullptr);
     if (thumbnailModel_) thumbnailModel_->Bind(Proxy ? static_cast<QAbstractItemModel*>(Proxy) : Source);
     // HC-QTN-005: 8.2.0 can retain selection ranges across a model reset.
     // Clear them before rows disappear: selectedRowIndexes otherwise dereferences

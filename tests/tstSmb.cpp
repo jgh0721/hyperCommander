@@ -436,6 +436,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "historyListingReuseUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "remoteDirectoryChangesUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "gridPopulationSortCacheUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "qtitanPartialDataUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewRefreshInputUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewCloseTabUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "directoryHotListFromSystemToolUi"
@@ -11554,6 +11555,7 @@ private slots:
 
     void columnGroupingSummaryExperimentUi() { hc::tests::GridGroupingSummaryExperiment(); }
     void qtitanCacheAndSortUi() { hc::tests::GridCacheAndSortRegression(); }
+    void qtitanPartialDataUi() { hc::tests::GridPartialDataUpdatesRegression(); }
     void qtitanFileManagerUi() { hc::tests::GridFileManagerRegression(); }
 
     void listLayoutRestartUi()

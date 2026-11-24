@@ -3,6 +3,7 @@
 #include <QAbstractTableModel>
 #include <QElapsedTimer>
 #include <QPainter>
+#include <QPaintEvent>
 #include <QPersistentModelIndex>
 #include <QStandardItemModel>
 #include <QtnGridTreeView.h>
@@ -338,6 +339,111 @@ inline void GridIncrementalRegression()
     Model.Insert(0, 1); QVERIFY(MatchesRebuild());
 }
 
+
+inline void GridPartialDataUpdatesRegression()
+{
+    class PaintModel final : public GridCountingModel
+    {
+    public:
+        using GridCountingModel::GridCountingModel;
+        QVariant data(const QModelIndex& Index, int Role) const override
+        {
+            if (Index.isValid() && Index.row() == 2 && Index.column() == 0 && Role == Qt::ForegroundRole)
+                return color_;
+            return GridCountingModel::data(Index, Role);
+        }
+        void Recolor(const QColor& Color)
+        {
+            color_ = Color;
+            emit dataChanged(index(2, 0), index(2, 0), {Qt::ForegroundRole});
+        }
+        void UnknownChange(int Row) { emit dataChanged(index(Row, 0), index(Row, 2)); }
+    private:
+        QColor color_ = Qt::red;
+    } Model(6000);
+
+    struct PaintProbe final : QObject
+    {
+        qint64 pixels_ = 0;
+        bool eventFilter(QObject*, QEvent* Event) override
+        {
+            if (Event->type() == QEvent::Paint)
+                for (const auto& Rect : static_cast<QPaintEvent*>(Event)->region())
+                    pixels_ += qint64(Rect.width()) * Rect.height();
+            return false;
+        }
+    } Probe;
+
+    Qtitan::Grid Grid;
+    auto* View = SetupGrid(Grid, Model);
+    auto* Controller = View->modelController();
+    View->setFileManagerMode(true);
+    View->setFocusedRowIndex(2);
+    Grid.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&Grid));
+    Grid.viewport()->installEventFilter(&Probe);
+    const auto FlushPaint = [] {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::UpdateRequest);
+        QCoreApplication::processEvents();
+    };
+    FlushPaint();
+
+    qint64 FullPixels = 0, PartialPixels = 0;
+    for (const bool Partial : {false, true})
+    {
+        Controller->setPartialDataUpdatesEnabled(Partial);
+        FlushPaint();
+        Probe.pixels_ = 0;
+        QElapsedTimer Timer; Timer.start();
+        for (int Frame = 0; Frame < 24; ++Frame) {
+            Model.Recolor(Frame % 2 ? QColor(Qt::red) : QColor(Qt::yellow));
+            FlushPaint();
+        }
+        qInfo() << "Qtitan row paint" << (Partial ? "partial" : "full")
+                << "painted-pixels" << Probe.pixels_ << "update-ms" << Timer.elapsed();
+        (Partial ? PartialPixels : FullPixels) = Probe.pixels_;
+        QCOMPARE(View->focusedRowIndex(), 2);
+    }
+    QVERIFY(PartialPixels > 0);
+    QVERIFY2(PartialPixels * 3 < FullPixels, "A one-row update repainted most of the grid");
+
+    Probe.pixels_ = 0;
+    Model.Touch(5500, 5500);
+    FlushPaint();
+    QCOMPARE(Probe.pixels_, 0);
+    Model.UnknownChange(5500);
+    FlushPaint();
+    QVERIFY2(Probe.pixels_ > 0, "An unspecified role set must use the normal repaint path");
+
+    // A changed cell must read the new role. Other roles in that cell and
+    // cached cells elsewhere in the row should survive the exact notification.
+    Controller->beginUpdate();
+    Controller->clearRoleCache();
+    const auto Read = [&](int Column, int Role) {
+        QModelRoleData Value(Role);
+        QModelRoleDataSpan Span(&Value, 1);
+        Controller->getModelMultiValue(Model.index(2, Column), Span);
+        return Value.data().value<QColor>();
+    };
+    QCOMPARE(Read(0, Qt::ForegroundRole), QColor(Qt::red));
+    QCOMPARE(Read(0, Qt::BackgroundRole), QColor(Qt::black));
+    QCOMPARE(Read(1, Qt::ForegroundRole), QColor(Qt::green));
+    Model.multiReads_ = 0;
+    Model.Recolor(Qt::magenta);
+    QCOMPARE(Read(0, Qt::BackgroundRole), QColor(Qt::black));
+    QCOMPARE(Read(1, Qt::ForegroundRole), QColor(Qt::green));
+    QCOMPARE(Model.multiReads_, 0);
+    QCOMPARE(Read(0, Qt::ForegroundRole), QColor(Qt::magenta));
+    QCOMPARE(Model.multiReads_, 1);
+    Controller->endUpdate();
+
+    // An explicit sort-role change still repositions the record.
+    auto* Column = static_cast<Qtitan::GridTableColumn*>(View->getColumnByModelColumn(0));
+    Column->dataBinding()->setSortRole(Qt::UserRole);
+    Column->setSortOrder(Qtitan::SortAscending);
+    Model.Change(2, -1);
+    QCOMPARE(View->getRow(0).modelIndex(0).row(), 2);
+}
 
 inline void GridCacheAndSortRegression()
 {
