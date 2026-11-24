@@ -108,6 +108,23 @@ private slots:
         QVERIFY(Options["fileColorRules"].toObject()["groups"].toArray().isEmpty());
         QCOMPARE(Bytes(Path), Before);
     }
+    void filePanelDefaultMode()
+    {
+        QTemporaryDir Temp;
+        Repository Fresh(Temp.path());
+        const auto Mode = [](const Repository& Settings) {
+            return Settings.Read(Section::General).toObject()["filePanel"].toObject()["defaultMode"].toString();
+        };
+        QCOMPARE(Mode(Fresh), QString("auto"));
+
+        auto General = Fresh.Read(Section::General).toObject();
+        for (const auto* SavedMode : {"one-line", "two-line", "thumbnails"}) {
+            General["filePanel"] = QJsonObject{{"version", 1}, {"defaultMode", SavedMode}};
+            QVERIFY(Fresh.Put(Section::General, General));
+            Repository Reload(Temp.path());
+            QCOMPARE(Mode(Reload), QString::fromLatin1(SavedMode));
+        }
+    }
     void updateCheckSchedule()
     {
         const auto Now = QDateTime::fromString("2026-10-27T12:00:00Z", Qt::ISODate);

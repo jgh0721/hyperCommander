@@ -1439,7 +1439,7 @@ namespace hc::defaults
     inline QJsonObject FilePanel()
     {
         return { { "version", 1 },
-                 { "defaultMode",             "one-line" },
+                 { "defaultMode",             "auto" },
                  { "oneLineSeparator",        "none" },
                  { "twoLineSeparator",        "line" },
                  { "nameBelow",               false },

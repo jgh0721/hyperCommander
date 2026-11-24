@@ -510,7 +510,9 @@ bool QMainOpts::SaveSettings()
     General["refresh"] = Refresh;
     if (filePanelSupported_) {
         auto Panel = General.value("filePanel").toObject();
-        Panel["version"] = 1; Panel["defaultMode"] = QStringList{"one-line", "two-line", "auto", "thumbnails"}.value(listDefault_->currentIndex(), "one-line");
+        Panel["version"] = 1;
+        Panel["defaultMode"] = QStringList{"one-line", "two-line", "auto", "thumbnails"}.value(
+            listDefault_->currentIndex(), hc::defaults::FilePanel().value("defaultMode").toString());
         Panel["nameBelow"] = listNameBelow_->isChecked();
         const QStringList Separators{"none", "zebra", "line", "space", "tint"};
         Panel["oneLineSeparator"] = Separators.value(oneLineSeparator_->currentIndex(), "none");

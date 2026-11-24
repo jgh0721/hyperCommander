@@ -7518,6 +7518,18 @@ private slots:
         auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel"); Panel->RestoreWorkspace({{Tab}, 0});
         QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading() && model(Panel)->rowCount() == 182, 10000);
         auto* View = static_cast<CGridView*>(Panel->GetFocusView(0));
+        QCOMPARE(View->ListModeOverride(), QString("inherit"));
+        QCOMPARE(View->ListMode(), QString("auto"));
+        {
+            QMainOpts Dialog(main_);
+            Dialog.SetListView(View);
+            Dialog.ShowListSettingsPage();
+            Dialog.show();
+            auto* DefaultView = Dialog.findChild<QComboBox*>("hc.settings.listDefault");
+            QVERIFY(DefaultView);
+            QTRY_COMPARE(DefaultView->currentIndex(), 2);
+            Dialog.reject();
+        }
         auto* Native = View->BaseView(); auto* Grid = View->findChild<Qtitan::Grid*>();
         auto Light = Colors->ForMode(false); Light.FileList_Font.setPixelSize(13);
         emit Colors->sigColorSchemeChanged(Light); main_->resize(1360, 850); Panel->sig_NotifyPanelActivated();
