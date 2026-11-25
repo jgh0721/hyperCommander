@@ -1246,10 +1246,11 @@ void FileJobUi::updateJobs()
         if (!closing_ && !CloseFinishedJob(Stored->second) && (Stored->second.snapshot_.state_ == JobState::Failed
             || Stored->second.snapshot_.failedItems_ || Stored->second.snapshot_.error_ || !Stored->second.cleanupErrors_.empty())) {
             const auto& Snapshot = Stored->second.snapshot_;
-            auto* Message = new hc::ui::MessageDialog(QMessageBox::Warning, tr("파일 작업 실패"),
+            auto* Message = new QMessageBox(QMessageBox::Warning, tr("파일 작업 실패"),
                 tr("파일 작업을 완료하지 못했습니다. 완료 %1 / 건너뜀 %2 / 실패 %3")
                     .arg(Snapshot.completedItems_).arg(Snapshot.skippedItems_).arg(Snapshot.failedItems_),
                 QMessageBox::Ok, dialog_->isVisible() ? dialog_ : main_.data());
+            Message->setOption(QMessageBox::Option::DontUseNativeDialog);
             Message->setObjectName("hc.jobs.failure");
             Message->setProperty("hc.jobs.id", QString::fromStdString(Snapshot.id_));
             Message->setAttribute(Qt::WA_DeleteOnClose);

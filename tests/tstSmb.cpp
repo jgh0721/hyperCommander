@@ -18098,6 +18098,17 @@ private slots:
         QCOMPARE(Message->informativeText().contains(QStringLiteral("이동 원본은 유지되었습니다")), PartialCopy);
         const auto Artifacts = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
         QTest::qWait(50);
+        const auto* Summary = Message->findChild<QLabel*>("qt_msgbox_label");
+        const auto* Details = Message->findChild<QLabel*>("qt_msgbox_informativelabel");
+        const auto* Confirm = Message->button(QMessageBox::Ok);
+        QVERIFY(Summary && Details && Confirm);
+        const auto Bounds = [Message](const QWidget* Widget) {
+            return QRect(Widget->mapTo(Message, QPoint()), Widget->size());
+        };
+        QVERIFY(Message->rect().contains(Bounds(Summary)));
+        QVERIFY(Bounds(Summary).bottom() < Bounds(Details).top());
+        QVERIFY(Bounds(Details).bottom() < Bounds(Confirm).top());
+        QVERIFY(Message->rect().contains(Bounds(Confirm)));
         if (!Artifacts.isEmpty()) QVERIFY(Message->grab().save(QDir(Artifacts).filePath("smb-delete-failure.png")));
         Message->accept(); QTRY_VERIFY(Window.findChildren<QMessageBox*>("hc.jobs.failure").isEmpty());
         Jobs.Show(); QTest::qWait(250); QVERIFY(Window.findChildren<QMessageBox*>("hc.jobs.failure").isEmpty());
