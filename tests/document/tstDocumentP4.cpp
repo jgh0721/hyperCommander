@@ -40,12 +40,16 @@ class Content final : public IContentSource {
 public:
     QByteArray bytes_ = "lease test";
     EntrySnapshot entry_; std::atomic<int> verifies_{0}; std::atomic<bool> release_{true}; bool changed_ = false;
+    std::atomic<int> firstDeadlineMs_{0};
     std::atomic<int> opens_{0}; bool probeTimesOut_ = false;
     EntrySnapshot Describe() const override { return entry_; }
     Task<std::shared_ptr<IReadStream>> OpenRead(OperationContext) override { ++opens_; auto Result = std::make_shared<Stream>(); Result->bytes_ = bytes_; return Ready<std::shared_ptr<IReadStream>>(std::shared_ptr<IReadStream>(Result)); }
     Task<Unit> Verify(OperationContext Context) override {
         const auto Attempt = ++verifies_;
-        if (probeTimesOut_ && Attempt == 1) return Ready<Unit>(Error{ErrorCategory::Unavailable, "deadline-exceeded"});
+        if (probeTimesOut_ && Attempt == 1) {
+            firstDeadlineMs_ = int(std::chrono::duration_cast<std::chrono::milliseconds>(Context.deadline_ - std::chrono::steady_clock::now()).count());
+            return Ready<Unit>(Error{ErrorCategory::Unavailable, "deadline-exceeded"});
+        }
         while (!release_) { if (auto Stop = Context.Check({"test"})) return Ready<Unit>(*Stop); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
         return Ready<Unit>(changed_ ? Result<Unit>(Error{ErrorCategory::StaleRevision, "test-source-changed"}) : Result<Unit>(Unit{}));
     }
@@ -155,7 +159,8 @@ private slots:
         hc::settings::Repository Settings(Temp.path());
         DocumentHandlerTarget Generic;
         QVERIFY(wlxTarget(Temp.filePath("generic"), {}, Generic));
-        const auto Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {Generic});
+        auto Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {Generic});
+        Candidates.preferBuiltinView_ = false;
         auto Input = Source("sample.cbz");
         Input->entry_.locator_.kind_ = LocatorKind::Smb;
         Input->entry_.size_ = Input->bytes_.size();
@@ -177,6 +182,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!Finished.isEmpty(), 10000);
         QVERIFY2(Finished.back()[1].toString() == "ready", qPrintable(Finished.back()[2].toString()));
         QCOMPARE(Selected, std::string("builtin.hyperviewer"));
+        QVERIFY(Input->firstDeadlineMs_ > 5000 && Input->firstDeadlineMs_ <= 15000);
         QCOMPARE(Input->verifies_.load(), 2);
         QCOMPARE(Input->opens_.load(), 0);
     }
@@ -261,8 +267,12 @@ private slots:
         QTimer Guard; Guard.setInterval(20); connect(&Guard, &QTimer::timeout, &Window, [] { if (Menu()) { QTest::qFail("unexpected handler menu", __FILE__, __LINE__); Menu()->close(); } }); Guard.start();
         QVERIFY(Controller.Open(Controller.Capture({DocumentIntent::View, {{Input, {}}}, [] { return true; }})));
         QTRY_COMPARE_WITH_TIMEOUT(Selected, std::string("builtin.hyperviewer"), 10000);
+        QCOMPARE(Input->opens_.load(), 0);
         Guard.stop(); Selected.clear();
         Pe.plugin_.detectionOverride_ = "EXT=\"C\"";
+        auto Plugins = Settings.Read(hc::settings::Section::Plugins).toObject();
+        Plugins["preferBuiltinView"] = false;
+        QVERIFY(Settings.Put(hc::settings::Section::Plugins, Plugins));
         Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {Pe, Sql});
         bool MenuSeen = false;
         QTimer Choose; Choose.setInterval(20); connect(&Choose, &QTimer::timeout, &Window, [&] {

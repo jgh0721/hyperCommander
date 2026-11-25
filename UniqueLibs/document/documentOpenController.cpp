@@ -29,6 +29,14 @@ struct PreparedOpen {
     std::vector<std::shared_ptr<IMaterializedFileLease>> leases_;
     std::shared_ptr<IMaterializer> materializer_;
 };
+std::string PreferredBuiltin(const DocumentHandlerCatalog& Catalog, DocumentIntent Intent, const HandlerSelection& Selection) {
+    if (Intent == DocumentIntent::View ? !Catalog.preferBuiltinView_ : !Catalog.preferBuiltinEdit_) return {};
+    for (const auto* Id : {"builtin.hyperviewer", "builtin.hypereditor", "builtin.rhwp-editor"}) {
+        const auto* Handler = Catalog.registry_.Find(Id);
+        if (Handler && DocumentHandlerResolver::Supports(*Handler, Intent, Selection.names_, Selection.textContent_)) return Id;
+    }
+    return {};
+}
 bool HasStreamingSmbComicHandler(const DocumentHandlerCatalog& Catalog, DocumentIntent Intent, const EntrySnapshot& Entry) {
     if (Entry.locator_.kind_ != LocatorKind::Smb || Entry.directory_) return false;
     const auto Extension = QFileInfo(QString::fromUtf8(Entry.name_)).suffix().toLower();
@@ -184,6 +192,8 @@ bool DocumentOpenController::Open(const QString& Token) {
     auto Catalog = catalog_();
     if (Selection.directory_ || !Selection.providerSupported_ || Selection.names_.empty())
         return selectHandler(Token, std::move(Request), std::move(Selection), std::move(Catalog));
+    if (!PreferredBuiltin(Catalog, Request.intent_, Selection).empty())
+        return selectHandler(Token, std::move(Request), std::move(Selection), std::move(Catalog));
     bool NeedProbe = false;
     for (const auto& Input : Request.documents_) if (Input.source_) {
         const auto Entry = Input.source_->Describe();
@@ -214,7 +224,7 @@ bool DocumentOpenController::Open(const QString& Token) {
     });
     Watcher->setFuture(QtConcurrent::run([Request, Catalog, Selection = std::move(Selection), Stop, HiddenParent]() mutable -> Result<HandlerSelection> {
         OperationContext Context; Context.stopToken_ = Stop->get_token();
-        Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(Request.intent_ == DocumentIntent::View ? 15 : 5);
         Context.maxReadBytes_ = 64 * 1024;
         for (size_t Index = 0; Index < Selection.names_.size(); ++Index) {
             if (Context.Check({})) break;
@@ -224,6 +234,7 @@ bool DocumentOpenController::Open(const QString& Token) {
             if (std::find(DocumentExtensions.begin(), DocumentExtensions.end(), Ext) != DocumentExtensions.end()) continue;
             Selection.textContent_[Index] = ProbeDocumentText(*Source, Context);
         }
+        if (!PreferredBuiltin(Catalog, Request.intent_, Selection).empty()) return Selection;
         auto Probed = ProbeDocumentHandlers(Catalog, Request, Selection, Context, HiddenParent);
         if (Probed.HasValue() || Probed.Failure().code_ != "deadline-exceeded" || Context.stopToken_.stop_requested())
             return Probed;
@@ -245,8 +256,9 @@ bool DocumentOpenController::selectHandler(const QString& Token, DocumentOpenReq
     const auto Resolution = DocumentHandlerResolver::Resolve(Catalog.registry_, Request.intent_, Selection, Default);
     if (Selection.directory_ || !Selection.providerSupported_ || Selection.names_.empty()) { report(Token, "rejected", QString::fromStdString(Resolution.reason_)); return true; }
     DocumentHandlerChoice Choice;
-    if (Resolution.candidates_.size() == 1) {
-        Choice.handler_ = Resolution.candidates_.front(); for (std::size_t I = 0; I < Request.documents_.size(); ++I) Choice.indexes_.push_back(I);
+    const auto Preferred = PreferredBuiltin(Catalog, Request.intent_, Selection);
+    if (!Preferred.empty() || Resolution.candidates_.size() == 1) {
+        Choice.handler_ = Preferred.empty() ? Resolution.candidates_.front() : Preferred; for (std::size_t I = 0; I < Request.documents_.size(); ++I) Choice.indexes_.push_back(I);
     } else {
         Choice = DocumentHandlerMenu::Choose(main_, Catalog, Request.intent_, Selection, Resolution);
     }

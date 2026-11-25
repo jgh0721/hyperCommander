@@ -95,6 +95,7 @@ struct QPluginManagementPage::State {
     QLineEdit* search_ = nullptr;
     QLabel *heading_ = nullptr, *support_ = nullptr, *actions_ = nullptr, *status_ = nullptr, *ruleStatus_ = nullptr, *info_ = nullptr;
     QCheckBox* enabled_ = nullptr;
+    QCheckBox *preferBuiltinView_ = nullptr, *preferBuiltinEdit_ = nullptr;
     QComboBox *mode_ = nullptr, *dialect_ = nullptr, *selection_ = nullptr, *processMode_ = nullptr, *testAction_ = nullptr;
     QListWidget* extensions_ = nullptr;
     QListWidget* builtinExtensions_ = nullptr;
@@ -419,7 +420,8 @@ void QPluginManagementPage::State::testFiles() {
     const auto Files = QFileDialog::getOpenFileNames(owner_, QStringLiteral("조건을 확인할 파일 선택")); if (Files.isEmpty()) return;
     if (Files.size() > 32) { hc::ui::MessageDialog::information(owner_, QStringLiteral("조건 확인"), QStringLiteral("한 번에 최대 32개 파일을 선택하세요.")); return; }
     storeHosts(); catalog(); auto Entries = entries_; const auto Plugins = plugins_; const auto Role = testAction_->currentData().toInt();
-    std::stable_sort(Entries.begin(), Entries.end(), [](const Entry& Left, const Entry& Right) { return Left.builtin_ < Right.builtin_; });
+    const bool BuiltinFirst = (Role == 2 && preferBuiltinView_->isChecked()) || (Role == 5 && preferBuiltinEdit_->isChecked());
+    std::stable_sort(Entries.begin(), Entries.end(), [BuiltinFirst](const Entry& Left, const Entry& Right) { return BuiltinFirst ? Left.builtin_ > Right.builtin_ : Left.builtin_ < Right.builtin_; });
     results_->clear(); results_->show(); test_->setEnabled(false);
     testWatcher_.setFuture(QtConcurrent::run([Files, Entries, Plugins, Role] {
         QVector<QStringList> Rows;
@@ -460,6 +462,13 @@ QPluginManagementPage::QPluginManagementPage(QWidget* Parent, QString ProductDir
     setObjectName("pluginManagementPage"); auto& S = *state_; auto* Layout = new QVBoxLayout(this);
     auto* Header = new fm::ui::DialogHeader(this); Header->setTitle(tr("플러그인 관리"));
     Header->setSubtitle(tr("① 종류와 플러그인 선택   ② 적용 조건 설정   ③ 조건 확인 후 적용")); Layout->addWidget(Header);
+    S.preferBuiltinView_ = new QCheckBox(tr("F3에서 내장 HyperViewer 우선 사용"));
+    S.preferBuiltinEdit_ = new QCheckBox(tr("F4에서 내장 HyperEditor 우선 사용"));
+    auto* Priorities = new QHBoxLayout;
+    Priorities->addWidget(S.preferBuiltinView_);
+    Priorities->addWidget(S.preferBuiltinEdit_);
+    Priorities->addStretch();
+    Layout->addLayout(Priorities);
     auto* Body = new QHBoxLayout; Layout->addLayout(Body, 1);
     S.roles_ = new QListWidget; S.roles_->setObjectName("pluginRoles"); S.roles_->addItems({tr("전체"), tr("압축"), tr("문서"), tr("파일 시스템"), tr("파일 정보")}); S.roles_->setFixedWidth(116); S.roles_->setSpacing(3); for (int Row = 0; Row < S.roles_->count(); ++Row) S.roles_->item(Row)->setSizeHint(QSize(0, 30)); Body->addWidget(S.roles_);
     auto* Catalog = new QVBoxLayout; Body->addLayout(Catalog, 3); S.search_ = new QLineEdit; S.search_->setPlaceholderText(tr("이름·지원 형식 검색")); S.search_->setClearButtonEnabled(true); S.search_->setObjectName("pluginSearch"); Catalog->addWidget(S.search_);
@@ -527,11 +536,17 @@ void QPluginManagementPage::Load(hc::settings::Repository& Settings) {
     for (auto* Host : state_->hosts_) Host->Load(Settings);
 }
 void QPluginManagementPage::LoadDocument(const QJsonObject& Plugins) {
-    auto& S = *state_; S.loading_ = true; S.plugins_ = Plugins; S.loadHosts(); const auto At = S.selection_->findData(Plugins.value("viewerSelection").toString(hc::defaults::DefaultValue("plugins/viewerSelection").toString())); S.selection_->setCurrentIndex(qMax(At, 0)); S.rebuild(); S.loading_ = false;
+    auto& S = *state_; S.loading_ = true; S.plugins_ = Plugins;
+    S.preferBuiltinView_->setChecked(Plugins.value("preferBuiltinView").toBool(true));
+    S.preferBuiltinEdit_->setChecked(Plugins.value("preferBuiltinEdit").toBool(true));
+    S.loadHosts(); const auto At = S.selection_->findData(Plugins.value("viewerSelection").toString(hc::defaults::DefaultValue("plugins/viewerSelection").toString())); S.selection_->setCurrentIndex(qMax(At, 0)); S.rebuild(); S.loading_ = false;
 }
 bool QPluginManagementPage::Validate() { return state_->validate(); }
 bool QPluginManagementPage::AddTotalCommanderPlugin(const QString& Path, bool Review) { return state_->addTc(Path, Review); }
-QJsonObject QPluginManagementPage::Document() const { auto& S = *state_; S.storeItem(); S.storeHosts(); auto Result = S.plugins_; Result["viewerSelection"] = S.selection_->currentData().toString(); return Result; }
+QJsonObject QPluginManagementPage::Document() const { auto& S = *state_; S.storeItem(); S.storeHosts(); auto Result = S.plugins_;
+    Result["preferBuiltinView"] = S.preferBuiltinView_->isChecked();
+    Result["preferBuiltinEdit"] = S.preferBuiltinEdit_->isChecked();
+    Result["viewerSelection"] = S.selection_->currentData().toString(); return Result; }
 bool QPluginManagementPage::SelectPlugin(const QString& Binary, bool Review) {
     auto& S = *state_; S.roles_->setCurrentRow(0); S.search_->clear();
     for (const auto& Value : S.entries_) if (!Value.builtin_ && QFileInfo(Value.path_).absoluteFilePath().compare(QFileInfo(Binary).absoluteFilePath(), Qt::CaseInsensitive) == 0) {

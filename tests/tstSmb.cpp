@@ -8806,6 +8806,9 @@ private slots:
         SetPluginField(hc::settings::AppSettings(), "wlx", 0, "hostEnabled", true);
         SetPluginField(hc::settings::AppSettings(), "wlx", 0, "hostReviewed", hc::settings::JsonObject(EncodeManifest(Inspected.Value().manifest_)));
         hc::settings::AppSettings().Commit(); TyStPlugInMgr::GetInstance()->Refresh();
+        auto PluginOptions = hc::settings::AppSettings().Read(hc::settings::Section::Plugins).toObject();
+        PluginOptions["preferBuiltinView"] = false;
+        QVERIFY(hc::settings::AppSettings().Put(hc::settings::Section::Plugins, PluginOptions));
         const auto Choices = QPluginHostSettings::ViewerChoices(hc::settings::AppSettings()); QVERIFY(!Choices.empty());
         const auto Target = hc::document::BuildPluginViewerTarget(Choices.front().name_, Choices.front().options_, Choices.front().extensions_);
         QTemporaryDir Content; const auto Name = QFileInfo(qEnvironmentVariable("HC_WLX_SOURCE")).fileName();

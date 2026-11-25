@@ -22,6 +22,7 @@ struct DocumentHandlerCatalog {
     DocumentHandlerRegistry registry_;
     std::map<std::string, DocumentHandlerTarget> targets_;
     std::string defaultView_, defaultEdit_;
+    bool preferBuiltinView_ = true, preferBuiltinEdit_ = true;
 };
 DocumentHandlerCatalog BuildDocumentHandlerCatalog(hc::settings::Repository& Settings, const QString& Directory, std::vector<DocumentHandlerTarget> Plugins = {});
 DocumentHandlerTarget BuildPluginViewerTarget(const QString& Name, hc::plugins::PluginViewerOptions Options,

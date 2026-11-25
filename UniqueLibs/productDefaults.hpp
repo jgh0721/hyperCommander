@@ -1567,7 +1567,7 @@ namespace hc::defaults
                  { "fileSets",                QJsonArray{} },
                  { "editors",                 QJsonObject{ { "items", QJsonArray{} } } },
                  { "plugins",
-                   QJsonObject{ { "viewerSelection", "manual" },
+                   QJsonObject{ { "viewerSelection", "manual" }, { "preferBuiltinView", true }, { "preferBuiltinEdit", true },
                                 { "wlx",                     QJsonArray{} },
                                 { "wcx",                     QJsonArray{} },
                                 { "wfx",                     QJsonArray{} },

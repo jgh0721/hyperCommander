@@ -34,6 +34,8 @@ DocumentHandlerCatalog BuildDocumentHandlerCatalog(hc::settings::Repository& Set
     Result.defaultView_ = "builtin.hyperviewer";
     Result.defaultEdit_ = "builtin.hypereditor";
     const auto PluginConfig = Settings.Read(hc::settings::Section::Plugins).toObject();
+    Result.preferBuiltinView_ = PluginConfig.value("preferBuiltinView").toBool(true);
+    Result.preferBuiltinEdit_ = PluginConfig.value("preferBuiltinEdit").toBool(true);
     const auto Add = [&](DocumentHandlerTarget Target) {
         auto& Descriptor = Target.descriptor_;
         if (Descriptor.stableId_.starts_with("builtin.")) {
