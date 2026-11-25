@@ -218,6 +218,41 @@ void filterKernelsLinearLightAlphaAndTiles(){
     std::stop_source Stop;Stop.request_stop();Average.stop_=Stop.get_token();QCOMPARE(ResampleImage(Average).error_,QString("image-render-cancelled"));
     Average.stop_={};Average.sourceToOutput_=QTransform::fromScale(0,1);QCOMPARE(ResampleImage(Average).error_,QString("image-render-singular-transform"));
 }
+void standaloneLargePdf() {
+    QTemporaryDir Root;
+    auto Bytes = PdfFixture();
+    const auto Offset = Bytes.lastIndexOf("startxref");
+    QVERIFY(Offset > 0);
+    // Padding after the xref table leaves every PDF object offset valid.
+    Bytes.insert(Offset, QByteArray(65 * 1024 * 1024, ' '));
+    const auto Path = Root.filePath("large.pdf");
+    QVERIFY(Put(Path, Bytes));
+    Bytes.clear();
+    const auto Share = "//localhost/" + Path.left(1) + "$" + Path.mid(2);
+    const bool Smb = Path.mid(1, 2) == ":/" && QFileInfo::exists(Share);
+    qInfo() << "Large PDF opened over SMB:" << Smb;
+    DocumentWorkspaceWidget Window(Root.filePath("recovery"));
+    Window.show();
+    const auto Id = Window.Handle({{"action", "open"}, {"path", Smb ? Share : Path}})["documentId"].toString();
+    QTRY_VERIFY_WITH_TIMEOUT(Ready(Window, Id), 30000);
+    QCOMPARE(Doc(Window, Id)["view"].toObject()["viewId"].toString(), QString("pdf"));
+    const auto Copy = Root.filePath("copy.pdf");
+    Window.Handle({{"action", "saveAs"}, {"documentId", Id}, {"path", Copy}});
+    QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle() && QFileInfo(Copy).size() == QFileInfo(Path).size(), 30000);
+    QCOMPARE(Doc(Window, Id)["path"].toString(), Copy);
+    Window.Handle({{"action", "pdf.rotate"}, {"documentId", Id}, {"angle", 90}});
+    QTRY_VERIFY(Doc(Window, Id)["dirty"].toBool());
+    Window.Handle({{"action", "save"}, {"documentId", Id}});
+    QTRY_VERIFY_WITH_TIMEOUT(!Doc(Window, Id)["dirty"].toBool(), 30000);
+    const auto Saved = Read(Copy);
+    auto Document = FPDF_LoadMemDocument64(Saved.constData(), Saved.size(), nullptr);
+    QVERIFY(Document);
+    auto Page = FPDF_LoadPage(Document, 0);
+    QVERIFY(Page);
+    QCOMPARE(FPDFPage_GetRotation(Page), 1);
+    FPDF_ClosePage(Page);
+    FPDF_CloseDocument(Document);
+}
 void mixedTabsEditSaveReopenAndRecovery(){
     QTemporaryDir Root;QVERIFY(Put(Root.filePath("text.txt"),"find find\r\n한글"));
     QVERIFY(Put(Root.filePath("document.pdf"),PdfFixture()));QVERIFY(Put(Root.filePath("image.png"),Png(ImageFixture())));

@@ -1705,7 +1705,7 @@ namespace hc::document
                 return {{"replacing", true}, {"documentId", Tab->id_}};
             }
             if (Tab->Dirty()) {
-                if (!hosted_ && Tab->session_->ByteSize() > DocumentByteLimit) return Error("p0-text-byte-limit");
+                if (!hosted_ && Tab->pane_->ViewId() != "pdf" && Tab->session_->ByteSize() > DocumentByteLimit) return Error("p0-text-byte-limit");
                 // SDK owns one slot; a newer pending Load supersedes its predecessor.
                 pendingHostOpen_ = {{"path", Path}, {"sourceToken", SourceToken}, {"broker", Broker}, {"displayName", DisplayName}};
                 Tab->pane_->SetReadOnly(true); Checkpoint(); return {{"replacing", true}, {"documentId", Tab->id_}};
@@ -2045,6 +2045,7 @@ namespace hc::document
                 else {
                     Tab->everReady_=true;finishProgress(Tab,true);
                     Tab->session_->SetBinaryContent(true);
+                    Tab->session_->SetUnlimitedBytes(hosted_ || Tab->pane_->ViewId() == "pdf");
                     // D10: a preserved PDF opens dirty, against its original's bytes (reattached) or, as a copy, against nothing.
                     const bool PdfRecovery = Tab->input_.recoveryRecord_ && !Tab->input_.recoveryRecord_->text_;
                     {
@@ -2189,7 +2190,7 @@ namespace hc::document
             return QByteArray::fromStdString(Native->SerializedBytes());
         }();
         Tab->pendingBytes_ = Exported.HasValue() ? Exported.Value() : QByteArray{};
-        if (!Exported.HasValue() || (!hosted_ && Tab->pendingBytes_.size() > DocumentByteLimit)) {
+        if (!Exported.HasValue() || (!hosted_ && Tab->pane_->ViewId() != "pdf" && Tab->pendingBytes_.size() > DocumentByteLimit)) {
             const auto Failure = Exported.HasValue() ? storage::Error{storage::ErrorCategory::BudgetExceeded, "document-save-byte-budget"} : Exported.Failure();
             Tab->session_->CompleteSave(*Tab->pending_, {false, {}, Failure});
             Tab->pending_.reset(); Tab->pendingBytes_.clear(); return Error(QString::fromStdString(Failure.code_));
@@ -2388,7 +2389,7 @@ namespace hc::document
         });
         const bool Image=Tab->pane_->ViewId()=="image";
         const auto Cancellation=Tab->cancellation_;
-        Watcher->setFuture(QtConcurrent::run([Request,Expected,Hash,Cancellation,Image,Unlimited=hosted_,Written]() mutable ->Output {
+        Watcher->setFuture(QtConcurrent::run([Request,Expected,Hash,Cancellation,Image,Unlimited=hosted_ || Tab->pane_->ViewId()=="pdf",Written]() mutable ->Output {
             try {
                 storage::OperationContext Context;Context.stopToken_=Cancellation->get_token();Context.deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(150);
                 Context.reportProgress_=[Written](const storage::OperationContext::Progress& P){if(P.bytesTotal_){Written->total_=qint64(*P.bytesTotal_);Written->done_=qint64(P.bytesDone_);}};
@@ -2442,7 +2443,7 @@ namespace hc::document
             if (Tab->loading_ || Tab->navigating_ || Tab->closed_ || Tab->checkpointing_ || !Tab->Dirty() || Tab->checkpointedRevision_ == Tab->Revision()) continue;
             const auto Native = Tab->session_->NativeText();
             auto Bytes = Native ? std::string{} : Tab->pane_->ViewId() == "image" ? Tab->pane_->Content().toStdString() : Tab->session_->Text();
-            if (!hosted_ && (Native ? qMax(Native->Size(), Native->SerializedSize()) : Bytes.size()) > DocumentByteLimit) { Tab->error_ = "document-recovery-budget"; continue; }
+            if (!hosted_ && Tab->pane_->ViewId() != "pdf" && (Native ? qMax(Native->Size(), Native->SerializedSize()) : Bytes.size()) > DocumentByteLimit) { Tab->error_ = "document-recovery-budget"; continue; }
             RecoverySnapshot Record; Record.document_ = Tab->session_->Snapshot(); Record.bytes_ = std::move(Bytes);Record.viewId_=Tab->pane_->ViewId().toStdString();
             if (hotExitEligible(Tab)) {
                 QByteArray Utf8; Record.text_ = Tab->pane_->CaptureTextRecovery(Utf8, !Native);
@@ -3507,10 +3508,9 @@ namespace hc::document
     }
     bool DocumentWorkspaceWidget::hotExitPdf(const std::shared_ptr<Tab>& Tab) const
     {
-        // D10: the annotated PDF fits one recovery snapshot (64 MiB); larger ones keep asking.
         return !hosted_ && Tab->pane_->ViewId() == "pdf" && !Tab->loading_ && Tab->originalAuthority_ && Tab->temporarySource_.isEmpty()
             && !Tab->hostSlot_ && !Tab->broker_ && Tab->sourceToken_.isEmpty() && QFileInfo(Tab->path_).isAbsolute()
-            && Tab->session_->ByteSize() <= DocumentByteLimit && !Tab->pane_->IsBusy();
+            && !Tab->pane_->IsBusy();
     }
     bool DocumentWorkspaceWidget::hotExitEligible(const std::shared_ptr<Tab>& Tab) const
     {

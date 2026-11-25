@@ -127,13 +127,15 @@ namespace hc::document
             if(auto Stop=Context.Check({"document"}))return *Stop;
             TextInput Input;Input.path_=Canonical;Input.source_=After.Value();Input.bytes_=Cached->bytes_;Input.hash_=Cached->hash_;Input.image_=Cached->image_;Input.viewId_="image";return Input;
         }
-        QFile ProbeFile(Canonical); bool ImageContent = false;
+        const auto Suffix = QFileInfo(Path).suffix().toLower();
+        QFile ProbeFile(Canonical); bool ImageContent = false, PdfContent = false;
         if (ProbeFile.open(QIODevice::ReadOnly)) {
             ImageTraceSpan ProbeTrace("image.probe",Path);
-            const auto Header=ProbeFile.peek(2);
+            const auto Header = ProbeFile.peek(5);
+            PdfContent = Header == "%PDF-" && Suffix != "hwp" && Suffix != "hwpx";
             QImageReader Probe(&ProbeFile); Probe.setDecideFormatFromContent(true);
             ImageContent = Probe.canRead() && DocumentImageFormatMatches(Probe.format().toStdString(), QFileInfo(Path).suffix().toLower().toStdString());
-            if(ImageContent&&Header.size()==2&&Header[0]=='P'&&Header[1]>='1'&&Header[1]<='6')ImageContent=!Probe.size().isEmpty();
+            if(ImageContent&&Header.size()>=2&&Header[0]=='P'&&Header[1]>='1'&&Header[1]<='6')ImageContent=!Probe.size().isEmpty();
         }
         if (QStringList{"pdf", "hwp", "hwpx", "epub"}.contains(QFileInfo(Path).suffix().toLower())) TextPreview = {};
         QByteArray Prefix;
@@ -159,8 +161,8 @@ namespace hc::document
         // Metadata-only sources have no reliable per-handle identity to cache;
         // their exact version is rechecked by Stat and their bytes by SHA-256.
         const bool HasIdentity=Before.Value().id_.revision_&&Before.Value().id_.revision_->token_.find(":identity:")!=std::string::npos;
-        const bool Epub=QFileInfo(Path).suffix().compare("epub",Qt::CaseInsensitive)==0;
-        auto Bytes=Read(Canonical,Context,(ImageContent||Unlimited)&&!Epub,&Digest,HasIdentity?&Revision:nullptr,Epub?epub::InputLimit:DocumentByteLimit,ImageContent?Preview:std::function<void(QImage)>{}, ImageContent?std::function<void(QString)>{}:TextPreview,Prefix,PreviewBounds);
+        const bool Epub = Suffix == "epub";
+        auto Bytes=Read(Canonical,Context,(ImageContent||PdfContent||Unlimited)&&!Epub,&Digest,HasIdentity?&Revision:nullptr,Epub?epub::InputLimit:DocumentByteLimit,ImageContent?Preview:std::function<void(QImage)>{}, ImageContent?std::function<void(QString)>{}:TextPreview,Prefix,PreviewBounds);
         if(!Bytes.HasValue()) {
             if(Epub&&Bytes.Failure().category_==ErrorCategory::BudgetExceeded)return Error{ErrorCategory::BudgetExceeded,"epub-input-budget"};
             return Bytes.Failure();
@@ -169,7 +171,6 @@ namespace hc::document
         documentReadRevision(After.Value(),Canonical);
         TextInput Input;Input.path_=Canonical;Input.source_=After.Value();Input.bytes_=std::move(Bytes.Value());
         Input.hash_=Digest.result();
-        const auto Suffix=QFileInfo(Path).suffix().toLower();
         // RHWP validates the container and renders in its isolated process.
         // Never decode an HWPX ZIP or binary HWP as text or an image book.
         if(Suffix=="epub"){Input.viewId_="epub";return Input;}
