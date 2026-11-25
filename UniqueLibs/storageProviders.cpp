@@ -182,6 +182,86 @@ namespace hc::storage
                 }
             }
         }
+        // FileIdExtdDirectoryInfo ABI for the project's baseline SDK declarations.
+        struct ArchiveDirectoryRow {
+            DWORD next_, index_;
+            LARGE_INTEGER created_, accessed_, written_, changed_, size_, allocation_;
+            DWORD attributes_, nameBytes_, eaSize_, tag_;
+            BYTE identifier_[16];
+            WCHAR name_[1];
+        };
+        static_assert(offsetof(ArchiveDirectoryRow, name_) == 88);
+
+        class ArchiveDirectoryCursor final : public IEntryCursor {
+        public:
+            ArchiveDirectoryCursor(Locator At, ProviderId Provider, std::string Prefix)
+                : at_(std::move(At)), provider_(std::move(Provider)), prefix_(std::move(Prefix)) {}
+            ~ArchiveDirectoryCursor() override { if (handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_); }
+            bool Open(const std::wstring& Path) {
+                handle_ = CreateFileW(Path.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                if (handle_ == INVALID_HANDLE_VALUE) return false;
+                struct { ULONGLONG volume_; BYTE identifier_[16]; } Identity{};
+                wchar_t FileSystem[32]{};
+                if (!GetVolumeInformationByHandleW(handle_, nullptr, 0, nullptr, nullptr, nullptr, FileSystem, DWORD(std::size(FileSystem)))
+                    || (_wcsicmp(FileSystem, L"NTFS") && _wcsicmp(FileSystem, L"ReFS"))
+                    || !GetFileInformationByHandleEx(handle_, static_cast<FILE_INFO_BY_HANDLE_CLASS>(18), &Identity, sizeof(Identity))) return false;
+                volume_ = Identity.volume_;
+                return refill() == ERROR_SUCCESS;
+            }
+            Task<EntryPage> Next(size_t MaxItems, OperationContext Context) override {
+                return Run<EntryPage>([this, MaxItems, Context]() -> Result<EntryPage> {
+                    const auto Limit = (std::min)(MaxItems, Context.maxPageItems_);
+                    if (!Limit) return Error{ErrorCategory::InvalidRequest, "zero-page-size", provider_};
+                    EntryPage Page;
+                    Page.verifiedChildMetadata_ = true;
+                    while (!ended_ && Page.entries_.size() < Limit) {
+                        if (const auto Stop = Context.Check(provider_)) return *Stop;
+                        if (!row_) {
+                            const auto Code = refill();
+                            if (Code) return DirectoryError(Code, provider_, at_.root_, "archive-directory-page");
+                            if (ended_) break;
+                        }
+                        const auto& Row = *row_;
+                        row_ = Row.next_ ? reinterpret_cast<const ArchiveDirectoryRow*>(reinterpret_cast<const BYTE*>(row_) + Row.next_) : nullptr;
+                        const auto Name = QString::fromWCharArray(Row.name_, int(Row.nameBytes_ / sizeof(WCHAR)));
+                        if (Name == "." || Name == "..") continue;
+                        if (++count_ > Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "entry-limit", provider_};
+                        const auto Time = [](LARGE_INTEGER Value) { return FILETIME{Value.LowPart, DWORD(Value.HighPart)}; };
+                        WIN32_FILE_ATTRIBUTE_DATA Data{Row.attributes_, Time(Row.created_), Time(Row.accessed_), Time(Row.written_),
+                            DWORD(Row.size_.HighPart), Row.size_.LowPart};
+                        const auto ChildName = Name.toStdString();
+                        const auto Child = at_.root_ + (at_.root_.ends_with('\\') || at_.root_.ends_with('/') ? "" : "\\") + ChildName;
+                        auto Item = Entry(provider_, prefix_, {at_.kind_, Child}, ChildName, Data, false);
+                        if (std::any_of(std::begin(Row.identifier_), std::end(Row.identifier_), [](BYTE Value) { return Value != 0; })) {
+                            const auto Identity = native::PersistentIdentity(volume_, Row.identifier_);
+                            Item.id_.revision_ = ResourceRevision{(Item.directory_ ? "directory" : Item.id_.revision_->token_) + ":identity:" + Identity};
+                        } else Item.id_.revision_.reset();
+                        Item.hints_["archiveWriteTicks"] = std::to_string(Row.written_.QuadPart);
+                        Item.hints_["reparseTag"] = std::to_string(Row.tag_);
+                        Page.entries_.push_back(std::move(Item));
+                    }
+                    Page.end_ = ended_; return Page;
+                }, Context.workerRead_);
+            }
+        private:
+            DWORD refill() {
+                constexpr auto ExtendedDirectory = static_cast<FILE_INFO_BY_HANDLE_CLASS>(19);
+                if (GetFileInformationByHandleEx(handle_, ExtendedDirectory, buffer_, DWORD(sizeof(buffer_)))) {
+                    row_ = reinterpret_cast<const ArchiveDirectoryRow*>(buffer_); return ERROR_SUCCESS;
+                }
+                const auto Code = GetLastError();
+                if (Code != ERROR_NO_MORE_FILES) return Code;
+                ended_ = true; return ERROR_SUCCESS;
+            }
+            Locator at_; ProviderId provider_; std::string prefix_;
+            HANDLE handle_ = INVALID_HANDLE_VALUE;
+            ULONGLONG volume_ = 0, buffer_[8192];
+            const ArchiveDirectoryRow* row_ = nullptr;
+            size_t count_ = 0;
+            bool ended_ = false;
+        };
         // Mutation discovery must yield bounded pages even in one large folder.
         // Browsing retains its immutable snapshot; this cursor is used only when
         // the coordinator explicitly requests incremental enumeration.
@@ -501,6 +581,11 @@ namespace hc::storage
                             return DirectoryError(Code, Id, At.root_, "attributes", &Recovery);
                         }
                         if (!(Attributes & FILE_ATTRIBUTE_DIRECTORY)) return Error{ErrorCategory::InvalidRequest, "not-directory", Id};
+                        if (Context.archivePlanning_ && Kind == LocatorKind::Local && !hc::folders::IsNetwork(At)
+                            && !(Attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+                            auto Cursor = std::make_unique<ArchiveDirectoryCursor>(At, Id, Prefix);
+                            if (Cursor->Open(Path)) return std::unique_ptr<IEntryCursor>(std::move(Cursor));
+                        }
                         if (Context.incrementalEnumeration_)
                             return std::unique_ptr<IEntryCursor>(new NativeMutationCursor(std::move(At), Id, Prefix, std::move(Recovery)));
                         if (Context.freshEnumerationMetadata_ && Context.allowUnavailableChildMetadata_

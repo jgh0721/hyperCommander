@@ -13,15 +13,19 @@ struct UpdateItem {
     QByteArray legacyMd5_;
     QString zipEncryption_;
     bool reuseData_ = false;
+    const ArchiveUpdate::NativeSource* planned_ = nullptr;
+    bool verifyPlanned_ = false;
 };
 QString EntryKey(QString Name) { Name.replace('\\', '/'); if (Name.endsWith('/')) Name.chop(1); return Name; }
 bool SafeUpdateName(const QString& Name) {
     if (Name.isEmpty() || Name.startsWith('/') || Name.contains(':') || Name.contains(QChar::Null)) return false;
+    static const QRegularExpression InvalidCharacters("[<>\"|?*\\x00-\\x1f]");
+    static const QRegularExpression DeviceName("^(COM|LPT)[1-9]$");
     for (const auto& Part : Name.split('/')) {
         if (Part.isEmpty() || Part == "." || Part == ".." || Part.endsWith('.') || Part.endsWith(' ')) return false;
-        if (Part.contains(QRegularExpression("[<>\"|?*\\x00-\\x1f]"))) return false;
+        if (Part.contains(InvalidCharacters)) return false;
         const auto Base = Part.section('.', 0, 0).toUpper();
-        if (Base == "CON" || Base == "PRN" || Base == "AUX" || Base == "NUL" || Base.contains(QRegularExpression("^(COM|LPT)[1-9]$"))) return false;
+        if (Base == "CON" || Base == "PRN" || Base == "AUX" || Base == "NUL" || Base.contains(DeviceName)) return false;
     }
     return true;
 }
@@ -102,7 +106,15 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetStream(UInt32 Index, ISequentialInStream** Stream) noexcept override {
         *Stream = nullptr; if (Index >= items_.size()) return E_INVALIDARG; const auto& Item = items_[Index];
-        if (Item.input_) { if (Item.input_->Seek(0, 0, nullptr) != S_OK) return E_FAIL; Item.input_->AddRef(); *Stream = Item.input_.get(); }
+        if (Item.planned_ && !Item.directory_) {
+            try {
+                auto& Member = items_[Index];
+                Com<Input> Source{new Input(state_, Item.verifyPlanned_)};
+                if (!Source->BindPlannedSource(Item.path_, *Item.planned_, Item.verifyPlanned_ ? &Member.digest_ : nullptr))
+                    return state_->Fail(Failure("7zip-planned-input-changed", ErrorCategory::StaleRevision));
+                Source->AddRef(); *Stream = Source.value_;
+            } catch (...) { return E_FAIL; }
+        } else if (Item.input_) { if (Item.input_->Seek(0, 0, nullptr) != S_OK) return E_FAIL; Item.input_->AddRef(); *Stream = Item.input_.get(); }
         return report([&] { progress_.currentItem_ = Item.name_.toStdString(); });
     }
     HRESULT STDMETHODCALLTYPE SetOperationResult(Int32 Code) noexcept override {
@@ -202,6 +214,8 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
     if (!Request.sourcePaths_.empty() && (Request.sourcePaths_.size() != Request.add_.size() || Existing || !Request.creation_
         || !Request.remove_.empty() || !Request.metadataOrigins_.empty() || !Request.reuseData_.empty()))
         return Failure("7zip-invalid-source-mapping", ErrorCategory::InvalidRequest);
+    if (!Request.plannedSources_.empty() && (Request.plannedSources_.size() != Request.sourcePaths_.size()
+        || Existing || Request.encrypt_ || !Request.creation_)) return Failure("7zip-invalid-planned-sources", ErrorCategory::InvalidRequest);
     std::unique_ptr<Archive> Original;
     auto Shared = std::make_shared<State>(); Shared->context_ = Context; Shared->archive_ = Request.archive_;
     QString Format = QFileInfo(Target).suffix().toLower(), Method, Encryption;
@@ -334,11 +348,16 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
     };
     const auto CleanupParents = qScopeGuard(ReleaseParents);
     bool PinSiblings = false, AttemptedPins = false;
+    QString LastValidatedParent;
     size_t SourceIndex = 0;
     for (const auto& Raw : Request.add_) {
         if (const auto Stop = Context.Check({"7zip"})) return *Stop;
         const auto Name = EntryKey(QString::fromStdString(Raw));
-        if (!SafeUpdateName(Name) || !Names.insert(Name.toCaseFolded()).second) return Failure("7zip-add-name-collision", ErrorCategory::InvalidRequest);
+        const auto Slash = Name.lastIndexOf('/');
+        const auto ParentName = Name.left(Slash + 1);
+        const auto ToValidate = Slash >= 0 && ParentName == LastValidatedParent ? Name.mid(Slash + 1) : Name;
+        if (!SafeUpdateName(ToValidate) || !Names.insert(Name.toCaseFolded()).second) return Failure("7zip-add-name-collision", ErrorCategory::InvalidRequest);
+        LastValidatedParent = ParentName;
         UpdateItem Item; Item.name_ = Name; Item.path_ = QDir(Root).filePath(Name); Item.directory_ = Raw.ends_with('/') || Raw.ends_with('\\');
         auto InputRoot = Root;
         if (!Request.sourcePaths_.empty()) {
@@ -356,6 +375,21 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
             Property Time; if (Original->archive_->GetProperty(Item.old_, kpidMTime, &Time) != S_OK) return Failure("7zip-reuse-time");
             if (Time.vt == VT_FILETIME) Item.modified_ = Time.filetime;
             Item.zipEncryption_ = CipherByName.at(Origins.at(Name)); Items.push_back(std::move(Item)); continue;
+        }
+        if (!Request.plannedSources_.empty() && Request.plannedSources_[SourceIndex - 1]) {
+            const auto& Metadata = *Request.plannedSources_[SourceIndex - 1];
+            if (bool(Metadata.attributes_ & FILE_ATTRIBUTE_DIRECTORY) != Item.directory_
+                || (Metadata.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)) return Failure("7zip-input-kind", ErrorCategory::InvalidRequest);
+            Item.planned_ = &Metadata;
+            Item.verifyPlanned_ = VerifyContents;
+            Item.size_ = Item.directory_ ? 0 : Metadata.size_;
+            if (Context.workload_.IsAutomatic() && Item.size_ > Context.workload_.automaticFileBytes_)
+                return Failure("automatic-content-budget", ErrorCategory::BudgetExceeded);
+            Item.attributes_ = Metadata.attributes_;
+            Item.modified_ = {DWORD(Metadata.writeTicks_), DWORD(Metadata.writeTicks_ >> 32)};
+            if (VerifyContents && !Item.size_) Item.digest_ = QCryptographicHash::hash({}, QCryptographicHash::Sha256);
+            Items.push_back(std::move(Item));
+            continue;
         }
         // Validate the full ancestor chain before opening each leaf.
         const auto Parent = QFileInfo(Item.path_).absolutePath();
@@ -442,9 +476,16 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
     }
     ReleaseParents();
     if (Items.size() > UINT32_MAX || Items.size() > Context.EnumerationLimit()) return Failure("7zip-sdk-item-count", ErrorCategory::BudgetExceeded);
-    std::set<QString> Files; for (const auto& Item : Items) if (!Item.directory_) Files.insert(Item.name_.toCaseFolded());
-    for (const auto& Item : Items) for (auto Parent = Item.name_.section('/', 0, -2); !Parent.isEmpty(); Parent = Parent.section('/', 0, -2))
-        if (Files.contains(Parent.toCaseFolded())) return Failure("7zip-file-parent", ErrorCategory::InvalidRequest);
+    std::unordered_set<QString> Files, CheckedParents;
+    for (const auto& Item : Items) if (!Item.directory_) Files.insert(Item.name_.toCaseFolded());
+    for (const auto& Item : Items) {
+        auto Parent = Item.name_.toCaseFolded();
+        for (auto Slash = Parent.lastIndexOf('/'); Slash >= 0; Slash = Parent.lastIndexOf('/')) {
+            Parent.truncate(Slash);
+            if (!CheckedParents.insert(Parent).second) break;
+            if (Files.contains(Parent)) return Failure("7zip-file-parent", ErrorCategory::InvalidRequest);
+        }
+    }
 
     std::set<QString> ZipGroups; for (const auto& Item : Items) if (Format == "zip" && Item.old_ == UINT32_MAX) ZipGroups.insert(Item.zipEncryption_);
     if (ZipGroups.size() == 1) Encryption = *ZipGroups.begin();

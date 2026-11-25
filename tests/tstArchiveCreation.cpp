@@ -14,6 +14,8 @@
 #include <QtWidgets>
 #include <QtWidgets>
 #include <atomic>
+#include <thread>
+#include <QDirIterator>
 
 using namespace hc::storage;
 using namespace hc::operations;
@@ -26,10 +28,11 @@ public:
     std::shared_ptr<IStorageProvider> inner_ = MakeNativeReadProvider(LocatorKind::Local);
     std::atomic<unsigned> opens_{0};
     std::atomic<unsigned> calls_{0}; bool failOnce_ = false; QString marker_, failKey_;
+    std::function<void(const Locator&)> onEnumerate_;
     ProviderId Id() const override { return inner_->Id(); }
     ProviderCapabilities Capabilities() const override { return inner_->Capabilities(); }
     Task<SupportDecision> Supports(Operation Op, OperationContext C) override { ++calls_; return inner_->Supports(Op, C); }
-    Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext C) override { ++calls_; return inner_->Enumerate(At, C); }
+    Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext C) override { ++calls_; if (onEnumerate_) onEnumerate_(At); return inner_->Enumerate(At, C); }
     Task<EntrySnapshot> Stat(ResourceId Id, OperationContext C) override {
         ++calls_;
         if (failOnce_ && QString::fromStdString(Id.key_) == failKey_ && QFileInfo::exists(marker_)) { failOnce_ = false; return Ready<EntrySnapshot>(Error{ErrorCategory::Unavailable, "injected-second-output-failure"}); }
@@ -350,6 +353,154 @@ private slots:
             QVERIFY(Result.cleanupErrors_.empty()); QVERIFY(QFileInfo(Target).size() > 0);
         }
         Reader.reset(); QVERIFY(Remote.remove());
+    }
+    void nativeSeparateDiscoveryOverlapsBuild_data() { nativeCreation_data(); }
+    void nativeSeparateDiscoveryOverlapsBuild()
+    {
+        QFETCH(QString, Format);
+        QTemporaryDir Dir;
+        const auto First = Dir.filePath("first"), Next = Dir.filePath("next"), Out = Dir.filePath("out");
+        QVERIFY(QDir().mkdir(First) && QDir().mkdir(Next) && QDir().mkdir(Out));
+        QVERIFY(Put(First + "/payload", QByteArray(1024 * 1024, 'a')));
+        QVERIFY(Put(Next + "/payload", "second"));
+        hc::settings::Repository Settings(Dir.filePath("settings"));
+        auto Reader = std::make_shared<ProbeProvider>();
+        const auto Driver = std::this_thread::get_id();
+        std::atomic<bool> Ahead{false};
+        Reader->onEnumerate_ = [&](const Locator& At) {
+            if (QDir::fromNativeSeparators(QString::fromStdString(At.root_)) == Next)
+                Ahead = std::this_thread::get_id() != Driver;
+        };
+        auto R = Request(Settings, {Source(Reader, First), Source(Reader, Next)}, Out, Format.toStdString());
+        R.value_.composition_.separateArchives_ = true;
+        auto Prepared = PrepareCreation(std::move(R));
+        QVERIFY(Prepared.HasValue());
+        JobStepContext Context;
+        auto& Task = Prepared.Value().task_;
+        for (;;) {
+            auto Step = Task->Advance(Context);
+            QVERIFY2(!Step.error_, Step.error_ ? Step.error_->code_.c_str() : "");
+            QVERIFY(Step.next_ != JobState::WaitingForUser);
+            if (Step.next_ == JobState::Completed) break;
+            Context.committing_ = Step.next_ == JobState::Committing;
+        }
+        QVERIFY(Task->Finalize(JobState::Completed).empty());
+        QVERIFY(Ahead);
+        QVERIFY(QFileInfo::exists(Out + "/first." + Format));
+        QVERIFY(QFileInfo::exists(Out + "/next." + Format));
+    }
+    void deferredInputRejectsReplacement()
+    {
+        QTemporaryDir Dir;
+        const auto Root = Dir.filePath("input");
+        const auto Leaf = Dir.filePath("input/file.bin");
+        QVERIFY(QDir().mkdir(Root));
+        QVERIFY(Put(Leaf, "first"));
+        wchar_t FileSystem[32]{};
+        const auto Volume = QDir::toNativeSeparators(QFileInfo(Root).absolutePath().left(3)).toStdWString();
+        if (!GetVolumeInformationW(Volume.c_str(), nullptr, 0, nullptr, nullptr, nullptr, FileSystem, DWORD(std::size(FileSystem)))
+            || (_wcsicmp(FileSystem, L"NTFS") && _wcsicmp(FileSystem, L"ReFS"))) QSKIP("Requires native directory file identities");
+        const auto Modified = QDateTime::currentDateTimeUtc().addSecs(-60);
+        QFile Original(Leaf);
+        QVERIFY(Original.open(QIODevice::ReadWrite));
+        QVERIFY(Original.setFileTime(Modified, QFileDevice::FileModificationTime));
+        Original.close();
+        hc::settings::Repository Settings(Dir.filePath("settings"));
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        auto R = Request(Settings, {Source(Reader, Root)}, Dir.filePath("output.zip"), "zip");
+        auto Prepared = PrepareCreation(std::move(R));
+        QVERIFY(Prepared.HasValue());
+        JobStepContext Context;
+        auto& Task = Prepared.Value().task_;
+        JobStep Step;
+        do {
+            Step = Task->Advance(Context);
+            QVERIFY(!Step.error_);
+        } while (!Step.progress_ || Step.progress_->phase_ != JobPhase::BuildingArchive);
+        QVERIFY(QFile::rename(Leaf, Dir.filePath("original.bin")));
+        QVERIFY(Put(Leaf, "other"));
+        QFile Replacement(Leaf);
+        QVERIFY(Replacement.open(QIODevice::ReadWrite));
+        QVERIFY(Replacement.setFileTime(Modified, QFileDevice::FileModificationTime));
+        Replacement.close();
+        Step = Task->Advance(Context);
+        QVERIFY(Step.error_);
+        QCOMPARE(Step.error_->code_, std::string("7zip-planned-input-changed"));
+        QVERIFY(Task->Finalize(JobState::Failed).empty());
+        QVERIFY(!QFileInfo::exists(Dir.filePath("output.zip")));
+    }
+    void nativeTreeStartupBenchmark()
+    {
+        const auto Input = qEnvironmentVariable("HC_ARCHIVE_STARTUP_TREE");
+        if (Input.isEmpty()) QSKIP("Set HC_ARCHIVE_STARTUP_TREE to benchmark a read-only source tree");
+        const auto Format = qEnvironmentVariable("HC_ARCHIVE_STARTUP_FORMAT", "zip").toStdString();
+        QTemporaryDir Dir;
+        QVERIFY(Dir.isValid());
+        hc::settings::Repository Settings(Dir.filePath("settings"));
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        auto R = Request(Settings, {Source(Reader, Input)}, Dir.path(), Format);
+        R.value_.composition_.separateArchives_ = true;
+        R.value_.sourceRoot_ = {LocatorKind::Local, QFileInfo(Input).absolutePath().toStdString()};
+        JobStepContext Context;
+        std::stop_source Stop;
+        Context.operation_.stopToken_ = Stop.get_token();
+        Context.operation_.deadline_ = std::chrono::steady_clock::now() + std::chrono::minutes(10);
+        QElapsedTimer Timer;
+        Timer.start();
+        std::atomic<qint64> FirstBytes{-1}, Output64KiB{-1};
+        std::jthread Watch([&](std::stop_token Finish) {
+            while (!Finish.stop_requested()) {
+                QDirIterator Files(Dir.path(), QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+                while (Files.hasNext()) {
+                    Files.next();
+                    if (!Files.filePath().contains("/.hc-archive-")) continue;
+                    // Windows may leave directory-entry size unchanged until the
+                    // writer closes. Query the live file just as the CLI probe does.
+                    const auto Path = QDir::toNativeSeparators(Files.filePath()).toStdWString();
+                    const auto Handle = CreateFileW(Path.c_str(), FILE_READ_ATTRIBUTES,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+                    if (Handle == INVALID_HANDLE_VALUE) continue;
+                    LARGE_INTEGER Size{};
+                    const bool Written = GetFileSizeEx(Handle, &Size) && Size.QuadPart >= 65536;
+                    CloseHandle(Handle);
+                    if (Written) {
+                        Output64KiB = Timer.elapsed();
+                        Stop.request_stop();
+                        return;
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        });
+        Context.operation_.reportProgress_ = [&](const OperationContext::Progress& Info) {
+            if (Info.bytesDone_ && !Info.verifying_) {
+                qint64 Missing = -1;
+                FirstBytes.compare_exchange_strong(Missing, Timer.elapsed());
+            }
+        };
+        auto Prepared = PrepareCreation(std::move(R), Context.operation_);
+        QVERIFY(Prepared.HasValue());
+        auto& Task = Prepared.Value().task_;
+        qint64 PlanMs = -1;
+        uint64_t Discovered = 0;
+        for (;;) {
+            auto Step = Task->Advance(Context);
+            if (Step.progress_) {
+                Discovered = (std::max)(Discovered, Step.progress_->discoveredItems_.value_or(0));
+                if (PlanMs < 0 && Step.progress_->phase_ == JobPhase::BuildingArchive) PlanMs = Timer.elapsed();
+            }
+            if (Step.error_ || Step.next_ == JobState::Completed) {
+                if (Step.error_) qInfo() << "terminal" << Step.error_->code_;
+                break;
+            }
+            QVERIFY(Step.next_ != JobState::WaitingForUser);
+            Context.committing_ = Step.next_ == JobState::Committing;
+        }
+        Watch.request_stop(); Watch.join();
+        QVERIFY(Task->Finalize(JobState::Cancelled).empty());
+        qInfo() << "native tree" << Input << QString::fromStdString(Format) << "discovered" << Discovered
+            << "build entry ms" << PlanMs << "first encoder progress with bytes ms" << FirstBytes.load() << "64KiB visible output ms" << Output64KiB.load();
+        QVERIFY(Output64KiB >= 0);
     }
     void smallFileZipBenchmark()
     {

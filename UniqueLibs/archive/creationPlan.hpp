@@ -36,10 +36,14 @@ storage::Result<storage::Unit> ValidateOutputLocation(const storage::Locator& Ou
 // Worker-side, paged discovery. No provider I/O occurs in construction.
 class CreationPlanner final {
 public:
-    explicit CreationPlanner(PlanRequest Request);
+    explicit CreationPlanner(PlanRequest Request, bool StreamOutputs = false);
     ~CreationPlanner();
     operations::JobStep Advance(operations::JobStepContext Context);
     std::vector<OutputPlan> Take();
+    bool HasReadyOutput() const;
+    bool CanReadAhead() const;
+    size_t OutputCount() const;
+    std::optional<OutputPlan> TakeReadyOutput();
 private:
     operations::JobStep advanceOne(const operations::JobStepContext& Context);
     struct State;

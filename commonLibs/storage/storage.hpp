@@ -210,6 +210,7 @@ namespace hc::storage
         // Mutation coordinators may yield native directory enumeration a page
         // at a time. Browsing keeps its immutable snapshot by default.
         bool incrementalEnumeration_ = false;
+        bool archivePlanning_ = false;
         // Browsing may retain directory-enumeration metadata when opening an
         // individual child is denied. Such entries have no verified revision.
         // Mutation planners leave this false even when requesting fresh data.

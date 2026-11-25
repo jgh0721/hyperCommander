@@ -196,7 +196,20 @@ Result<PreparedArchiveOutput> CreatePreparedArchive(const CreatorRuntime& Creato
         if (Creator.descriptor_.kind_ == ArchiveCreatorKind::BuiltinSevenZip && !Update.encrypt_
             && Creator.options_.approval_.granted_.contains(Permission::WriteContent)
             && Creator.options_.manifestPath_ == BuiltinSevenZipOptions().manifestPath_) {
+            Update.plannedSources_.reserve(Plan.entries_.size());
+            for (size_t Index = 0; Index < Plan.entries_.size(); ++Index) {
+                const auto& Entry = Plan.entries_[Index].source_.entry_;
+                auto& Metadata = Update.plannedSources_.emplace_back();
+                const auto Time = Entry.hints_.find("archiveWriteTicks");
+                if (Entry.locator_.kind_ != LocatorKind::Local || !Entry.locator_.nesting_.empty()
+                    || !Entry.id_.revision_ || Time == Entry.hints_.end() || Index >= Plan.inputPaths_.size()
+                    || QDir::fromNativeSeparators(QString::fromStdString(Entry.locator_.root_)) != Plan.inputPaths_[Index]) continue;
+                bool Valid = false;
+                const auto Ticks = QString::fromStdString(Time->second).toULongLong(&Valid);
+                if (Valid) Metadata.emplace(ArchiveUpdate::NativeSource{*Entry.id_.revision_, Entry.size_, Ticks, Entry.attributes_});
+            }
             const auto Written = CreateBuiltinSevenZipArchive(Update, Context);
+            Update.plannedSources_.clear();
             if (Written.HasValue()) return PreparedArchiveOutput{Target, {}};
             // A package on a junction or traverse-only install can use its isolated host.
             if (Written.Failure().code_ != "sevenzip-native-package-pin" && Written.Failure().code_ != "sevenzip-native-package-path"

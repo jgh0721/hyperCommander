@@ -3,6 +3,7 @@
 #include "UniqueLibs/nativeFilePath.hpp"
 #include "creationSettings.hpp"
 #include <QElapsedTimer>
+#include <thread>
 #include <QStorageInfo>
 #include "UniqueLibs/nativeStorageRevision.hpp"
 
@@ -45,8 +46,8 @@ public:
     {
         Progress.phase_ = phase_ == Phase::Build ? JobPhase::BuildingArchive : phase_ == Phase::Save ? JobPhase::SavingOutput
             : phase_ == Phase::Recheck ? JobPhase::Verifying : phase_ == Phase::Commit ? JobPhase::Committing : JobPhase::PreparingInputs;
-        if (!outputs_.empty()) { Progress.outputIndex_ = group_; Progress.outputCount_ = outputs_.size(); }
-        if (!outputs_.empty()) Progress.plannedItems_ = outputs_.size();
+        if (!outputs_.empty()) { Progress.outputIndex_ = group_; Progress.outputCount_ = totalOutputs_; }
+        if (!outputs_.empty()) Progress.plannedItems_ = totalOutputs_;
         if (group_ < outputs_.size()) {
             const auto& Plan = outputs_[group_];
             if (!Plan.source_.root_.empty()) Progress.source_ = Serialize(Plan.source_);
@@ -73,14 +74,25 @@ public:
             auto Checked = RevalidateCreator(request_.creator_, Context.operation_); if (!Checked.HasValue()) return failed(Checked.Failure());
             PlanRequest Plan{request_.sources_, request_.selection_, request_.value_.sourceRoot_, request_.value_.output_,
                 request_.value_.format_, request_.value_.composition_, request_.completedOutputs_, request_.value_.outputNames_};
-            planner_ = std::make_unique<CreationPlanner>(std::move(Plan)); phase_ = Phase::Plan;
+            planner_ = std::make_unique<CreationPlanner>(std::move(Plan), request_.value_.composition_.separateArchives_); phase_ = Phase::Plan;
         }
+        if (phase_ == Phase::Initialize && planner_ && group_ == outputs_.size()) phase_ = Phase::Plan;
         if (phase_ == Phase::Plan) {
+            if (aheadFailure_) return failed(std::move(*aheadFailure_));
             auto Step = planner_->Advance(Context);
             if (Step.nextLanes_)
                 if (auto Lane = CreatorLane(request_.creator_.descriptor_); !Lane.empty()) Step.nextLanes_->writes_.push_back(std::move(Lane));
-            if (Step.next_ != JobState::Completed) return Step;
-            outputs_ = planner_->Take(); planner_.reset(); phase_ = Phase::Initialize;
+            if (auto Ready = planner_->TakeReadyOutput()) {
+                totalOutputs_ = planner_->OutputCount();
+                outputs_.push_back(std::move(*Ready));
+                if (outputs_.size() == totalOutputs_) planner_.reset();
+            } else {
+                if (Step.next_ != JobState::Completed) return Step;
+                outputs_ = planner_->Take();
+                totalOutputs_ = outputs_.size();
+                planner_.reset();
+            }
+            phase_ = Phase::Initialize;
         }
         if (group_ >= outputs_.size()) return JobStep{JobState::Completed};
         auto& Plan = outputs_[group_];
@@ -140,7 +152,7 @@ public:
                 const auto Path = QDir::cleanPath(QDir::fromNativeSeparators(QString::fromStdString(At.root_)));
                 auto Root = Path;
                 const auto Tail = '/' + Entry.member_;
-                if (!Native || !Path.endsWith(Tail, Qt::CaseInsensitive)) NativeTree = false;
+                if (Builtin || !Native || !Path.endsWith(Tail, Qt::CaseInsensitive)) NativeTree = false;
                 else {
                     Root.chop(Tail.size()); if (Root.endsWith(':')) Root += '/';
                     if (CommonRoot.isEmpty()) CommonRoot = Root;
@@ -245,6 +257,28 @@ public:
             auto Settings = request_.value_.settings_;
             if (auto* Seven = std::get_if<plugins::SevenZipCreateSettings>(&Settings); Seven && expected_.exists_) Seven->verifyContents_ = true;
             if (auto* Iso = std::get_if<plugins::IsoCreateSettings>(&Settings); Iso && expected_.exists_) Iso->verifyContents_ = true;
+            // Native separate outputs have disjoint plans. While the encoder
+            // owns the current output, discover at most one subsequent output.
+            // Join within this step so no scheduler callback outlives its owner.
+            std::jthread Ahead;
+            if (planner_ && planner_->CanReadAhead() && Plan.source_.kind_ == LocatorKind::Local
+                && (request_.creator_.descriptor_.kind_ == plugins::ArchiveCreatorKind::BuiltinSevenZip
+                    || request_.creator_.descriptor_.kind_ == plugins::ArchiveCreatorKind::BuiltinIso)) {
+                auto Discovery = Context;
+                Discovery.answer_.reset();
+                Discovery.publishProgress_ = {};
+                Discovery.operation_.reportProgress_ = {};
+                Discovery.operation_.progress_ = {};
+                Ahead = std::jthread([this, Discovery = std::move(Discovery)](std::stop_token End) mutable {
+                    try {
+                        while (!End.stop_requested() && !Discovery.pauseSignal_.stop_requested() && !planner_->HasReadyOutput()) {
+                            auto Next = planner_->Advance(Discovery);
+                            if (Next.error_) aheadFailure_ = std::move(*Next.error_);
+                            if (Next.next_ != JobState::Preparing || Next.nextLanes_) break;
+                        }
+                    } catch (...) { aheadFailure_ = Error{ErrorCategory::Internal, "archive-create-prefetch"}; }
+                });
+            }
             auto Prepared = CreatePreparedArchive(request_.creator_, Settings, request_.value_.format_, Plan, temp_->FilePath("input"), temp_->Path(), Operation, sevenZip_);
             if (!Prepared.HasValue()) return failed(Prepared.Failure()); prepared_ = std::move(Prepared.Value());
             auto WriteContext = Context.operation_; WriteContext.expectedWriteBytes_ = uint64_t(QFileInfo(prepared_.path_).size());
@@ -303,7 +337,7 @@ public:
         output_.reset(); cleanStage();
         ++group_; phase_ = Phase::Initialize;
         if (!cleanup_.empty()) { Step.next_ = JobState::Failed; Step.error_ = cleanup_.front(); }
-        else if (group_ == outputs_.size()) Step.next_ = JobState::Completed; return Step;
+        else if (group_ == outputs_.size() && !planner_) Step.next_ = JobState::Completed; return Step;
     }
     std::vector<Error> Finalize(JobState State) override
     {
@@ -321,6 +355,8 @@ public:
         return cleanup_;
     }
 private:
+    size_t totalOutputs_ = 0;
+    std::optional<Error> aheadFailure_;
     enum class Phase { Admission, Plan, Initialize, Conflict, CreateStage, PrepareInputs, DirectoryMetadata, Build, Save, Recheck, Commit };
 
     void cleanStage()

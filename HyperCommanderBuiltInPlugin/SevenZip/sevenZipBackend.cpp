@@ -1,5 +1,6 @@
 ﻿#include "sevenZipBackend.hpp"
 #include "UniqueLibs/nativeFilePath.hpp"
+#include "UniqueLibs/nativeStorageRevision.hpp"
 #include "Common/MyInitGuid.h"
 #include "commonLibs/plugins/archiveSelectionDigest.hpp"
 #include "commonLibs/storage/nativeTemporaryDirectory.hpp"
@@ -20,6 +21,7 @@
 #include <QtEndian>
 #include <map>
 #include <set>
+#include <unordered_set>
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
@@ -92,7 +94,41 @@ struct State {
 class Input final : public IInStream {
 public:
     explicit Input(std::shared_ptr<State> State, bool VerifyInput = false) : verifyInput_(VerifyInput), state_(std::move(State)) {}
-    ~Input() { for (const auto& Part : parts_) CloseHandle(Part.handle_); }
+    ~Input() {
+        // The SDK releases each member stream when it has consumed the file.
+        // Retain the digest for verification and close the handle here.
+        if (finalDigest_) {
+            try { if (FinishVerification(*finalDigest_) != S_OK) state_->Fail(Failure("7zip-input-digest")); }
+            catch (...) { state_->Fail(Failure("7zip-input-digest")); }
+        }
+        for (const auto& Part : parts_) CloseHandle(Part.handle_);
+    }
+    bool BindPlannedSource(const QString& Path, const ArchiveUpdate::NativeSource& Metadata, QByteArray* Digest) {
+        BY_HANDLE_FILE_INFORMATION Info{};
+        if (!Open(Path, false, 1, &Info) || size_ != Metadata.size_ || Info.dwFileAttributes != Metadata.attributes_
+            || !storage::native::MatchesRevision(Metadata.revision_, Info, parts_.front().handle_, Path.toStdWString())) return false;
+        // The leaf is pinned. Compare the resolved path to reject traversal of a
+        // substituted ancestor junction before exposing this stream to the SDK.
+        const auto Handle = parts_.front().handle_;
+        wchar_t Resolved[512]{};
+        const auto Count = GetFinalPathNameByHandleW(Handle, Resolved, DWORD(std::size(Resolved)), FILE_NAME_NORMALIZED);
+        if (!Count || Count >= std::size(Resolved)
+            || QString::compare(QString::fromWCharArray(Resolved, int(Count)), storage::native::FilePath(Path), Qt::CaseInsensitive) != 0) {
+            // Long paths and DOS drive aliases may have a different final name.
+            // Use the existing ancestor policy while the verified leaf is pinned.
+            for (auto Parent = QFileInfo(Path).absolutePath();; ) {
+                const auto Native = storage::native::FilePath(Parent);
+                const auto Attributes = GetFileAttributesW(reinterpret_cast<LPCWSTR>(Native.utf16()));
+                if (Attributes == INVALID_FILE_ATTRIBUTES || !(Attributes & FILE_ATTRIBUTE_DIRECTORY)
+                    || (Attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+                auto Next = QFileInfo(Parent).absolutePath();
+                if (Next == Parent) break;
+                Parent = std::move(Next);
+            }
+        }
+        finalDigest_ = Digest;
+        return true;
+    }
     HC_COM_REFS;
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID Id, void** Value) noexcept override {
         *Value = nullptr;
@@ -204,6 +240,7 @@ private:
         if (Done) *Done = Count;
         return S_OK;
     }
+    QByteArray* finalDigest_ = nullptr;
     bool verifyInput_, bufferRemoteReads_ = false;
     uint64_t recorded_ = 0;
     ContentSha256 hash_;

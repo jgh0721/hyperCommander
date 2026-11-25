@@ -56,6 +56,14 @@ namespace hc::plugins
         // Dedicated NEW capability path; never relaxes mutation requirements.
         bool createNew_ = false;
         std::vector<std::string> sourcePaths_;
+        // In-process native creation only. Bind the deferred data open to this
+        // exact listing revision when the encoder requests the member.
+        struct NativeSource {
+            storage::ResourceRevision revision_;
+            uint64_t size_, writeTicks_;
+            uint32_t attributes_;
+        };
+        std::vector<std::optional<NativeSource>> plannedSources_;
     };
     // Forward-only, bounded memory output. EOF is returned only after the SDK
     // has validated the selected member. Calls follow increasing listing ordinals.

@@ -117,6 +117,13 @@ namespace hc::storage::native
             Info.ftLastAccessTime, Info.ftLastWriteTime, Info.nFileSizeHigh, Info.nFileSizeLow};
         return {"rdp:" + Birth + ":" + ListingRevision(Data).token_};
     }
+    inline std::string PersistentIdentity(ULONGLONG Volume, const BYTE (&Identifier)[16])
+    {
+        constexpr char Hex[] = "0123456789abcdef";
+        auto Token = "id128:" + std::to_string(Volume) + ":";
+        for (const auto Byte : Identifier) { Token += Hex[Byte >> 4]; Token += Hex[Byte & 15]; }
+        return Token;
+    }
     inline std::string PersistentIdentity(HANDLE File, const BY_HANDLE_FILE_INFORMATION& Info)
     {
         // Product PCHs retain an older NTDDI declaration guard. This is the
@@ -126,10 +133,7 @@ namespace hc::storage::native
         constexpr auto IdentityClass = static_cast<FILE_INFO_BY_HANDLE_CLASS>(18);
         if (GetFileInformationByHandleEx(File, IdentityClass, &Identity, sizeof(Identity))
             && std::any_of(std::begin(Identity.identifier_), std::end(Identity.identifier_), [](BYTE Value) { return Value != 0; })) {
-            constexpr char Hex[] = "0123456789abcdef";
-            auto Token = "id128:" + std::to_string(Identity.volumeSerial_) + ":";
-            for (const auto Byte : Identity.identifier_) { Token += Hex[Byte >> 4]; Token += Hex[Byte & 15]; }
-            return Token;
+            return PersistentIdentity(Identity.volumeSerial_, Identity.identifier_);
         }
         return std::to_string(Info.dwVolumeSerialNumber) + ":" + std::to_string(Info.nFileIndexHigh) + ":" + std::to_string(Info.nFileIndexLow);
     }
