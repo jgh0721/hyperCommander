@@ -1635,7 +1635,7 @@ namespace hc::defaults
     template<typename Settings> inline Settings IsoCreation()
     {
         using Profile = decltype(std::declval<Settings>().profile_);
-        return Settings{Profile::UdfBridge, "HYPERCOMMANDER", false, 946684800, 128ull * 1024 * 1024 * 1024};
+        return Settings{Profile::UdfBridge, "HYPERCOMMANDER", false, 946684800, 0};
     }
 
     namespace columnPolicy {

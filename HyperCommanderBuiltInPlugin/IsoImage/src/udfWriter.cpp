@@ -8,6 +8,8 @@
 namespace hc::iso {
 namespace {
 constexpr uint32_t PartitionStart = 257;
+constexpr uint64_t MaxShortExtent = 0x3ffff800;
+constexpr size_t FileHeader = 176, AllocationHeader = 24;
 void Entity(Bytes& Data, size_t Offset, std::string_view Name, bool Domain = false)
 {
     Text(Data, Offset + 1, Name, 23);
@@ -39,7 +41,15 @@ void Writer::udfLayout()
             const auto Rec = Fid(nodes_[Child], false, nextBlock_ - PartitionStart + uint32_t(Item.udfData_.size() / Block));
             Item.udfData_.insert(Item.udfData_.end(), Rec.begin(), Rec.end());
         }
-        nextBlock_ += uint32_t(Round(Item.udfData_.size()) / Block);
+        allocateBlocks(Round(Item.udfData_.size()) / Block);
+    }
+    for (auto& Item : nodes_) {
+        const uint64_t Size = Item.directory_ ? Item.udfData_.size() : Item.size_;
+        const uint64_t Count = (Size + MaxShortExtent - 1) / MaxShortExtent;
+        constexpr size_t Inline = (Block - FileHeader) / 8;
+        constexpr size_t PerContinuation = (Block - AllocationHeader) / 8 - 1;
+        if (Count > Inline)
+            Item.allocationBlock_ = allocateBlocks((Count - Inline + PerContinuation - 1) / PerContinuation);
     }
 }
 void Writer::udfAnchor(std::ofstream& Stream, uint32_t Sector)
@@ -104,14 +114,29 @@ void Writer::udfWrite(std::ofstream& Stream)
             Fe[93] = uint8_t(Fraction / 10); Fe[94] = uint8_t((Fraction % 10) * 10);
         }
         Put(Fe, 108, 1, 4); Entity(Fe, 128, "*HyperCommander"); Put(Fe, 160, I == 0 ? 0 : I + 16, 8);
-        size_t AdOffset = 176;
+        size_t Header = FileHeader, AdOffset = Header;
+        uint32_t Location = Item.feBlock_, Next = Item.allocationBlock_;
+        uint16_t Type = 261;
+        auto Flush = [&] {
+            Put(Fe, Header - 4, AdOffset - Header, 4);
+            Tag(Fe, Type, Location, AdOffset);
+            writeAt(Stream, PartitionStart + Location, Fe);
+        };
         // A short_ad has 30 size bits. Split large files at a block boundary.
         for (uint64_t Offset = 0; Offset < Size;) {
-            const auto Chunk = std::min<uint64_t>(Size - Offset, 0x3ffff800ull);
-            Require(AdOffset + 8 <= Block, "File needs allocation continuation descriptors", HC_ISO_UNSUPPORTED);
+            const auto Chunk = std::min(Size - Offset, MaxShortExtent);
+            if (AdOffset + 8 == Block && Chunk < Size - Offset) {
+                Put(Fe, AdOffset, 0xc0000000u | Block, 4);
+                Put(Fe, AdOffset + 4, Next - PartitionStart, 4);
+                AdOffset += 8;
+                Flush();
+                Fe.assign(Block, 0);
+                Location = Next++ - PartitionStart; Type = 258;
+                Header = AllocationHeader; AdOffset = Header;
+            }
             Put(Fe, AdOffset, Chunk, 4); Put(Fe, AdOffset + 4, Item.dataBlock_ - PartitionStart + Offset / Block, 4); AdOffset += 8; Offset += Chunk;
         }
-        Put(Fe, 172, AdOffset - 176, 4); Tag(Fe, 261, Item.feBlock_, AdOffset); writeAt(Stream, PartitionStart + Item.feBlock_, Fe);
+        Flush();
         if (Item.directory_) writeAt(Stream, Item.dataBlock_, Item.udfData_);
     }
 }

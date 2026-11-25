@@ -229,8 +229,6 @@ public:
     {
         ProviderCapabilities Value; Value.read_ = ReadAccess::RandomAccess;
         Value.concurrency_ = ProviderConcurrency::SerializedPerSession;
-        Value.constraints_.maxEntries_ = 100000;
-        Value.constraints_.reason_ = "iso-engine: 100000 entries, 256 MiB metadata, 128 directory levels";
         return Value;
     }
     Task<SupportDecision> Supports(Operation Request, OperationContext Context) override

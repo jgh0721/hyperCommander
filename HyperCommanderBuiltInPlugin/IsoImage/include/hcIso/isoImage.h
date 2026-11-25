@@ -33,7 +33,7 @@ typedef struct HcIsoOptions {
     uint32_t structSize_;
     uint32_t profile_;
     const char* volumeLabel_; // ASCII, max 32 ISO / 16 Joliet / 30 UDF without Joliet
-    uint64_t maxImageBytes_; // zero selects 128 GiB
+    uint64_t maxImageBytes_; // zero selects the volume format maximum
     int64_t timestampUtc_; // seconds since epoch; zero selects a reproducible epoch
     HcIsoProgress progress_;
     void* context_;

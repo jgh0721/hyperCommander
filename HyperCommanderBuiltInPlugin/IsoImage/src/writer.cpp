@@ -68,8 +68,7 @@ Writer::Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& O
     Require(Options.structSize_ == sizeof(HcIsoOptions) && Options.profile_ <= HC_ISO_UDF_NO_JOLIET, "Invalid ISO build options");
     label_ = Options.volumeLabel_ ? Options.volumeLabel_ : "HYPERCOMMANDER";
     Require(!label_.empty() && label_.size() <= 32 && std::all_of(label_.begin(), label_.end(), [](unsigned char C) { return C >= 32 && C < 127; }), "Volume label must contain 1..32 ASCII characters");
-    if (!options_.maxImageBytes_) options_.maxImageBytes_ = 128ull * 1024 * 1024 * 1024;
-    Require(options_.maxImageBytes_ <= 128ull * 1024 * 1024 * 1024, "Maximum supported image size is 128 GiB", HC_ISO_UNSUPPORTED);
+    options_.maxImageBytes_ = options_.maxImageBytes_ ? std::min(options_.maxImageBytes_, MaxImageBytes) : MaxImageBytes;
     if (hasJoliet()) Require(label_.size() <= 16, "Joliet volume label exceeds 16 characters");
     if (hasUdf()) Require(label_.size() <= 30, "UDF volume label exceeds 30 characters");
     Bytes Check(12); Timestamp(Check, 0, options_.timestampUtc_, true, explicitTimestamp_);
@@ -77,23 +76,40 @@ Writer::Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& O
 }
 void Writer::inventory(const HcIsoSource* Sources, uint64_t Count, const HcIsoMetadata* Metadata)
 {
-    Require(Count <= MaxEntries && (Sources || Count == 0), "Invalid source inventory");
+    Require(Count <= std::vector<size_t>().max_size() && (Sources || Count == 0), "Invalid source inventory");
     nodes_.push_back({}); nodes_[0].directory_ = true;
     std::map<std::string, size_t> Paths{{"", 0}};
     std::set<std::string> Explicit;
-    std::function<size_t(const std::string&)> Directory = [&](const std::string& Path) -> size_t {
-        const auto Found = Paths.find(Path); if (Found != Paths.end()) { Require(nodes_[Found->second].directory_, "File/directory collision"); return Found->second; }
-        const auto Slash = Path.rfind('/'); const auto Parent = Directory(Slash == std::string::npos ? "" : Path.substr(0, Slash));
-        Node Item; Item.path_ = Path; Item.name_ = Path.substr(Slash == std::string::npos ? 0 : Slash + 1); Item.directory_ = true; Item.parent_ = Parent;
-        const auto Index = nodes_.size(); nodes_.push_back(std::move(Item)); nodes_[Parent].children_.push_back(Index); Paths.emplace(Path, Index); return Index;
+    auto Directory = [&](const std::string& Path) -> size_t {
+        std::vector<size_t> Missing;
+        size_t End = Path.size();
+        auto Found = Paths.find(Path);
+        while (Found == Paths.end()) {
+            Missing.push_back(End);
+            const auto Slash = Path.rfind('/', End - 1);
+            End = Slash == std::string::npos ? 0 : Slash;
+            Found = Paths.find(Path.substr(0, End));
+        }
+        size_t Parent = Found->second;
+        Require(nodes_[Parent].directory_, "File/directory collision");
+        while (!Missing.empty()) {
+            const auto Length = Missing.back(); Missing.pop_back();
+            const auto Begin = End ? End + 1 : 0;
+            Node Item; Item.path_ = Path.substr(0, Length); Item.name_ = Path.substr(Begin, Length - Begin);
+            Item.directory_ = true; Item.parent_ = Parent;
+            const auto Index = nodes_.size();
+            Paths.emplace(Item.path_, Index); nodes_[Parent].children_.push_back(Index);
+            nodes_.push_back(std::move(Item)); Parent = Index; End = Length;
+        }
+        return Parent;
     };
-    std::vector<size_t> Order(static_cast<size_t>(Count)); std::iota(Order.begin(), Order.end(), 0);
+    std::vector<size_t> Order(static_cast<size_t>(Count)); std::iota(Order.begin(), Order.end(), size_t(0));
     for (size_t I = 0; I < Count; ++I) Require(Sources[I].imagePath_ != nullptr, "Missing image path");
     std::sort(Order.begin(), Order.end(), [&](size_t A, size_t B) { return std::strcmp(Sources[A].imagePath_, Sources[B].imagePath_) < 0; });
     for (const auto I : Order) {
         Pulse(options_, I, Count);
         const auto& Source = Sources[I]; const auto Path = CleanPath(Source.imagePath_);
-        Require(std::count(Path.begin(), Path.end(), '/') < 128 && Explicit.insert(Path).second, "Duplicate/deep source path");
+        Require(Explicit.insert(Path).second, "Duplicate source path");
         size_t Index;
         if (Source.directory_) Index = Directory(Path);
         else {
@@ -114,7 +130,6 @@ void Writer::inventory(const HcIsoSource* Sources, uint64_t Count, const HcIsoMe
             Require(!(Meta.knownMask_ & ~0x27u) && !(Meta.attributes_ & ~Meta.knownMask_) && Meta.hasModified_ <= 1, "Invalid source metadata");
             Require(!Meta.hasModified_ || (Meta.modifiedUtcMs_ >= -11644473600000LL && Meta.modifiedUtcMs_ <= 253402300799999LL), "Invalid source modification time");
         }
-        Require(nodes_.size() <= MaxEntries, "Source entry budget exceeded");
     }
     // Breadth-first directory numbering is required by ISO path tables.
     directories_.push_back(0);
@@ -151,6 +166,7 @@ Bytes Writer::directory(size_t Index, bool Joliet)
         uint64_t Offset = 0;
         do { const bool More = !Item.directory_ && Item.size_ - Offset > IsoExtentMax; Append(Record(Item, Name, Joliet, Offset, More), Item); if (!More) break; Offset += IsoExtentMax; } while (true);
     }
+    Require(Round(Data.size()) <= UINT32_MAX, "ISO directory record length overflow");
     Data.resize(size_t(Round(Data.size()))); return Data;
 }
 Bytes Writer::pathTable(bool Joliet, bool Big)
@@ -217,34 +233,40 @@ void Writer::connectPayloads()
         }
     }
 }
+uint32_t Writer::allocateBlocks(uint64_t Count)
+{
+    Require(Count <= UINT32_MAX - nextBlock_, "ISO volume block count overflow");
+    const auto Start = nextBlock_;
+    nextBlock_ += uint32_t(Count);
+    return Start;
+}
 void Writer::layout()
 {
+    Require(!hasUdf() || nodes_.size() <= UINT32_MAX - 259, "Too many UDF file entries");
     nextBlock_ = hasUdf() ? 259 + uint32_t(nodes_.size()) : 32;
     for (size_t I = 0; I < nodes_.size(); ++I) nodes_[I].feBlock_ = uint32_t(2 + I);
     for (int I = 0; I < (hasJoliet() ? 4 : 2); ++I) {
-        tableBlocks_[I] = nextBlock_; nextBlock_ += uint32_t(Round(pathTable(I >= 2, I % 2 != 0).size()) / Block);
+        tableBlocks_[I] = allocateBlocks(Round(pathTable(I >= 2, I % 2 != 0).size()) / Block);
     }
     for (const auto Index : directories_) {
-        auto& Item = nodes_[Index]; Item.isoData_ = directory(Index, false); Item.isoBlock_ = nextBlock_; nextBlock_ += uint32_t(Item.isoData_.size() / Block);
-        if (hasJoliet()) { Item.jolietData_ = directory(Index, true); Item.jolietBlock_ = nextBlock_; nextBlock_ += uint32_t(Item.jolietData_.size() / Block); }
+        auto& Item = nodes_[Index]; Item.isoData_ = directory(Index, false); Item.isoBlock_ = allocateBlocks(Item.isoData_.size() / Block);
+        if (hasJoliet()) { Item.jolietData_ = directory(Index, true); Item.jolietBlock_ = allocateBlocks(Item.jolietData_.size() / Block); }
     }
     if (hasUdf()) udfLayout();
     uint64_t Physical = 0;
     for (auto& Payload : payloads_) {
         const auto& Item = nodes_[Payload.sourceNode_]; const auto Bytes = Round(Item.size_);
         Require(Bytes <= options_.maxImageBytes_ && Physical <= options_.maxImageBytes_ - Bytes, "Unique payload exceeds image budget");
-        Physical += Bytes; Payload.dataBlock_ = nextBlock_; nextBlock_ += uint32_t(Bytes / Block);
+        Physical += Bytes; Payload.dataBlock_ = allocateBlocks(Bytes / Block);
     }
     for (auto& Item : nodes_) if (!Item.directory_) Item.dataBlock_ = payloads_[Item.payload_].dataBlock_;
-    partitionEnd_ = nextBlock_ + 1; totalBlocks_ = partitionEnd_ + (hasUdf() ? 257 : 0);
+    Require(uint64_t(nextBlock_) + 1 + (hasUdf() ? 257 : 0) <= UINT32_MAX, "ISO volume block count overflow");
+    partitionEnd_ = uint32_t(nextBlock_ + 1); totalBlocks_ = partitionEnd_ + (hasUdf() ? 257 : 0);
     Require(uint64_t(totalBlocks_) * Block <= options_.maxImageBytes_, "Image exceeds output budget");
-    uint64_t Metadata = 0;
     for (const auto Index : directories_) {
         nodes_[Index].isoData_ = directory(Index, false);
         if (hasJoliet()) nodes_[Index].jolietData_ = directory(Index, true);
-        Metadata += nodes_[Index].isoData_.size() + nodes_[Index].jolietData_.size() + nodes_[Index].udfData_.size();
     }
-    Require(Metadata <= MaxMetadata, "Writer metadata budget exceeded");
 }
 Bytes Writer::volume(bool Joliet)
 {
@@ -312,15 +334,13 @@ void Writer::Write(const fs::path& Path)
         for (uint32_t Namespace = HC_ISO_PRIMARY; Namespace <= (hasUdf() ? HC_ISO_UDF : options_.profile_ == HC_ISO_9660_JOLIET ? HC_ISO_JOLIET : HC_ISO_PRIMARY); ++Namespace) {
             if (Namespace == HC_ISO_JOLIET && !hasJoliet()) continue;
             Reader Image(Path, Namespace); Require(Image.Entries().size() + 1 == nodes_.size(), "Reopened inventory count mismatch");
-            std::map<std::string, size_t> Lookup;
-            for (size_t I = 0; I < Image.Entries().size(); ++I) Lookup.emplace(Image.Entries()[I].path_, I);
             std::vector<std::string> Names(nodes_.size());
             for (const auto Parent : directories_) for (const auto Child : nodes_[Parent].children_) {
                 const auto& Item = nodes_[Child]; auto Name = Namespace == HC_ISO_PRIMARY ? Item.isoName_ : Item.name_;
                 if (Namespace == HC_ISO_PRIMARY && !Item.directory_) { Name.resize(Name.size() - 2); if (Name.back() == '.') Name.pop_back(); }
                 Names[Child] = Names[Parent].empty() ? Name : Names[Parent] + '/' + Name;
-                const auto Found = Lookup.find(Names[Child]); Require(Found != Lookup.end(), "Reopened path mismatch");
-                const auto& Actual = Image.Entries()[Found->second]; Require(Actual.directory_ == Item.directory_ && Actual.size_ == Item.size_, "Reopened file metadata mismatch");
+                const auto Found = Image.Find(Names[Child]); Require(Found != UINT64_MAX, "Reopened path mismatch");
+                const auto& Actual = Image.Entries()[size_t(Found)]; Require(Actual.directory_ == Item.directory_ && Actual.size_ == Item.size_, "Reopened file metadata mismatch");
                 const auto& ExpectedMetadata = Item.metadata_;
                 Require(((Actual.metadata_.attributes_ ^ ExpectedMetadata.attributes_) & ExpectedMetadata.knownMask_) == 0
                     && (!ExpectedMetadata.hasModified_ || (Actual.metadata_.hasModified_ && Actual.metadata_.modifiedUtcMs_ == ExpectedMetadata.modifiedUtcMs_)),
@@ -343,7 +363,7 @@ void Writer::Write(const fs::path& Path)
                 DiskReader Input(Item.source_);
                 for (uint64_t Offset = 0; Offset < Item.size_;) {
                     const auto Size = uint32_t(std::min<uint64_t>(Buffer.size(), Item.size_ - Offset));
-                    Require(Image.Read(Found->second, Offset, std::span(Buffer).first(Size)) == Size, "Reopened payload truncated");
+                    Require(Image.Read(Found, Offset, std::span(Buffer).first(Size)) == Size, "Reopened payload truncated");
                     Input.Read(Offset, std::span(Expected).first(Size));
                     Require(std::equal(Buffer.begin(), Buffer.begin() + Size, Expected.begin()), "Reopened payload differs from source");
                     Offset += Size; Done = std::min(payloadBytes_ * 2, Done + Size); Pulse(options_, Done, payloadBytes_ * 2);

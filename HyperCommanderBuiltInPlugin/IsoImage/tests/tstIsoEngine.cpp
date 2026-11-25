@@ -17,6 +17,32 @@ HcIsoOptions Options(uint32_t Profile = HC_ISO_UDF_BRIDGE) { return {sizeof(HcIs
 class IsoEngineTests : public QObject {
     Q_OBJECT
 private slots:
+    void largeInventoryRoundTrip()
+    {
+        if (!qEnvironmentVariableIsSet("HC_ARCHIVE_STRESS")) QSKIP("Enable HC_ARCHIVE_STRESS for the large inventory test");
+        QTemporaryDir Directory;
+        const auto Disk = Directory.filePath("empty").toUtf8();
+        QVERIFY(Put(QString::fromUtf8(Disk), {}));
+        constexpr size_t Count = 100001;
+        std::vector<QByteArray> Names(Count);
+        std::vector<HcIsoSource> Sources(Count);
+        for (size_t I = 0; I < Count; ++I) {
+            Names[I] = "F" + QByteArray::number(qulonglong(I));
+            Sources[I] = {Disk.constData(), Names[I].constData(), 0};
+        }
+        const auto Target = Directory.filePath("large.iso").toUtf8();
+        auto Config = Options(HC_ISO_9660_JOLIET);
+        Config.maxImageBytes_ = 0;
+        QVERIFY2(hcIsoBuild(Target.constData(), Sources.data(), Count, &Config) == HC_ISO_OK, hcIsoLastError());
+        HcIsoImage* Raw = nullptr;
+        QVERIFY2(hcIsoOpen(Target.constData(), HC_ISO_JOLIET, &Raw) == HC_ISO_OK, hcIsoLastError());
+        ImagePtr Image(Raw);
+        HcIsoInfo Info{sizeof(HcIsoInfo)};
+        QCOMPARE(hcIsoGetInfo(Raw, &Info), HC_ISO_OK);
+        QCOMPARE(Info.entryCount_, uint64_t(Count));
+        uint64_t Index = 0;
+        QCOMPARE(hcIsoFindEntry(Raw, Names.back().constData(), &Index), HC_ISO_OK);
+    }
     void entryMetadataRoundTrip()
     {
         QTemporaryDir Directory;
@@ -239,6 +265,49 @@ private slots:
             QCOMPARE(Files, 2);
         }
         const auto Second = Directory.filePath("second.iso").toUtf8(); QCOMPARE(hcIsoBuild(Second.constData(), Sources, std::size(Sources), &Settings), HC_ISO_OK); QCOMPARE(Read(QString::fromUtf8(Second)), Original);
+    }
+    void udfAllocationContinuation()
+    {
+        QTemporaryDir Directory;
+        const auto Target = Directory.filePath("chain.iso").toUtf8();
+        const auto Disk = Directory.filePath("input").toUtf8();
+        QVERIFY(Put(QString::fromUtf8(Disk), "continuation"));
+        auto Config = Options();
+        const HcIsoSource File{Disk.constData(), "file", 0};
+        QCOMPARE(hcIsoBuild(Target.constData(), &File, 1, &Config), HC_ISO_OK);
+        auto Data = Read(QString::fromUtf8(Target));
+        constexpr size_t Block = 2048;
+        auto* Bytes = reinterpret_cast<uchar*>(Data.data());
+        const auto* Partition = Bytes + 34 * Block;
+        const auto Start = qFromLittleEndian<quint32>(Partition + 188);
+        const auto Spare = qFromLittleEndian<quint32>(Partition + 192) - 1;
+        auto* Fe = Bytes + (Start + 3) * Block;
+        QCOMPARE(qFromLittleEndian<quint16>(Fe), 261);
+        auto* Aed = Bytes + (Start + Spare) * Block;
+        std::copy_n(Fe + 176, 8, Aed + 24);
+        qToLittleEndian<quint32>(8, Aed + 20);
+        qToLittleEndian<quint32>(0xc0000000u | Block, Fe + 176);
+        qToLittleEndian<quint32>(Spare, Fe + 180);
+        auto Seal = [](uchar* Record, quint16 Id, quint32 Location, quint16 Length) {
+            qToLittleEndian(Id, Record); qToLittleEndian<quint16>(2, Record + 2);
+            qToLittleEndian(Length, Record + 10); qToLittleEndian(Location, Record + 12);
+            quint16 Crc = 0;
+            for (int I = 0; I < Length; ++I) {
+                Crc ^= quint16(Record[16 + I]) << 8;
+                for (int Bit = 0; Bit < 8; ++Bit) Crc = quint16((Crc << 1) ^ (Crc & 0x8000 ? 0x1021 : 0));
+            }
+            qToLittleEndian(Crc, Record + 8);
+            Record[4] = 0; uchar Sum = 0; for (int I = 0; I < 16; ++I) Sum += Record[I]; Record[4] = Sum;
+        };
+        Seal(Fe, 261, 3, 168); Seal(Aed, 258, Spare, 16);
+        QVERIFY(Put(QString::fromUtf8(Target), Data));
+        HcIsoImage* Raw = nullptr;
+        QVERIFY2(hcIsoOpen(Target.constData(), HC_ISO_UDF, &Raw) == HC_ISO_OK, hcIsoLastError());
+        ImagePtr Image(Raw); uint64_t Index = 0; uint32_t ReadSize = 0;
+        QCOMPARE(hcIsoFindEntry(Raw, "file", &Index), HC_ISO_OK);
+        QByteArray Payload(12, Qt::Uninitialized);
+        QCOMPARE(hcIsoRead(Raw, Index, 0, Payload.data(), Payload.size(), &ReadSize), HC_ISO_OK);
+        QCOMPARE(Payload.first(ReadSize), QByteArray("continuation"));
     }
     void malformedDescriptors()
     {

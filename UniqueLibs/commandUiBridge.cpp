@@ -3487,10 +3487,6 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         const auto Policy = Pack->GetWCX()->WritePolicy(); if (!Policy.HasValue()) return Policy.Failure();
         ArchiveMoveEndpoint Value{Pack->ReadLocation("/"), ArchiveModel->SnapshotProvider()};
         const auto Plugin = Pack->GetWCX()->PluginPath().toStdString();
-        if (QDir::cleanPath(Pack->GetWCX()->PluginPath()).compare(QDir::cleanPath(hc::plugins::BuiltinIsoOptions().binaryPath_), Qt::CaseInsensitive) == 0) {
-            Value.limits_.maxInputBytes_ = 64ull * 1024 * 1024 * 1024;
-            Value.limits_.maxArchiveBytes_ = 128ull * 1024 * 1024 * 1024;
-        }
         Value.begin_ = [Plugin, Root = Value.root_, Reader = Value.reader_, Limits = Value.limits_, Backend = Pack->GetWCX()->Backend()](OperationContext Context) {
             return BeginWcxMutation(Plugin, Root, Reader, {}, Limits, std::move(Context), {}, Backend);
         };

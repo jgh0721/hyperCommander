@@ -100,13 +100,15 @@ void Reader::initialize(uint32_t Namespace)
     info_.structSize_ = sizeof(info_);
     Require(info_.imageBytes_ >= 18 * Block && info_.imageBytes_ % Block == 0, "Truncated ISO image");
     Bytes Primary, Joliet;
-    bool End = false, Udf = false;
+    bool End = false, Udf = false, Recognition = false;
     // The descriptor search window is contiguous. One read avoids a channel
     // round trip per sector for callback-backed images on SMB and RDP.
-    const auto EndSector = std::min<uint64_t>(80, info_.imageBytes_ / Block);
-    const auto Window = ReadAt(16 * Block, (EndSector - 16) * Block);
+    const auto EndSector = info_.imageBytes_ / Block;
+    Bytes Window;
     for (uint64_t Sector = 16; Sector < EndSector; ++Sector) {
-        const auto Data = std::span(Window).subspan(size_t(Sector - 16) * Block, Block);
+        const auto InWindow = (Sector - 16) % 64;
+        if (!InWindow) Window = ReadAt(Sector * Block, std::min<uint64_t>(64, EndSector - Sector) * Block);
+        const auto Data = std::span(Window).subspan(size_t(InWindow) * Block, Block);
         if (std::memcmp(Data.data() + 1, "CD001", 5) == 0 && !End) {
             Require(Data[6] == 1, "Unsupported ISO descriptor version", HC_ISO_UNSUPPORTED);
             if (Data[0] == 1) Primary.assign(Data.begin(), Data.end());
@@ -114,7 +116,11 @@ void Reader::initialize(uint32_t Namespace)
             if (Data[0] == 2 && Data[88] == '%' && Data[89] == '/' && (Data[90] == '@' || Data[90] == 'C' || Data[90] == 'E')) Joliet.assign(Data.begin(), Data.end());
             if (Data[0] == 255) End = true;
         }
+        if (std::memcmp(Data.data() + 1, "BEA01", 5) == 0) Recognition = true;
         if (std::memcmp(Data.data() + 1, "NSR02", 5) == 0 || std::memcmp(Data.data() + 1, "NSR03", 5) == 0) Udf = true;
+        if (std::memcmp(Data.data() + 1, "TEA01", 5) == 0) Recognition = false;
+        if (End && Udf) break;
+        if (InWindow == 63 && !Recognition && std::memcmp(Data.data() + 1, "CD001", 5) != 0) break;
     }
     Require(!Primary.empty() && End, "Missing ISO primary descriptor or terminator");
     Require(Paired(Primary, 128, 2) == Block && uint64_t(Paired(Primary, 80, 4)) * Block <= info_.imageBytes_, "Invalid ISO volume extent");
@@ -140,7 +146,6 @@ void Reader::initialize(uint32_t Namespace)
             Require(Parent != paths_.end() && entries_[Parent->second].directory_, "Missing parent directory");
             entries_[Parent->second].children_.push_back(I);
         }
-        metadataBytes_ += sizeof(size_t); Require(metadataBytes_ <= MaxMetadata, "Child index budget exceeded");
     }
 }
 uint64_t Reader::Find(const std::string& Path) const
@@ -153,7 +158,8 @@ uint64_t Reader::Child(uint64_t Directory, uint64_t Index) const
 }
 Bytes Reader::ReadAt(uint64_t Offset, uint64_t Size)
 {
-    Require(Offset <= info_.imageBytes_ && Size <= info_.imageBytes_ - Offset && Size <= MaxMetadata, "Extent outside image or read budget");
+    Require(Offset <= info_.imageBytes_ && Size <= info_.imageBytes_ - Offset, "Extent outside image");
+    Require(Size <= Bytes().max_size(), "Extent exceeds addressable memory");
     Bytes Data(static_cast<size_t>(Size));
     readInto(Offset, Data);
     return Data;
@@ -161,7 +167,7 @@ Bytes Reader::ReadAt(uint64_t Offset, uint64_t Size)
 void Reader::readInto(uint64_t Offset, std::span<uint8_t> Data)
 {
     const auto Size = Data.size();
-    Require(Offset <= info_.imageBytes_ && Size <= info_.imageBytes_ - Offset && Size <= MaxMetadata, "Extent outside image or read budget");
+    Require(Offset <= info_.imageBytes_ && Size <= info_.imageBytes_ - Offset, "Extent outside image");
     if (input_.readAt_) {
         uint64_t Done = 0;
         while (Done < Size) {
@@ -195,19 +201,17 @@ uint32_t Reader::Read(size_t Index, uint64_t Offset, std::span<uint8_t> Buffer)
 void Reader::add(Entry Value)
 {
     CleanPath(Value.path_);
-    Require(entries_.size() < MaxEntries && paths_.emplace(Value.path_, entries_.size()).second, "Duplicate path or entry budget exceeded");
-    metadataBytes_ += Value.path_.size() + sizeof(Entry) + Value.extents_.size() * sizeof(Extent);
-    Require(metadataBytes_ <= MaxMetadata, "Metadata budget exceeded");
+    Require(paths_.emplace(Value.path_, entries_.size()).second, "Duplicate path");
     entries_.push_back(std::move(Value));
 }
 void Reader::readIso(const Bytes& Descriptor, bool Joliet)
 {
     Require(Paired(Descriptor, 128, 2) == Block, "Unsupported ISO block size", HC_ISO_UNSUPPORTED);
     std::set<uint32_t> Visited;
-    std::function<void(uint32_t, uint32_t, const std::string&, unsigned)> Walk;
-    Walk = [&](uint32_t Sector, uint32_t Length, const std::string& Parent, unsigned Depth) {
-        Require(Depth <= 128 && Visited.insert(Sector).second, "Cyclic or excessively deep ISO directory");
-        metadataBytes_ += Length; Require(metadataBytes_ <= MaxMetadata, "Directory budget exceeded");
+    struct DirectoryTask { uint32_t sector, length; std::string path; };
+    std::vector<DirectoryTask> Queue;
+    auto Walk = [&](uint32_t Sector, uint32_t Length, const std::string& Parent) {
+        Require(Visited.insert(Sector).second, "Cyclic ISO directory");
         const auto Data = ReadAt(uint64_t(Sector) * Block, Length);
         Entry Pending; bool Multi = false;
         for (size_t Offset = 0; Offset < Data.size();) {
@@ -255,17 +259,21 @@ void Reader::readIso(const Bytes& Descriptor, bool Joliet)
             Pending.size_ += ExtentSize; Pending.extents_.push_back({uint64_t(ExtentBlock) * Block, ExtentSize});
             Multi = (Rec[25] & 128) != 0;
             Require(!Directory || !Multi, "Multi-extent directory unsupported", HC_ISO_UNSUPPORTED);
-            if (!Multi) { if (Directory) Pending.size_ = 0; add(std::move(Pending)); if (Directory) Walk(ExtentBlock, ExtentSize, Path, Depth + 1); }
+            if (!Multi) { if (Directory) Pending.size_ = 0; add(std::move(Pending)); if (Directory) Queue.push_back({ExtentBlock, ExtentSize, Path}); }
         }
         Require(!Multi, "Unterminated ISO multi-extent chain");
     };
-    Walk(DataBlock(std::span(Descriptor).subspan(156, 34)), Paired(Descriptor, 166, 4), {}, 0);
+    Walk(DataBlock(std::span(Descriptor).subspan(156, 34)), Paired(Descriptor, 166, 4), {});
+    while (!Queue.empty()) {
+        auto Directory = std::move(Queue.back()); Queue.pop_back();
+        Walk(Directory.sector, Directory.length, Directory.path);
+    }
 }
 void Reader::readUdf()
 {
     const auto Anchor = ReadAt(256ull * Block, Block); CheckTag(Anchor, 256, 2);
     const auto SequenceBytes = Get(Anchor, 16, 4), SequenceBlock = Get(Anchor, 20, 4);
-    Require(SequenceBytes >= Block && SequenceBytes <= 256 * Block, "Invalid UDF descriptor sequence");
+    Require(SequenceBytes >= Block && SequenceBlock + (SequenceBytes - 1) / Block <= UINT32_MAX && SequenceBlock * Block + SequenceBytes <= info_.imageBytes_, "Invalid UDF descriptor sequence");
     Bytes Partition, Logical;
     bool Terminated = false;
     for (uint32_t I = 0; I < SequenceBytes / Block; ++I) {
@@ -292,9 +300,10 @@ void Reader::readUdf()
     const auto Fsd = ReadPartition(FsdBlock, Block); CheckTag(Fsd, FsdBlock, 256);
     Require(Get(Fsd, 408, 2) == 0, "Invalid root partition reference");
     std::set<uint32_t> Visited;
-    std::function<void(uint32_t, const std::string&, unsigned, bool)> Walk;
-    Walk = [&](uint32_t Sector, const std::string& Path, unsigned Depth, bool Hidden) {
-        Require(Depth <= 128 && Visited.insert(Sector).second, "Cyclic UDF tree or shared ICB unsupported");
+    struct IcbTask { uint32_t sector; std::string path; bool hidden; };
+    std::vector<IcbTask> Queue;
+    auto Walk = [&](uint32_t Sector, const std::string& Path, bool Hidden) {
+        Require(Visited.insert(Sector).second, "Cyclic UDF tree or shared ICB unsupported");
         const auto Fe = ReadPartition(Sector, Block); CheckTag(Fe, Sector);
         const auto Id = Get(Fe, 0, 2); Require(Id == 261 || Id == 266, "Unsupported UDF ICB", HC_ISO_UNSUPPORTED);
         const bool Extended = Id == 266;
@@ -310,29 +319,42 @@ void Reader::readUdf()
         const auto EaLength = Get(Fe, Header - 8, 4), AdLength = Get(Fe, Header - 4, 4);
         Require(EaLength <= Block - Header && AdLength <= Block - Header - EaLength, "Invalid UDF allocation length");
         Require(Get(Fe, 10, 2) >= Header - 16 + EaLength + AdLength, "UDF CRC excludes allocation descriptors");
-        const auto Ads = std::span(Fe).subspan(Header + size_t(EaLength), size_t(AdLength));
+        auto Ads = std::span(Fe).subspan(Header + size_t(EaLength), size_t(AdLength));
         const auto Kind = Get(Fe, 34, 2) & 7;
         if (Kind == 3) { Require(Item.size_ <= Ads.size(), "Embedded UDF file truncated"); Item.embedded_.assign(Ads.begin(), Ads.begin() + size_t(Item.size_)); }
         else {
             Require(Kind <= 1, "Unsupported UDF allocation type", HC_ISO_UNSUPPORTED);
             const size_t Width = Kind == 0 ? 8 : 16; Require(Ads.size() % Width == 0, "Truncated allocation descriptor");
             uint64_t Allocated = 0;
-            for (size_t Offset = 0; Offset < Ads.size(); Offset += Width) {
+            Bytes Continuation;
+            std::set<uint32_t> AllocationBlocks;
+            for (size_t Offset = 0; Offset < Ads.size();) {
                 const auto Size = Get(Ads, Offset, 4), Location = Get(Ads, Offset + 4, 4);
-                Require((Size >> 30) == 0, "Sparse/continuation UDF allocation unsupported", HC_ISO_UNSUPPORTED);
                 if (Kind == 1) Require(Get(Ads, Offset + 8, 2) == 0, "Invalid UDF allocation partition");
-                Require(Location <= Length && Size <= (Length - Location) * Block, "Invalid UDF allocation extent");
+                Offset += Width;
+                if ((Size >> 30) == 3) {
+                    Require(Offset == Ads.size() && AllocationBlocks.insert(uint32_t(Location)).second, "Invalid UDF allocation chain");
+                    Continuation = ReadPartition(uint32_t(Location), Size & 0x3fffffff);
+                    CheckTag(Continuation, uint32_t(Location), 258);
+                    const auto LengthBytes = Get(Continuation, 20, 4);
+                    Require(LengthBytes <= Continuation.size() - 24 && LengthBytes % Width == 0, "Invalid UDF allocation descriptors");
+                    Ads = std::span<const uint8_t>(Continuation).subspan(24, size_t(LengthBytes));
+                    Offset = 0;
+                    continue;
+                }
+                Require((Size >> 30) == 0, "Sparse UDF allocation unsupported", HC_ISO_UNSUPPORTED);
+                Require(Location <= Length && Size <= (Length - Location) * Block && Size <= UINT64_MAX - Allocated, "Invalid UDF allocation extent");
                 Item.extents_.push_back({(Start + Location) * Block, Size}); Allocated += Size;
             }
             Require(Allocated >= Item.size_ && Allocated - Item.size_ < Block, "UDF allocation/file size mismatch");
         }
         if (!Item.directory_) { add(std::move(Item)); return; }
-        Require(Item.size_ <= MaxMetadata - std::min(metadataBytes_, MaxMetadata), "UDF directory budget exceeded"); metadataBytes_ += Item.size_;
         Bytes Data = Item.embedded_;
         if (Data.empty()) for (const auto& Ext : Item.extents_) {
             const auto Part = ReadAt(Ext.offset_, std::min<uint64_t>(Ext.size_, Item.size_ - Data.size())); Data.insert(Data.end(), Part.begin(), Part.end()); if (Data.size() == Item.size_) break;
         }
         if (!Path.empty()) { Item.size_ = 0; add(Item); }
+        const auto FirstChild = Queue.size();
         for (size_t Offset = 0; Offset < Data.size();) {
             Require(Data.size() - Offset >= 38, "Truncated UDF FID");
             const auto Tail = std::span(Data).subspan(Offset);
@@ -352,9 +374,14 @@ void Reader::readUdf()
             Require(NameSize != 0, "Empty UDF file identifier");
             const auto Name = DecodeUnicode(Tail.subspan(38 + ImplSize, NameSize), true);
             Require(Name.find('/') == std::string::npos, "Invalid UDF component");
-            Walk(uint32_t(Get(Tail, 24, 4)), Path.empty() ? Name : Path + '/' + Name, Depth + 1, (Tail[18] & 1) != 0);
+            Queue.push_back({uint32_t(Get(Tail, 24, 4)), Path.empty() ? Name : Path + '/' + Name, (Tail[18] & 1) != 0});
         }
+        std::reverse(Queue.begin() + FirstChild, Queue.end());
     };
-    Walk(uint32_t(Get(Fsd, 404, 4)), {}, 0, false);
+    Walk(uint32_t(Get(Fsd, 404, 4)), {}, false);
+    while (!Queue.empty()) {
+        auto Item = std::move(Queue.back()); Queue.pop_back();
+        Walk(Item.sector, Item.path, Item.hidden);
+    }
 }
 }

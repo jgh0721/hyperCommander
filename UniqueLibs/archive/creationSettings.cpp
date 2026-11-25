@@ -48,7 +48,7 @@ Result<Unit> ValidateIsoSettings(const IsoCreateSettings& S)
     const auto Date = QDateTime::fromSecsSinceEpoch(S.timestampUtc_, QTimeZone::UTC).date();
     if (int(S.profile_) < 0 || int(S.profile_) > 3 || Label.isEmpty() || Label.size() > Limit
         || !std::ranges::all_of(S.volumeLabel_, [](unsigned char C) { return C >= 32 && C < 127; })
-        || !Date.isValid() || Date.year() < 1900 || Date.year() > 2155 || !S.maxImageBytes_ || S.maxImageBytes_ > (128ull << 30))
+        || !Date.isValid() || Date.year() < 1900 || Date.year() > 2155)
         return Error{ErrorCategory::InvalidRequest, "iso-invalid-settings"};
     return Unit{};
 }
@@ -68,7 +68,7 @@ Result<ArchiveCreateSettings> ReadCreatorSettings(const QJsonObject& Preferences
         auto Decoded = DecodeSevenZipSettings(Known); if (!Decoded.HasValue()) return Decoded.Failure();
         auto Checked = ValidateSevenZipSettings(Format, Decoded.Value()); if (!Checked.HasValue()) return Checked.Failure(); return ArchiveCreateSettings(Decoded.Value());
     }
-    const auto Value = Stored["value"].toObject(); if (Value["version"] != 1) return Error{ErrorCategory::Unsupported, "archive-create-settings-version"};
+    const auto Value = Stored["value"].toObject(); if (Value["version"] != 1 && Value["version"] != 2) return Error{ErrorCategory::Unsupported, "archive-create-settings-version"};
     IsoCreateSettings S;
     if (Value.contains("verifyContents") && !Value["verifyContents"].isBool()) return Error{ErrorCategory::InvalidRequest, "iso-invalid-settings"};
     if (Value.contains("preserveEntryTimes") && !Value["preserveEntryTimes"].isBool()) return Error{ErrorCategory::InvalidRequest, "iso-invalid-settings"};
@@ -78,7 +78,7 @@ Result<ArchiveCreateSettings> ReadCreatorSettings(const QJsonObject& Preferences
     if (Profile < 0 || Profile > 3 || Value["profile"].toDouble(-1) != Profile || !Value["label"].isString() || !Value["share"].isBool() || !Value["timestamp"].isString()) return Error{ErrorCategory::InvalidRequest, "iso-invalid-settings"};
     auto Limit = WireUnsigned(Value["maxImageBytes"]); bool TimeOk = false; S.timestampUtc_ = Value["timestamp"].toString().toLongLong(&TimeOk);
     if (!Limit.HasValue() || !TimeOk) return Error{ErrorCategory::InvalidRequest, "iso-invalid-settings"};
-    S.profile_ = IsoCreateProfile(Profile); S.volumeLabel_ = Value["label"].toString().toStdString(); S.shareDuplicateContents_ = Value["share"].toBool(); S.maxImageBytes_ = Limit.Value();
+    S.profile_ = IsoCreateProfile(Profile); S.volumeLabel_ = Value["label"].toString().toStdString(); S.shareDuplicateContents_ = Value["share"].toBool(); S.maxImageBytes_ = Value["version"] == 1 && Limit.Value() == (128ull << 30) ? 0 : Limit.Value();
     auto Checked = ValidateIsoSettings(S); if (!Checked.HasValue()) return Checked.Failure(); return ArchiveCreateSettings(S);
 }
 void WriteCreatorSettings(QJsonObject& Preferences, const CreatorRuntime& Creator, const std::string& Format, const ArchiveCreateSettings& Settings)
@@ -89,7 +89,7 @@ void WriteCreatorSettings(QJsonObject& Preferences, const CreatorRuntime& Creato
         Value = EncodeSevenZipSettings(*S);
         Value["verifyContents"] = S->verifyContents_;
     }
-    else { const auto& Iso = std::get<IsoCreateSettings>(Settings); Value = {{"version", 1}, {"profile", int(Iso.profile_)}, {"label", QString::fromStdString(Iso.volumeLabel_)}, {"share", Iso.shareDuplicateContents_}, {"verifyContents", Iso.verifyContents_}, {"preserveEntryTimes", Iso.preserveEntryTimes_}, {"timestamp", QString::number(Iso.timestampUtc_)}, {"maxImageBytes", QString::number(Iso.maxImageBytes_)}}; }
+    else { const auto& Iso = std::get<IsoCreateSettings>(Settings); Value = {{"version", 2}, {"profile", int(Iso.profile_)}, {"label", QString::fromStdString(Iso.volumeLabel_)}, {"share", Iso.shareDuplicateContents_}, {"verifyContents", Iso.verifyContents_}, {"preserveEntryTimes", Iso.preserveEntryTimes_}, {"timestamp", QString::number(Iso.timestampUtc_)}, {"maxImageBytes", QString::number(Iso.maxImageBytes_)}}; }
     auto Creators = Preferences["creators"].toObject(); auto Record = Creators[Key(Creator, Format)].toObject(); Record["value"] = Overlay(Record["value"].toObject(), Value);
     Creators[Key(Creator, Format)] = Record; Preferences["creators"] = Creators;
 }
@@ -101,7 +101,7 @@ QString CreationSettingsSummary(const ArchiveCreateSettings& Settings, const std
         if (S->encrypt_) Text += Format == "7z" && S->encryptHeaders_ ? QObject::tr(" · AES-256 및 파일 이름 암호화") : QObject::tr(" · AES-256"); return Text;
     }
     if (const auto* S = std::get_if<IsoCreateSettings>(&Settings)) return QObject::tr("%1 · 중복 내용 공유 %2 · 최대 %3\n%4")
-        .arg(QString::fromStdString(S->volumeLabel_), S->shareDuplicateContents_ ? QObject::tr("사용") : QObject::tr("사용 안 함"), Bytes(S->maxImageBytes_), S->preserveEntryTimes_ ? QObject::tr("원본 수정 시각 보존") : QDateTime::fromSecsSinceEpoch(S->timestampUtc_, QTimeZone::UTC).toString("yyyy-MM-dd HH:mm:ss 'UTC'"));
+        .arg(QString::fromStdString(S->volumeLabel_), S->shareDuplicateContents_ ? QObject::tr("사용") : QObject::tr("사용 안 함"), S->maxImageBytes_ ? Bytes(S->maxImageBytes_) : QObject::tr("형식 최대"), S->preserveEntryTimes_ ? QObject::tr("원본 수정 시각 보존") : QDateTime::fromSecsSinceEpoch(S->timestampUtc_, QTimeZone::UTC).toString("yyyy-MM-dd HH:mm:ss 'UTC'"));
     return QObject::tr("플러그인 자체 설정을 사용합니다.\n대기열을 포함하여 작업을 시작할 때의 설정을 적용합니다.");
 }
 Result<QJsonObject> RunArchiveWorker(QWidget* Parent, const QString& Title, std::function<Result<QJsonObject>(OperationContext)> Work)
@@ -202,7 +202,7 @@ bool EditBuiltinCreationSettings(QWidget* Parent, const std::string& Format, Arc
         Preserve->setChecked(S->preserveEntryTimes_); Form->addRow(Preserve);
         auto* Fixed = new QCheckBox(QObject::tr("고정 시각 사용 (2000-01-01 00:00:00 UTC)"), Content); Fixed->setObjectName("hc.archive.settings.fixedTime"); Fixed->setChecked(S->timestampUtc_ == 946684800); Form->addRow(Fixed);
         auto* Time = new QDateTimeEdit(QDateTime::fromSecsSinceEpoch(S->timestampUtc_, QTimeZone::UTC), Content); Time->setObjectName("hc.archive.settings.timestamp"); Time->setTimeZone(QTimeZone::UTC); Time->setDisplayFormat("yyyy-MM-dd HH:mm:ss 'UTC'"); Time->setDateRange(QDate(1900, 1, 1), QDate(2155, 12, 31)); Time->setEnabled(!Fixed->isChecked()); Form->addRow(QObject::tr("사용자 지정 시각(&T)"), Time);
-        auto* Maximum = new QDoubleSpinBox(Content); Maximum->setObjectName("hc.archive.settings.maxImage"); Maximum->setDecimals(3); Maximum->setRange(0.001, 128); Maximum->setSuffix(" GiB"); Maximum->setValue(double(S->maxImageBytes_) / double(1ull << 30)); Form->addRow(QObject::tr("최대 이미지 크기(&M)"), Maximum);
+        auto* Maximum = new QDoubleSpinBox(Content); Maximum->setObjectName("hc.archive.settings.maxImage"); Maximum->setDecimals(3); Maximum->setRange(0, 8192); Maximum->setSpecialValueText(QObject::tr("형식 최대")); Maximum->setSuffix(" GiB"); Maximum->setValue(double(S->maxImageBytes_) / double(1ull << 30)); Form->addRow(QObject::tr("최대 이미지 크기(&M)"), Maximum);
         auto* Help = new QLabel(QObject::tr("중복 내용 공유는 모든 경로를 유지합니다. 작성 후에는 각 경로의 위치와 크기를 검사합니다."), Content); Help->setWordWrap(true); Help->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); Form->addRow(Help);
         QObject::connect(Fixed, &QCheckBox::toggled, Time, [Time](bool On) { Time->setEnabled(!On); });
         const auto Validate = [=] { IsoCreateSettings Value; Value.profile_ = IsoCreateProfile(Profile->currentIndex()); Value.volumeLabel_ = Label->text().toStdString(); Value.timestampUtc_ = Fixed->isChecked() ? 946684800 : Time->dateTime().toSecsSinceEpoch(); Value.maxImageBytes_ = uint64_t(Maximum->value() * double(1ull << 30));

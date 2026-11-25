@@ -12,7 +12,6 @@ namespace hc::iso {
 using namespace hc::storage;
 using namespace hc::operations;
 namespace {
-constexpr uint64_t ImageLimit = 128ull * 1024 * 1024 * 1024;
 class CreateTask final : public IJobTask {
 public:
     explicit CreateTask(CreateRequest Request) : request_(std::move(Request)) {}
@@ -40,7 +39,7 @@ public:
             if (!temp_->isValid() || !QDir().mkdir(temp_->filePath("input"))) return failed({ErrorCategory::Unavailable, "iso-staging-directory"});
             FileOperationRequest Copy; Copy.sources_ = request_.sources_; Copy.destination_ = {LocatorKind::Local, temp_->filePath("input").toStdString()};
             auto Reader = MakeNativeReadProvider(LocatorKind::Local); Copy.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Local, Reader);
-            Copy.maxDepth_ = 128; Copy.maxBytes_ = 64ull * 1024 * 1024 * 1024; Copy.conflict_ = ConflictPolicy::Ask;
+            Copy.maxDepth_ = (std::numeric_limits<size_t>::max)(); Copy.conflict_ = ConflictPolicy::Ask;
             auto Prepared = PrepareFileOperation(std::move(Copy), Context.operation_); if (!Prepared.HasValue()) return failed(Prepared.Failure());
             copy_ = std::move(Prepared.Value().task_); phase_ = Phase::CopyInputs; return progress("입력 파일 준비");
         }
@@ -84,7 +83,6 @@ public:
                 if (Name != Name.normalized(QString::NormalizationForm_C)) return failed({ErrorCategory::InvalidRequest, "iso-name-requires-nfc:" + Name.toStdString()});
                 for (const auto& Part : Name.split('/')) if ((request_.profile_ == 1 || request_.profile_ == 2) && Part.size() > 64) return failed({ErrorCategory::Unsupported, "iso-joliet-name-too-long:" + Name.toStdString()});
                 if (Info.isDir()) Name += '/'; names_.push_back(Name.toStdString());
-                if (names_.size() > 100000) return failed({ErrorCategory::BudgetExceeded, "iso-entry-budget"});
             }
             if (iterator_->hasNext()) return progress("이미지 파일 목록 확인");
             iterator_.reset();
@@ -92,7 +90,7 @@ public:
         }
         if (phase_ == Phase::Build) {
             RewriteRequest Rewrite; Rewrite.profile_ = request_.profile_; Rewrite.volumeLabel_ = request_.volumeLabel_.toStdString();
-            Rewrite.maxImageBytes_ = ImageLimit; Rewrite.temporaryBase_ = temp_->path();
+            Rewrite.temporaryBase_ = temp_->path();
             for (auto Name : names_) {
                 const bool Directory = Name.ends_with('/'); if (Directory) Name.pop_back();
                 Rewrite.sources_.push_back({Directory ? "" : QDir(temp_->filePath("input")).filePath(QString::fromStdString(Name)).toStdString(), Name, Directory, metadata_[Name]});

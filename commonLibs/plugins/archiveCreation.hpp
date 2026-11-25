@@ -120,7 +120,7 @@ namespace hc::plugins
         bool shareDuplicateContents_ = false;
         std::int64_t timestampUtc_ = 946684800;
         // This bounds the physical output, including metadata and alignment.
-        std::uint64_t maxImageBytes_ = 128ull * 1024 * 1024 * 1024;
+        std::uint64_t maxImageBytes_ = 0;
         bool verifyContents_ = true;
         bool preserveEntryTimes_ = true;
         bool operator==(const IsoCreateSettings&) const = default;

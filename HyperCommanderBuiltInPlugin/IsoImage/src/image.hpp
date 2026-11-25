@@ -20,8 +20,7 @@ namespace hc::iso {
 namespace fs = std::filesystem;
 using Bytes = std::vector<uint8_t>;
 constexpr uint32_t Block = 2048;
-constexpr uint64_t MaxMetadata = 256ull * 1024 * 1024;
-constexpr uint64_t MaxEntries = 100000;
+constexpr uint64_t MaxImageBytes = uint64_t(UINT32_MAX) * Block;
 struct Error : std::runtime_error {
     int status_;
     Error(int Status, const std::string& Message) : runtime_error(Message), status_(Status) {}
@@ -95,7 +94,6 @@ private:
     std::map<std::string, size_t> paths_;
     std::vector<size_t> rootChildren_;
     HcIsoInput input_{};
-    uint64_t metadataBytes_ = 0;
 };
 struct Node {
     HcIsoMetadata metadata_{};
@@ -107,6 +105,7 @@ struct Node {
     size_t parent_ = 0;
     std::vector<size_t> children_;
     uint32_t dataBlock_ = 0, isoBlock_ = 0, jolietBlock_ = 0, feBlock_ = 0;
+    uint32_t allocationBlock_ = 0;
     Bytes isoData_, jolietData_, udfData_;
     size_t payload_ = SIZE_MAX;
 };
@@ -136,7 +135,9 @@ private:
     std::vector<Payload> payloads_;
     bool shareContents_ = false, explicitTimestamp_ = false, verifyContents_ = true;
     std::vector<size_t> directories_;
-    uint32_t nextBlock_ = 0, totalBlocks_ = 0, partitionEnd_ = 0;
+    uint32_t allocateBlocks(uint64_t Count);
+    uint32_t nextBlock_ = 0;
+    uint32_t totalBlocks_ = 0, partitionEnd_ = 0;
     std::array<uint32_t, 4> tableBlocks_{};
     uint64_t payloadBytes_ = 0;
 };

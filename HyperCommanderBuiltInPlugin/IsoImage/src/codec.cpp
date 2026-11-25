@@ -87,7 +87,7 @@ std::string DecodeUnicode(std::span<const uint8_t> Value, bool Osta)
 }
 std::string CleanPath(std::string_view Value)
 {
-    Require(!Value.empty() && Value.size() <= 4096 && Value.front() != '/' && Value.back() != '/', "Invalid image path");
+    Require(!Value.empty() && Value.front() != '/' && Value.back() != '/', "Invalid image path");
     DecodeUtf8(Value);
     size_t Start = 0;
     for (size_t I = 0; I <= Value.size(); ++I) {
@@ -123,7 +123,7 @@ void CheckTag(std::span<const uint8_t> Data, uint32_t Location, uint16_t Id)
     const auto Length = Get(Data, 10, 2);
     Require(Sum == Data[4] && Length <= Data.size() - 16, "Invalid UDF tag checksum/length");
     const auto Kind = Get(Data, 0, 2);
-    const size_t Minimum = Kind == 261 ? 160 : Kind == 266 ? 200 : Kind == 257 ? 22 : Kind == 6 ? 424 : Kind == 7 ? 8 : Kind == 9 ? 64 : 496;
+    const size_t Minimum = Kind == 261 ? 160 : Kind == 266 ? 200 : Kind == 257 ? 22 : Kind == 258 ? 8 : Kind == 6 ? 424 : Kind == 7 ? 8 : Kind == 9 ? 64 : 496;
     Require(Length >= Minimum, "UDF CRC does not cover required descriptor fields");
     Require(Crc16(Data.subspan(16, size_t(Length))) == Get(Data, 8, 2), "Invalid UDF descriptor CRC");
 }

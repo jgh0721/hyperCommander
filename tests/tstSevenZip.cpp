@@ -1303,10 +1303,16 @@ private slots:
             QVERIFY(QFile::remove(Restored));
         }
     }
+    void zip64EntryCount_data() {
+        QTest::addColumn<QString>("Format");
+        QTest::newRow("zip") << QStringLiteral("zip");
+        QTest::newRow("7z") << QStringLiteral("7z");
+    }
     void zip64EntryCount() {
+        QFETCH(QString, Format);
         if (!qEnvironmentVariableIsSet("HC_ARCHIVE_STRESS")) QSKIP("Enable HC_ARCHIVE_STRESS for the ZIP64 entry-count acceptance test");
-        QTemporaryDir Dir; constexpr int Count = 65537; QElapsedTimer Timer; Timer.start();
-        ArchiveUpdate Create{Dir.filePath("many.zip").toStdString(), Dir.path().toStdString()}; Create.creation_ = ArchiveCreationOptions{0, false};
+        QTemporaryDir Dir; constexpr int Count = 100001; QElapsedTimer Timer; Timer.start();
+        ArchiveUpdate Create{Dir.filePath("many." + Format).toStdString(), Dir.path().toStdString()}; Create.creation_ = ArchiveCreationOptions{0, false};
         for (int I = 0; I < Count; ++I) { const auto Name = QString("entry-%1").arg(I, 6, 10, QChar('0')); QVERIFY(QDir(Dir.path()).mkdir(Name)); Create.add_.push_back(Name.toStdString() + '/'); }
         auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); auto Made = Backend->Update(Create, {});
         QVERIFY2(Made.HasValue(), Made.HasValue() ? "" : Made.Failure().code_.c_str()); const auto CreateMs = Timer.restart();
@@ -1314,7 +1320,7 @@ private slots:
         for (;;) { auto Page = Listed.Value()->Next(257, {}); QVERIFY(Page.HasValue()); for (const auto& Header : Page.Value().entries_) { QVERIFY(Header.directory_); QVERIFY(Names.insert(Header.name_).second); } if (Page.Value().end_) break; }
         QCOMPARE(Names.size(), size_t(Count));
         for (int I = 0; I < Count; ++I) QVERIFY(Names.contains(QString("entry-%1").arg(I, 6, 10, QChar('0')).toStdString()));
-        qInfo() << "ZIP64 entries" << Count << "input-and-create-ms" << CreateMs << "paged-read-ms" << Timer.elapsed();
+        qInfo() << Format << "entries" << Count << "input-and-create-ms" << CreateMs << "paged-read-ms" << Timer.elapsed();
         Listed.Value().reset(); QVERIFY(QDir(Dir.path()).mkdir("renamed"));
         ArchiveUpdate Rename{Create.archive_, Dir.path().toStdString(), {"renamed/"}, {"entry-000000"}}; Rename.metadataOrigins_ = {"entry-000000"};
         auto Changed = Backend->Update(Rename, {}); QVERIFY2(Changed.HasValue(), Changed.HasValue() ? "" : Changed.Failure().code_.c_str());

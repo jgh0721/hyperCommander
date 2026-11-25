@@ -142,7 +142,7 @@ std::vector<std::wstring> MultiString(const wchar_t* List)
 {
     Require(List != nullptr); std::vector<std::wstring> Result; size_t Offset = 0;
     while (List[Offset]) {
-        const auto Length = wcsnlen_s(List + Offset, 1025); Require(Length < 1025 && Offset + Length < 2 * 1024 * 1024 && Result.size() < 100000);
+        const auto Length = wcsnlen_s(List + Offset, 1025); Require(Length < 1025);
         Result.push_back(Name(std::wstring(List + Offset, Length))); Offset += Length + 1;
     }
     return Result;
@@ -161,10 +161,8 @@ void Update(const wchar_t* Archive, const wchar_t* SubPath, const wchar_t* Sourc
         const bool Joliet = (Info.namespaces_ & (1u << HC_ISO_JOLIET)) != 0;
         Profile = Info.namespaces_ & (1u << HC_ISO_UDF) ? (Joliet ? HC_ISO_UDF_BRIDGE : HC_ISO_UDF_NO_JOLIET) : Joliet ? HC_ISO_9660_JOLIET : HC_ISO_9660;
         Label = Info.volumeLabel_;
-        uint64_t Bytes = 0;
         for (uint64_t I = 0; I < Info.entryCount_; ++I) {
             HcIsoEntry Entry{}; Entry.structSize_ = sizeof(Entry); Check(hcIsoGetEntry(Image.get(), I, &Entry));
-            Require(Entry.size_ <= 128ull * 1024 * 1024 * 1024 - Bytes, E_TOO_MANY_FILES); Bytes += Entry.size_;
             const auto Key = Name(Wide(Entry.path_)); const auto Disk = Temp.path_ / std::to_wstring(I);
             if (!Entry.directory_) Extract(Image.get(), I, Entry, &Disk, PackingProgress);
             HcIsoMetadata Meta{}; Check(hcIsoGetMetadata(Image.get(), I, &Meta));
@@ -193,7 +191,7 @@ void Update(const wchar_t* Archive, const wchar_t* SubPath, const wchar_t* Sourc
     std::vector<HcIsoSource> Sources; for (const auto& [Key, Value] : Items) Sources.push_back({Value.disk_.empty() ? nullptr : Value.disk_.c_str(), Value.path_.c_str(), uint32_t(Value.directory_)});
     // Staging beside the destination keeps the final rename on the same volume.
     const auto Stage = Target.parent_path() / (Target.filename().wstring() + L".hc-" + Temp.path_.filename().wstring());
-    HcIsoOptions Options{sizeof(HcIsoOptions), Profile, Label.c_str(), 128ull * 1024 * 1024 * 1024, 0, Progress, nullptr};
+    HcIsoOptions Options{sizeof(HcIsoOptions), Profile, Label.c_str(), 0, 0, Progress, nullptr};
     std::vector<HcIsoMetadata> Metadata;
     for (const auto& [Key, Value] : Items) Metadata.push_back(Value.metadata_);
     HcIsoOptionsEx Extended{sizeof(HcIsoOptionsEx), 1, Options, 0};
