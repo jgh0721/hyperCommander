@@ -2132,8 +2132,10 @@ bool CGridView::invertSelectionAlongNavigation(QKeyCombination Key)
     }
     const int After = Tiles ? thumbnails_->listView()->currentIndex().row() : view_->focusedRowIndex();
     if (After < 0 || Before == After) return true;
-    // Toggle departed rows only, so repeats do not toggle a shared endpoint twice.
+    // Shift+End includes the destination. Other moves invert the rows they leave.
     const int Step = After > Before ? 1 : -1;
+    const bool IncludeLast = Key.key() == Qt::Key_End && Modifiers == Qt::ShiftModifier;
+    const int Stop = IncludeLast ? After + Step : After;
     const auto* FirstColumn = view_->getFirstColumn();
     const auto* LastColumn = view_->getLastColumn();
     int Start = -1, Last = -1;
@@ -2144,7 +2146,7 @@ bool CGridView::invertSelectionAlongNavigation(QKeyCombination Key)
         Start = Last = -1;
     };
     view_->beginUpdate();
-    for (int I = Before; I != After; I += Step) {
+    for (int I = Before; I != Stop; I += Step) {
         const auto Row = Tiles ? view_->getRow(thumbnailModel_->SourceIndex(I)) : view_->getRow(I);
         if (!Row.isValid() || Row.type() != Qtitan::GridRow::DataRow) { Flush(); continue; }
         const auto Index = Row.modelIndex(0);
