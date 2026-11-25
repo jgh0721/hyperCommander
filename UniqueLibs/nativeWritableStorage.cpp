@@ -1754,17 +1754,14 @@ namespace hc::storage
                         if (streamHash_) streamHashes_.emplace_back(streamName_, streamHash_->result());
                         sourceStream_.Close(); destinationStream_.Close(); streamHash_.reset(); return CopyExtraProgress{false, 0};
                     }
-                    WIN32_FIND_STREAM_DATA Data{}; BOOL Found = TRUE;
-                    if (streamSearch_ == INVALID_HANDLE_VALUE) {
-                        streamSearch_ = FindFirstStreamW(sourcePath_.c_str(), FindStreamInfoStandard, &Data, 0);
-                        Found = streamSearch_ != INVALID_HANDLE_VALUE;
-                    } else Found = FindNextStreamW(streamSearch_, &Data);
-                    if (!Found) {
-                        const auto Code = GetLastError();
-                        if (Code != ERROR_HANDLE_EOF) return extraFailure(Code, "copy-ads-enumerate:");
+                    const auto Code = nextStreamName();
+                    if (Code == ERROR_HANDLE_EOF) {
                         streamEnumerationDone_ = true;
+                    } else if (Code != ERROR_SUCCESS) {
+                        auto Error = extraFailure(Code, "copy-ads-enumerate:");
+                        Error.nativePath_ = Utf8(sourcePath_);
+                        return Error;
                     } else {
-                        streamName_ = Data.cStreamName;
                         if (streamName_ == L"::$DATA") return CopyExtraProgress{false, 0};
                         if (++streamCount_ > 65536 || !streamName_.starts_with(L":") || !streamName_.ends_with(L":$DATA")
                             || streamName_.find_first_of(L"/\\") != std::wstring::npos)
@@ -2109,6 +2106,59 @@ namespace hc::storage
             std::wstring sourcePath_, streamName_;
             Handle sourceFile_, sourceStream_, destinationStream_, verificationStream_;
             ParentPins sourceParents_;
+            // Some SMB redirectors fail the first path-based lookup after CopyFile2.
+            // Read the complete list from the already pinned source before opening any ADS.
+            DWORD readPinnedStreamNames()
+            {
+                std::vector<std::byte> Buffer(64 * 1024); // Maximum SMB stream-list reply.
+                if (!GetFileInformationByHandleEx(sourceFile_.value_, FileStreamInfo, Buffer.data(), DWORD(Buffer.size())))
+                    return GetLastError();
+                std::vector<std::wstring> Names;
+                size_t Offset = 0;
+                for (;;) {
+                    constexpr size_t Header = offsetof(FILE_STREAM_INFO, StreamName);
+                    const size_t Remaining = Buffer.size() - Offset;
+                    if (Remaining < Header) return ERROR_INVALID_DATA;
+                    const auto* Info = reinterpret_cast<const FILE_STREAM_INFO*>(Buffer.data() + Offset);
+                    const size_t Bytes = Info->StreamNameLength;
+                    if (!Bytes || Bytes % sizeof(wchar_t) || Bytes > Remaining - Header) return ERROR_INVALID_DATA;
+                    auto& Name = Names.emplace_back(Info->StreamName, Bytes / sizeof(wchar_t));
+                    if (Name.find(L'\0') != Name.npos) return ERROR_INVALID_DATA;
+                    const size_t Next = Info->NextEntryOffset;
+                    if (!Next) break;
+                    if (Next < Header + Bytes || Next >= Remaining || Next % alignof(FILE_STREAM_INFO)) return ERROR_INVALID_DATA;
+                    Offset += Next;
+                }
+                std::ranges::reverse(Names);
+                pinnedStreamNames_ = std::move(Names);
+                return ERROR_SUCCESS;
+            }
+            DWORD nextStreamName()
+            {
+                if (!pinnedStreamNames_) {
+                    WIN32_FIND_STREAM_DATA Data{};
+                    if (streamSearch_ != INVALID_HANDLE_VALUE) {
+                        if (!FindNextStreamW(streamSearch_, &Data)) return GetLastError();
+                    } else {
+                        streamSearch_ = FindFirstStreamW(sourcePath_.c_str(), FindStreamInfoStandard, &Data, 0);
+                        if (streamSearch_ == INVALID_HANDLE_VALUE) {
+                            const auto Code = GetLastError();
+                            if (Code != ERROR_INSUFFICIENT_BUFFER || source_.locator_.kind_ != LocatorKind::Smb) return Code;
+                            const auto Read = readPinnedStreamNames();
+                            if (Read != ERROR_SUCCESS) return Read;
+                        }
+                    }
+                    if (!pinnedStreamNames_) {
+                        streamName_ = Data.cStreamName;
+                        return ERROR_SUCCESS;
+                    }
+                }
+                if (pinnedStreamNames_->empty()) return ERROR_HANDLE_EOF;
+                streamName_ = std::move(pinnedStreamNames_->back());
+                pinnedStreamNames_->pop_back();
+                return ERROR_SUCCESS;
+            }
+            std::optional<std::vector<std::wstring>> pinnedStreamNames_;
             HANDLE streamSearch_ = INVALID_HANDLE_VALUE;
             std::unique_ptr<QCryptographicHash> sourceHash_, streamHash_, readHash_;
             std::vector<std::pair<std::wstring, QByteArray>> streamHashes_;

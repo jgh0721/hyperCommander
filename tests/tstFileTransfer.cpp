@@ -173,6 +173,57 @@ private slots:
         writer_ = MakeNativeWritableStorage(LocatorKind::Local, reader_);
         target_ = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
     }
+    void smbCopyFile2Streams_data()
+    {
+        QTest::addColumn<bool>("Move");
+        QTest::addColumn<bool>("Named");
+        QTest::newRow("copy-default") << false << false;
+        QTest::newRow("copy-named") << false << true;
+        QTest::newRow("move-default") << true << false;
+        QTest::newRow("move-named") << true << true;
+    }
+    void smbCopyFile2Streams()
+    {
+        QFETCH(bool, Move);
+        QFETCH(bool, Named);
+        const auto Share = qEnvironmentVariable("HC_ADS_SMB_ROOT");
+        if (Share.isEmpty()) QSKIP("Requires a writable SMB fixture root supporting named streams");
+        QTemporaryDir Remote(QDir(Share).filePath("hc-ads-XXXXXX"));
+        QTemporaryDir Local(QDir(qEnvironmentVariable("HC_ADS_LOCAL_ROOT", QDir::tempPath())).filePath("hc-ads-XXXXXX"));
+        QVERIFY(Remote.isValid() && Local.isValid());
+
+        // One byte above the buffered-copy cutoff selects the CopyFile2 producer.
+        const auto Source = Remote.filePath("sample.bin");
+        std::map<QString, QByteArray> Streams{{QString{}, Payload(MiB + 1, 17)}};
+        if (Named) {
+            Streams.emplace(":notes", "notes");
+            Streams.emplace(QStringLiteral(":한글"), QByteArray(8193, 'x'));
+        }
+        for (const auto& [Suffix, Bytes] : Streams) {
+            QFile Stream(Source + Suffix);
+            QVERIFY(Stream.open(QIODevice::WriteOnly));
+            QCOMPARE(Stream.write(Bytes), Bytes.size());
+        }
+        auto Reader = MakeNativeReadProvider(LocatorKind::Smb);
+        auto Writer = MakeNativeWritableStorage(LocatorKind::Smb, Reader);
+        auto Entry = Reader->Resolve({LocatorKind::Smb, QDir::toNativeSeparators(Source).toStdString()}, {}).get();
+        QVERIFY(Entry.HasValue());
+        FileOperationRequest Request;
+        Request.operation_ = Move ? FileOperation::Move : FileOperation::Copy;
+        Request.confirmDelete_ = false;
+        Request.sources_ = {{Entry.Value(), Reader, Writer}};
+        Request.destination_ = {LocatorKind::Local, QDir::toNativeSeparators(Local.path()).toStdString()};
+        Request.destinationWriter_ = target_;
+        Request.copyOptions_.streams_ = true;
+        const auto Result = run(std::move(Request), engine());
+        QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "incomplete");
+        QCOMPARE(QFileInfo::exists(Source), !Move);
+        for (const auto& [Suffix, Bytes] : Streams) {
+            QFile Stream(Local.filePath("sample.bin") + Suffix);
+            QVERIFY(Stream.open(QIODevice::ReadOnly));
+            QCOMPARE(Stream.readAll(), Bytes);
+        }
+    }
     void moveMixedSelectionToParent_data()
     {
         QTest::addColumn<bool>("useSmb");
