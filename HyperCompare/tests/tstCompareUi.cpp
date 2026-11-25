@@ -61,6 +61,7 @@
 #include <QTreeWidget>
 #include <QAction>
 #include <QFileDialog>
+#include <QMessageBox>
 #include <QTimer>
 #include <QMenuBar>
 #include <QMenu>
@@ -2091,6 +2092,39 @@ private slots:
         QVERIFY(window.findChild<QAction*>("encoding2_CP949")->isEnabled());
         QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-text-policy.png")); window.close();
     }
+    void initialEqualComparisonNotice_data()
+    {
+        QTest::addColumn<bool>("Folder");
+        QTest::newRow("files") << false;
+        QTest::newRow("folders") << true;
+    }
+    void initialEqualComparisonNotice()
+    {
+        QFETCH(bool, Folder);
+        QTemporaryDir Temp;
+        Request Input;
+        Input.file1_ = Temp.filePath("left.txt");
+        Input.file2_ = Temp.filePath("right.txt");
+        for (const auto& Path : {Input.file1_, Input.file2_}) {
+            if (Folder) QVERIFY(QDir().mkpath(Path));
+            write(Folder ? Path + "/data.txt" : Path, "same");
+        }
+        CompareWindow Window(Input);
+        Window.show();
+        QTRY_VERIFY(Window.findChild<QMessageBox*>());
+        auto* Notice = Window.findChild<QMessageBox*>();
+        QVERIFY(Notice->text().contains("동일"));
+        Notice->accept();
+        QTRY_VERIFY(!Window.findChild<QMessageBox*>());
+        action(Window, "다시 비교")->trigger();
+        QTRY_COMPARE(Window.ExitCode(), 0);
+        QVERIFY(!Window.findChild<QMessageBox*>());
+        write(Folder ? Input.file2_ + "/data.txt" : Input.file2_, "changed");
+        CompareWindow Different(Input);
+        Different.show();
+        QTRY_COMPARE(Different.ExitCode(), 1);
+        QVERIFY(!Different.findChild<QMessageBox*>());
+    }
     void directoryWindowKeepsStreamedModelAtCompletion()
     {
         QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right");
@@ -2102,6 +2136,8 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(tree->isVisible(), 10000); QVERIFY(status->text().contains("중"));
         auto* model = static_cast<DirectoryTreeModel*>(window.findChild<QAbstractItemModel*>("directoryTreeModel"));
         QSignalSpy resets(model, &QAbstractItemModel::modelReset);
+        // Let the bounded progress queue hold the worker past the former one-minute deadline.
+        if (qEnvironmentVariableIsSet("HC_COMPARE_TEST_LONG_DIRECTORY")) QTest::qSleep(61000);
         const QPersistentModelIndex selected(tree->model()->index(0, 0)); tree->setCurrentIndex(selected); tree->expand(selected);
         QTRY_VERIFY_WITH_TIMEOUT(status->text().startsWith("디렉터리 비교"), 15000);
         QCOMPARE(resets.size(), 0); QVERIFY(selected.isValid()); QCOMPARE(tree->currentIndex(), QModelIndex(selected)); QVERIFY(tree->isExpanded(selected));
@@ -2285,6 +2321,13 @@ private slots:
         batch.rows_ = {}; batch.rows_.append(QJsonObject{{"path", "src/b.txt"}, {"status", "Pending"}, {"left", QJsonObject{{"present", true}}}});
         view.ApplyProgress(batch); QVERIFY(selected.isValid()); QCOMPARE(tree->currentIndex(), QModelIndex(selected)); QVERIFY(tree->isExpanded(root));
         batch.side_ = -1; batch.phase_ = "compare"; batch.rows_ = {};
+        batch.currentPath_ = "src/a.txt"; batch.comparedBytes_ = 512; batch.fileBytes_ = 1024;
+        view.ApplyProgress(batch);
+        const auto Labels = view.findChildren<QLabel*>();
+        QVERIFY(std::any_of(Labels.begin(), Labels.end(), [](QLabel* Label) {
+            return Label->text().contains("50%") && Label->text().contains("src/a.txt");
+        }));
+        batch.currentPath_.clear();
         batch.rows_.append(QJsonObject{{"path", "src/a.txt"}, {"status", "LeftOnly"}, {"left", QJsonObject{{"present", true}}}});
         view.ApplyProgress(batch); QVERIFY(view.findChild<QPushButton*>("directoryOpenFile")->isEnabled());
         QCOMPARE(tree->currentIndex().siblingAtColumn(1).data().toString(), QString("왼쪽만 존재"));

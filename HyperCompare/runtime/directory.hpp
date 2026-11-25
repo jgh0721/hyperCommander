@@ -58,7 +58,8 @@ namespace hc::compare
     struct DirectoryProgress
     {
         DirectoryEntries rows_;
-        QString phase_;
+        QString phase_, currentPath_;
+        quint64 comparedBytes_ = 0, fileBytes_ = 0;
         int side_ = -1; // -1: final comparison row; -2: mixed-side discovery batch.
         qsizetype processed_ = 0, total_ = 0;
     };

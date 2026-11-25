@@ -445,7 +445,18 @@ namespace hc::compare
                 return;
             }
             if (closing_) { close(); return; }
-            try { display(); }
+            const bool Notify = std::exchange(notifyEqual_, false);
+            try {
+                display();
+                if (Notify && !canceled_->load() && exitCode_ == 0 && result_.completion_ == "Complete"
+                    && (result_.outcome_ == "Equal" || result_.outcome_ == "Equivalent")) {
+                    auto* Dialog = new hc::ui::MessageDialog(QMessageBox::Information, tr("비교 완료"),
+                        tr("현재 비교 기준에서 모든 항목이 동일합니다."), QMessageBox::Ok, this);
+                    Dialog->setAttribute(Qt::WA_DeleteOnClose);
+                    Dialog->TranslateStandardButtons();
+                    Dialog->open();
+                }
+            }
             catch (const std::exception& error) {
                 result_.error_ = QString::fromUtf8(error.what()); exitCode_ = 2;
                 state_->setText(tr("화면 구성 중단 — 입력은 보존됨: %1").arg(hc::ui::ErrorText(result_.error_)));
@@ -531,7 +542,7 @@ namespace hc::compare
             std::pair{"compareFindClose", QStyle::SP_DialogCloseButton}})
             if (auto* button = find_->findChild<QToolButton*>(entry.first))
             { button->setIcon(style()->standardIcon(entry.second)); button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon); }
-        if (!request_.file1_.isEmpty()) QTimer::singleShot(0, this, [this] { if (!canceled_->load()) start(); });
+        if (!request_.file1_.isEmpty()) QTimer::singleShot(0, this, [this] { if (!canceled_->load()) { notifyEqual_ = true; start(); } });
         else state_->setText(tr("파일 열기 또는 -file1/-file2로 비교를 시작하십시오."));
     }
     CompareWindow::~CompareWindow() { sourceEditing_ = false; bufferTimer_.stop(); if (bufferCanceled_) bufferCanceled_->store(true); bufferWatcher_.waitForFinished(); inputSaveWatcher_.waitForFinished(); canceled_->store(true); watcher_.waitForFinished(); workWatcher_.waitForFinished(); reportWatcher_.waitForFinished(); delete multi_; multi_ = nullptr; }
@@ -542,7 +553,7 @@ namespace hc::compare
         const auto left = QFileDialog::getExistingDirectory(this, tr("왼쪽 디렉터리")); if (left.isEmpty()) return;
         const auto right = QFileDialog::getExistingDirectory(this, tr("오른쪽 디렉터리")); if (right.isEmpty()) return;
         const auto third = Three ? QFileDialog::getExistingDirectory(this, tr("FILE 3 디렉터리(BASE 아님)")) : QString{}; if (Three && third.isEmpty()) return;
-        Request request; request.mode_ = "directory"; request.timeoutMs_ = 0; request.directory_.level_ = Preferences{}.Value("directory/level").toString(); request.file1_ = left; request.file2_ = right; request.file3_ = third; request_ = request; dirty_ = false; start();
+        Request request; request.mode_ = "directory"; request.timeoutMs_ = 0; request.directory_.level_ = Preferences{}.Value("directory/level").toString(); request.file1_ = left; request.file2_ = right; request.file3_ = third; request_ = request; dirty_ = false; notifyEqual_ = true; start();
     }
     void CompareWindow::openInputs()
     {
@@ -551,7 +562,7 @@ namespace hc::compare
         const auto left = QFileDialog::getOpenFileName(this, tr("왼쪽 파일")); if (left.isEmpty()) return;
         const auto right = QFileDialog::getOpenFileName(this, tr("오른쪽 파일")); if (right.isEmpty()) return;
         request_.file1_ = left; request_.file2_ = right; request_.base_.clear(); request_.file3_.clear();
-        request_.output_.clear(); request_.timeoutMs_ = 60000; request_.allowMissingInputs_ = {}; request_.mode_ = "compare"; start();
+        request_.output_.clear(); request_.timeoutMs_ = 60000; request_.allowMissingInputs_ = {}; request_.mode_ = "compare"; notifyEqual_ = true; start();
     }
     void CompareWindow::start(bool Preserve, bool Reintegrate)
     {

@@ -172,6 +172,7 @@ namespace hc::compare
         }
         if (parser.isSet("timeout-ms"))
         {
+            request.timeoutExplicit_ = true;
             bool valid = false; request.timeoutMs_ = parser.value("timeout-ms").toInt(&valid);
             if (!valid || request.timeoutMs_ < 100 || request.timeoutMs_ > 3600000) return fail("Invalid timeout-ms.");
         }

@@ -194,7 +194,9 @@ namespace hc::compare
     {
         Result result; result.requestId_ = Input.requestId_; Budget limits; limits.canceled_ = Canceled.get(); limits.progress_ = Input.progress_;
         std::array<std::shared_ptr<PairComparison>, 3> views;
-        limits.deadline_ = Input.directoryProgress_ && Input.timeoutMs_ == 0 ? std::chrono::steady_clock::time_point::max() :
+        const bool UnlimitedDirectory = !Input.timeoutExplicit_ && Input.timeoutMs_ == 60000;
+        const bool KnownDirectory = Input.mode_ == "directory" || Input.mode_ == "directory-merge";
+        limits.deadline_ = ((KnownDirectory && UnlimitedDirectory) || (Input.directoryProgress_ && Input.timeoutMs_ == 0)) ? std::chrono::steady_clock::time_point::max() :
             std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
         try
         {
@@ -224,6 +226,8 @@ namespace hc::compare
             if ((!first && !second) || (first && first->directory_) != (second && second->directory_)) throw Failure("MixedInputKinds");
             if (Input.mode_ == "directory" || Input.mode_ == "directory-merge" || (Input.mode_ == "auto" && first && first->directory_))
             {
+                if (UnlimitedDirectory)
+                    limits.deadline_ = std::chrono::steady_clock::time_point::max();
                 CompareDirectory(Input, result, limits);
                 if (Input.mode_ == "directory-merge" && Input.headless_)
                 {

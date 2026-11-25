@@ -94,7 +94,7 @@ namespace hc::compare
                 const int index = next++; if (!send({{"event", "started"}, {"jobId", jobs[index].id_}})) { --next; break; }
                 const auto available = std::chrono::duration_cast<std::chrono::milliseconds>(limits.deadline_ - std::chrono::steady_clock::now()).count();
                 if (available <= 0) { --next; break; }
-                auto request = jobs[index].request_; request.memoryMiB_ = std::min(request.memoryMiB_, Input.memoryMiB_); request.timeoutMs_ = int(std::min<qint64>(request.timeoutMs_, available));
+                auto request = jobs[index].request_; request.memoryMiB_ = std::min(request.memoryMiB_, Input.memoryMiB_); request.timeoutExplicit_ = true; request.timeoutMs_ = int(std::min<qint64>(request.timeoutMs_, available));
                 active.push_back({index, std::async(std::launch::async, [request, Canceled] { return Execute(request, Canceled, true); })});
             }
             bool ready = false;

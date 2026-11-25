@@ -275,7 +275,13 @@ namespace hc::compare
     void DirectoryView::ApplyProgress(const DirectoryProgress& Progress)
     {
         if (!streaming_) return;
-        treeModel_->ApplyProgress(Progress);
+        if (!Progress.rows_.isEmpty()) treeModel_->ApplyProgress(Progress);
+        if (!Progress.currentPath_.isEmpty()) {
+            roots_->setText(tr("파일 비교 중 · %1% (%2 / %3) · %4")
+                .arg(Progress.fileBytes_ ? int(100.0L * Progress.comparedBytes_ / Progress.fileBytes_) : 100)
+                .arg(QLocale().formattedDataSize(Progress.comparedBytes_), QLocale().formattedDataSize(Progress.fileBytes_), Progress.currentPath_));
+        } else if (Progress.phase_ == "validate") roots_->setText(tr("비교를 마친 항목의 변경 여부를 확인하고 있습니다."));
+        else if (Progress.phase_ == "compare") roots_->setText(tr("파일 내용을 비교하고 있습니다."));
         const auto phase = Progress.phase_ == "scan" ? tr("폴더 열거 중") : Progress.phase_ == "compare" ? tr("파일 내용 비교 중") : tr("변경 여부 재확인 중");
         summary_->setText(Progress.total_ ? tr("%1 — %2 / %3 · 표시 %4개").arg(phase).arg(Progress.processed_).arg(Progress.total_).arg(treeModel_->VisibleEntries()) :
             tr("%1 — 발견 %2개 · 표시 %3개").arg(phase).arg(Progress.processed_).arg(treeModel_->VisibleEntries()));
@@ -285,6 +291,7 @@ namespace hc::compare
     {
         if (streaming_ && PreserveRows)
         {
+            roots_->setText(tr("비교가 중단되었습니다. 비교 대기 항목은 확인되지 않았습니다."));
             treeModel_->FinishProgress();
             listDeferred_ = treeMode_ && treeModel_->Entries().size() > 10000;
             if (!listDeferred_) model_->SetEntries(treeModel_->Entries());
@@ -397,7 +404,7 @@ namespace hc::compare
             findChild<QAction*>(side == 0 ? "directoryRenameLeft" : side == 1 ? "directoryRenameRight" : "directoryRenameThird")->setEnabled(!Busy() && !streaming_ && comparison_.directoryComplete_ && entry["present"].toBool() && !entry["reparse"].toBool()); }
         if (streaming_) { openButton_->setEnabled(openable(item)); return; }
         openButton_->setEnabled(openable(item));
-        summary_->setText((treeMode_ ? tr("일치 %1 / 전체 %2개 · 다음·이전 차이 명령으로 이동") : tr("표시 %1 / 전체 %2개 · 다음·이전 차이 명령으로 이동")).arg(treeMode_ ? treeModel_->VisibleEntries() : filter_->rowCount()).arg(treeModel_->Entries().size()));
+        summary_->setText(tr("표시 %1 / 전체 %2개 · 다음·이전 차이 명령으로 이동").arg(treeMode_ ? treeModel_->VisibleEntries() : filter_->rowCount()).arg(treeModel_->Entries().size()));
     }
     void DirectoryView::OpenCurrent()
     {

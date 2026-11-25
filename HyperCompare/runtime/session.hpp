@@ -59,6 +59,7 @@ namespace hc::compare
         std::array<int, 2> directoryPair_{0, 1};
         std::shared_ptr<DirectoryProgressChannel> directoryProgress_;
         std::shared_ptr<ComparisonProgress> progress_;
+        bool timeoutExplicit_ = false;
         int timeoutMs_ = 60000, memoryMiB_ = 2048;
     };
     struct Parsed { Request request_; QString error_, help_; };

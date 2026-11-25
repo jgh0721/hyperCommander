@@ -155,7 +155,8 @@ namespace hc::compare
                 const auto slash = Key.lastIndexOf('/'); Key = slash < 0 ? QString{} : Key.left(slash);
             }
         }
-        bool sameContent(const storage::EntrySnapshot& A, const storage::EntrySnapshot& B, const Budget& Limits)
+        using ByteProgress = std::function<void(quint64, quint64)>;
+        bool sameContent(const storage::EntrySnapshot& A, const storage::EntrySnapshot& B, const Budget& Limits, const ByteProgress& Report)
         {
             if (A.size_ != B.size_) return false;
             const auto pa = reader(QString::fromStdString(A.locator_.root_)), pb = reader(QString::fromStdString(B.locator_.root_));
@@ -168,6 +169,8 @@ namespace hc::compare
             const auto readBytes = std::size_t(std::clamp<std::uint64_t>(A.size_, 1, 1024 * 1024));
             // Streams may return different short-read sizes, so compare a rolling byte window.
             std::vector<std::byte> aa, bb; std::size_t ai = 0, bi = 0; bool ae = false, be = false, equal = true;
+            quint64 Compared = 0;
+            if (Report) Report(0, A.size_);
             for (;;)
             {
                 Limits.Check();
@@ -175,7 +178,8 @@ namespace hc::compare
                 if (bi == bb.size() && !be) { auto chunk = require(b->Read(readBytes, ctx).get()); bb = std::move(chunk.bytes_); bi = 0; be = chunk.eof_; if (bb.empty() && !be) throw Failure("ReadMadeNoProgress"); }
                 const auto count = std::min(aa.size() - ai, bb.size() - bi);
                 if (count && !std::equal(aa.begin() + ai, aa.begin() + ai + count, bb.begin() + bi)) { equal = false; break; }
-                ai += count; bi += count;
+                ai += count; bi += count; Compared += count;
+                if (Report) Report(Compared, A.size_);
                 if (ae && ai == aa.size() && be && bi == bb.size()) break;
                 if ((ae && ai == aa.size() && bi < bb.size()) || (be && bi == bb.size() && ai < aa.size())) { equal = false; break; }
             }
@@ -228,7 +232,7 @@ namespace hc::compare
                 {"reparse", bool(Entry->attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)}, {"linkTarget", Entry->link_ ? Entry->link_->target_ : QString{}}};
         }
         QString relation(const DirectoryEntry* A, const DirectoryEntry* B,
-            const DirectorySnapshot& RootA, const DirectorySnapshot& RootB, const Request& Input, int SideA, int SideB, const Budget& Limits)
+            const DirectorySnapshot& RootA, const DirectorySnapshot& RootB, const Request& Input, int SideA, int SideB, const Budget& Limits, const ByteProgress& Report)
         {
             if (!A && !B) return "Equal";
             if (!A) return "RightOnly";
@@ -242,7 +246,7 @@ namespace hc::compare
             if (Input.directory_.level_ == "metadata")
                 return A->size_ == B->size_ && A->modifiedUtcMs_ == B->modifiedUtcMs_ ? "Equal" : "Different";
             const auto a = RootA.Expand(*A), b = RootB.Expand(*B);
-            const bool rawEqual = sameContent(a, b, Limits);
+            const bool rawEqual = sameContent(a, b, Limits, Report);
             const auto codecA = InputEncoding(Input, SideA), codecB = InputEncoding(Input, SideB);
             if (Input.directory_.level_ != "text" || (rawEqual && codecA == codecB)) return rawEqual ? "Equal" : "Different";
             return textRelation(a, b, codecA, codecB, rawEqual, Limits);
@@ -364,6 +368,7 @@ namespace hc::compare
             const auto now = std::chrono::steady_clock::now();
             if (!Force && progress.rows_.size() < 512 && now - flushed < std::chrono::milliseconds(100)) return;
             DirectoryProgress batch; batch.phase_ = progress.phase_; batch.side_ = progress.side_; batch.processed_ = progress.processed_; batch.total_ = progress.total_;
+            batch.currentPath_ = progress.currentPath_; batch.comparedBytes_ = progress.comparedBytes_; batch.fileBytes_ = progress.fileBytes_;
             batch.rows_ = std::move(progress.rows_); Input.directoryProgress_->Push(std::move(batch), Limits);
             progress.rows_ = {}; flushed = now;
         };
@@ -444,9 +449,14 @@ namespace hc::compare
                 const auto issue = issueFor((*captured)[i], key, entries[i] != nullptr);
                 if (!issue.isEmpty()) errors.append(QJsonObject{{"side", int(i)}, {"root", (*captured)[i].root_}, {"path", key}, {"error", issue}});
             }
+            ByteProgress Report;
+            if (Input.directoryProgress_) Report = [&](quint64 Done, quint64 Total) {
+                progress.currentPath_ = (entries[0] ? entries[0] : entries[1] ? entries[1] : entries[2])->path_;
+                progress.comparedBytes_ = Done; progress.fileBytes_ = Total; flush(false);
+            };
             const auto safeRelation = [&](int A, int B) -> QString {
                 if (!errors.isEmpty()) return "Error";
-                try { return relation(entries[A], entries[B], (*captured)[A], (*captured)[B], Input, A, B, Limits); }
+                try { return relation(entries[A], entries[B], (*captured)[A], (*captured)[B], Input, A, B, Limits, Report); }
                 catch (const Failure& error)
                 {
                     if (!recoverable(error)) throw;
@@ -472,6 +482,7 @@ namespace hc::compare
             Value.entries_[selected] = DirectoryRow(QJsonObject{{"path", relative(item)}, {"status", status},
                 {"leftRight", lr}, {"leftBase", lb}, {"rightBase", rb}, {"errors", errors},
                 {"left", describe(entries[0])}, {"right", describe(entries[1])}, {"base", describe(entries[2])}});
+            progress.currentPath_.clear();
             ++progress.processed_; if (Input.directoryProgress_) { progress.rows_.append(Value.entries_.at(selected)); flush(false); }
         }
         flush(true); progress.phase_ = "validate"; flush(true);
