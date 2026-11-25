@@ -55,6 +55,8 @@
 #include "UniqueLibs/document/imageReadingView.hpp"
 #include "UniqueLibs/document/imageReadingNavigator.hpp"
 #include "UniqueLibs/document/imageFullscreen.hpp"
+#include "UniqueLibs/document/epubProcessView.hpp"
+#include "commonLibs/document/epub/epubTemplate.hpp"
 #include "UniqueLibs/document/imageFramePlayer.hpp"
 #include "core/AppSettings.h"
 #include <QTabWidget>
@@ -2307,6 +2309,54 @@ private slots:
         auto* Tab = Tabs.tabButton(Tabs.currentIndex());
         QVERIFY(Tab);
         QCOMPARE(Tab->toolTip(), QStringLiteral("1.png"));
+    }
+    void fullscreenComicWithIdleEpub()
+    {
+        if (!QFileInfo::exists(QCoreApplication::applicationDirPath() + "/HyperEpubWeb.exe"))
+            QSKIP("Requires the packaged EPUB runtime");
+        QTemporaryDir Root;
+        const auto Book = epub::CreateBook({"Book", {}, "ko", "Chapter"});
+        QVERIFY2(Book, qPrintable(Book.error_));
+        QFile EpubFile(Root.filePath("book.epub"));
+        QVERIFY(EpubFile.open(QIODevice::WriteOnly));
+        QCOMPARE(EpubFile.write(Book.bytes_), Book.bytes_.size());
+        EpubFile.close();
+        const auto Path = Root.filePath("comic.zip");
+        QZipWriter Zip(Path);
+        Zip.addFile("1.png", Png(Qt::red));
+        Zip.addFile("2.png", Png(Qt::blue));
+        Zip.close();
+        DocumentWorkspaceWidget Window(Root.filePath("recovery"), false);
+        Window.show();
+        Window.Handle({{"action", "open"}, {"path", EpubFile.fileName()}});
+        QTRY_VERIFY_WITH_TIMEOUT(Window.findChild<EpubProcessView*>(), 15000);
+        auto* Epub = Window.findChild<EpubProcessView*>();
+        QTRY_VERIFY_WITH_TIMEOUT(Epub->ViewState()["readingStateLoaded"].toBool(), 60000);
+        // On Windows VM runs, exercise the SMB path to the same temporary ZIP when available.
+        const QString SharePath = "//localhost/" + Path.left(1) + "$" + Path.mid(2);
+        const bool Shared = Path.size() > 2 && Path[1] == ':' && QFileInfo::exists(SharePath);
+        qInfo() << "Comic opened over SMB:" << Shared;
+        Window.Handle({{"action", "open"}, {"path", Shared ? SharePath : Path}});
+        const auto Rows = [&] { return Window.Snapshot()["documents"].toArray(); };
+        QTRY_VERIFY_WITH_TIMEOUT(Rows().size() == 2 && !Rows().last().toObject()["loading"].toBool(), 20000);
+        QVERIFY2(Window.findChild<ImageReadingView*>(), qPrintable(QString::fromUtf8(QJsonDocument(Rows().last().toObject()).toJson(QJsonDocument::Compact))));
+        auto* Reader = Window.findChild<ImageReadingView*>();
+        Reader->SetMode(ImageReadingView::Comic);
+        Window.findChild<ImageFullscreen*>("imageFullscreen")->Toggle();
+        QTRY_VERIFY(Window.isFullScreen() && Reader->isVisible() && !Epub->isVisible());
+        QTRY_COMPARE_WITH_TIMEOUT(Reader->State()["presentedPage"].toInt(-1), 0, 20000);
+        const auto Replies = [Epub] { return Epub->ViewState()["metrics"].toObject()["snapshotReplies"].toInteger(); };
+        // Let entry, focus and overlay transitions settle before observing idle polls.
+        QTest::qWait(2500);
+        QSignalSpy Changes(Epub, &EpubProcessView::ViewStateChanged);
+        const auto Origin = Reader->viewport()->mapToGlobal(QPoint{});
+        const auto Size = Reader->viewport()->size();
+        const auto First = Replies();
+        const auto Details = Epub->ViewState()["detailSnapshots"].toInt();
+        QTRY_VERIFY_WITH_TIMEOUT(Replies() >= First + 8 && Epub->ViewState()["detailSnapshots"].toInt() >= Details + 2, 5000);
+        QCOMPARE(Changes.count(), 0);
+        QCOMPARE(Reader->viewport()->mapToGlobal(QPoint{}), Origin);
+        QCOMPARE(Reader->viewport()->size(), Size);
     }
     void fullscreenKeepsWorkspaceChromeHidden_data()
     {

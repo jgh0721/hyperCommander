@@ -272,7 +272,10 @@ namespace hc::document
     }
     void EpubProcessView::collect()
     {
-        const auto State = ViewState();
+        auto State = ViewState();
+        // Poll counters advance even in a hidden, idle reader. Only presentation changes refresh the workspace.
+        State.remove("metrics");
+        State.remove("detailSnapshots");
         if(State == reported_) return;
         const bool Escape=State["escapeRequests"].toInt()>reported_["escapeRequests"].toInt();
         const bool Fullscreen=State["fullscreenRequests"].toInt()>reported_["fullscreenRequests"].toInt();
